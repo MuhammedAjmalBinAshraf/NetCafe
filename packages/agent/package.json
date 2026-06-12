@@ -1,0 +1,18 @@
+{
+  "name": "agent",
+  "version": "1.0.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "typescript": "^5.4.5",
+    "@types/ws": "^8.5.10",
+    "@types/node": "^20.12.7"
+  }
+}

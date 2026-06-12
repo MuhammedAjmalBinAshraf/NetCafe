@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NetCafe Manager — Next-Gen Lab & Internet Cafe Management System</title>
+  <meta name="description" content="Centralized, offline-first computer lab and internet cafe management system. Features real-time CPU/RAM monitoring, app blocking, automated billing, and remote lock capabilities.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&family=Plus+Jakarta+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <!-- Navigation -->
+  <nav class="navbar" id="navbar">
+    <div class="nav-container">
+      <a href="#" class="nav-logo">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><rect width="20" height="14" rx="2" ry="2" x="2" y="3"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>
+        NetCafe Manager
+      </a>
+      <ul class="nav-links">
+        <li><a href="#features">Features</a></li>
+        <li><a href="#setup">Setup Guide</a></li>
+        <li><a href="#faq">FAQ</a></li>
+      </ul>
+      <div class="nav-cta">
+        <a href="#download" class="btn btn-primary btn-sm">Get Started</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Hero Section -->
+  <header class="hero-section" id="hero">
+    <div class="hero-glow"></div>
+    <div class="container hero-container">
+      <div class="hero-content">
+        <span class="badge">V1.0 Stable Release</span>
+        <h1>The Next-Gen Internet Cafe & Lab Management Software</h1>
+        <p>Effortlessly manage billing, restrict unauthorized applications, monitor hardware resources, and remote control client PCs over LAN. Secure, offline-first, and lightweight.</p>
+        
+        <div class="hero-actions" id="download">
+          <div class="download-card">
+            <h3>Admin Server</h3>
+            <p>For operator / manager PC</p>
+            <a href="downloads/NetCafe-Server-Setup.exe" download id="download-server" class="btn btn-primary btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Server (.exe)
+            </a>
+          </div>
+          
+          <div class="download-card">
+            <h3>Client Agent</h3>
+            <p>For client / user terminals</p>
+            <a href="downloads/NetCafe-Agent-Setup.exe" download id="download-agent" class="btn btn-secondary btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Client Agent (.exe)
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Features Section -->
+  <section class="features-section" id="features">
+    <div class="container">
+      <div class="section-header">
+        <h2>Engineered for Modern Cyber Cafes & Labs</h2>
+        <p>A unified suite built to optimize operations, improve security, and automate time logging.</p>
+      </div>
+
+      <div class="features-grid">
+        <!-- Feature 1 -->
+        <div class="feature-card">
+          <div class="feature-icon icon-blue">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+          </div>
+          <h3>Real-Time Dashboard</h3>
+          <p>Monitor all client status colors (Available, In Use, Paused, Offline) and active session countdown timers instantly in a unified console.</p>
+        </div>
+
+        <!-- Feature 2 -->
+        <div class="feature-card">
+          <div class="feature-icon icon-emerald">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="12" rx="2" y="4"/><line x1="2" x2="22" y1="20"/><line x1="12" x2="12" y1="16"/></svg>
+          </div>
+          <h3>Remote Monitoring</h3>
+          <p>Review real-time CPU & RAM resource utilization meters, view current active processes/window titles, and capture live screenshots.</p>
+        </div>
+
+        <!-- Feature 3 -->
+        <div class="feature-card">
+          <div class="feature-icon icon-purple">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" rx="2" ry="2" x="3" y="11"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          </div>
+          <h3>App & Website Blocking</h3>
+          <p>Enforce restrictions globally or per-session. Redirection of restricted domains to localhost via hosts file and automatic task termination.</p>
+        </div>
+
+        <!-- Feature 4 -->
+        <div class="feature-card">
+          <div class="feature-icon icon-amber">
+            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+          </div>
+          <h3>Billing & Receipts</h3>
+          <p>Fully supports Prepaid & Postpaid modes. Calculate charges, apply custom operator discounts, record payments (Cash/UPI), and print receipts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Setup Guide Section -->
+  <section class="setup-section" id="setup">
+    <div class="container">
+      <div class="section-header">
+        <h2>Setup & Installation Guide</h2>
+        <p>Follow these quick steps to deploy NetCafe Manager on your local area network (LAN).</p>
+      </div>
+
+      <div class="setup-tabs">
+        <button class="tab-btn active" id="tab-server-btn">1. Server Installation</button>
+        <button class="tab-btn" id="tab-agent-btn">2. Client Agent Setup</button>
+      </div>
+
+      <div class="setup-content-container">
+        <!-- Server Guide -->
+        <div class="setup-tab-content active" id="guide-server">
+          <ol class="guide-steps">
+            <li>
+              <strong>Download & Install</strong>
+              <p>Download the Server installer (.exe) and run the setup on the main operator/administrator PC.</p>
+            </li>
+            <li>
+              <strong>Start the Server</strong>
+              <p>Launch the NetCafe Server. Upon launch, sign in with the default operator credentials:</p>
+              <div class="code-box">
+                <div>Username: admin</div>
+                <div>Password: admin</div>
+              </div>
+            </li>
+            <li>
+              <strong>Find your LAN IP</strong>
+              <p>Make sure the operator PC has a static local IP on the network (e.g. <code>192.168.1.10</code>). You can verify it by running <code>ipconfig</code> in Command Prompt.</p>
+            </li>
+          </ol>
+        </div>
+
+        <!-- Agent Guide -->
+        <div class="setup-tab-content" id="guide-agent">
+          <ol class="guide-steps">
+            <li>
+              <strong>Download & Deploy</strong>
+              <p>Download the Client Agent installer and run it on all user terminals. The agent will run fullscreen, locking the interface.</p>
+            </li>
+            <li>
+              <strong>Configure Connection Path</strong>
+              <p>Find the <code>config.json</code> path displayed on the lock screen (e.g. <code>AppData/Roaming/agent/config.json</code>) and set it to point to the Server PC's IP address:</p>
+              <pre class="code-box"><code>{
+  "serverUrl": "ws://192.168.1.10:9000",
+  "machineId": "PC-01"
+}</code></pre>
+            </li>
+            <li>
+              <strong>Restart Terminal</strong>
+              <p>Relaunch the client agent. It will establish a WebSocket handshake, register itself as available on the operator dashboard, and lock down user interactions until opened.</p>
+            </li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ Section -->
+  <section class="faq-section" id="faq">
+    <div class="container">
+      <div class="section-header">
+        <h2>Frequently Asked Questions</h2>
+        <p>Everything you need to know about setting up and running NetCafe Manager.</p>
+      </div>
+
+      <div class="faq-container">
+        <div class="faq-item">
+          <button class="faq-question">
+            Does NetCafe Manager require an internet connection?
+            <span class="faq-icon"></span>
+          </button>
+          <div class="faq-answer">
+            <p>No, NetCafe Manager is designed to be 100% offline-first. Communication between the Server and Client Agents takes place entirely over your local area network (LAN) using fast WebSocket handshakes.</p>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-question">
+            How does domain and application blocking work?
+            <span class="faq-icon"></span>
+          </button>
+          <div class="faq-answer">
+            <p>Domain blocking modifies the local Windows hosts file to redirect specified websites to localhost. Application blocking runs a background scanner checking active executables against the blocklist and terminates unauthorized processes (e.g. Steam.exe) immediately.</p>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-question">
+            Can the end-user bypass the client lockscreen?
+            <span class="faq-icon"></span>
+          </button>
+          <div class="faq-answer">
+            <p>No, the Client Agent runs in kiosk mode (always on top, topmost priority, and fullscreen). Alt+F4 and window close options are intercepted and disabled to ensure security and prevent unauthorized access.</p>
+          </div>
+        </div>
+
+        <div class="faq-item">
+          <button class="faq-question">
+            How do I back up my databases?
+            <span class="faq-icon"></span>
+          </button>
+          <div class="faq-answer">
+            <p>In the Server admin UI, navigate to the **Settings** tab. Here, you will find direct database utilities to export a full backup of the SQLite file to your desktop, or restore it on demand.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer-section">
+    <div class="container text-center">
+      <p>&copy; 2026 NetCafe Manager. All rights reserved.</p>
+      <p class="footer-credits">Made for cyber cafes, computer labs, and e-sports arenas.</p>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
