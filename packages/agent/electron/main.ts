@@ -303,17 +303,18 @@ function removeBandwidthLimit(): Promise<void> {
 }
 
 function connectToServer() {
-  ws = new WebSocket(serverUrl);
+  const socket = new WebSocket(serverUrl);
+  ws = socket;
 
-  ws.on('open', () => {
+  socket.on('open', () => {
     console.log('Connected to server');
-    ws?.send(JSON.stringify({
+    socket.send(JSON.stringify({
       type: 'register',
       payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() }
     }));
   });
 
-  ws.on('message', async (data) => {
+  socket.on('message', async (data) => {
     try {
       const msg = JSON.parse(data.toString());
       if (msg.command === 'unlock') {
@@ -353,7 +354,7 @@ function connectToServer() {
       } else if (msg.command === 'capture-screenshot') {
         try {
           const base64 = await captureScreen();
-          ws?.send(JSON.stringify({
+          socket.send(JSON.stringify({
             type: 'screenshot-response',
             payload: base64
           }));
@@ -372,12 +373,12 @@ function connectToServer() {
     }
   });
 
-  ws.on('close', () => {
+  socket.on('close', () => {
     console.log('Disconnected, retrying in 5s');
     setTimeout(connectToServer, 5000);
   });
   
-  ws.on('error', () => {});
+  socket.on('error', () => {});
 }
 
 function getIPAddress() {
@@ -393,7 +394,7 @@ function getIPAddress() {
 }
 
 app.whenReady().then(() => {
-  if (process.platform === 'linux' && process.getuid && process.getuid() !== 0) {
+  if (process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() !== 0) {
     const args = [process.execPath, ...process.argv.slice(1)];
     const child = spawn('pkexec', args, {
       detached: true,
@@ -410,14 +411,15 @@ app.whenReady().then(() => {
 
   // Metrics intervals (10 seconds)
   metricsInterval = setInterval(async () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    const currentWs = ws;
+    if (currentWs && currentWs.readyState === WebSocket.OPEN) {
       const cpu = await getCPUUsage();
       const totalMemory = os.totalmem();
       const freeMemory = os.freemem();
       const ram = Math.round(((totalMemory - freeMemory) / totalMemory) * 100);
       const activeWindow = await getActiveWindowTitle();
       
-      ws.send(JSON.stringify({
+      currentWs.send(JSON.stringify({
         type: 'metrics',
         payload: {
           cpu,
