@@ -3,45 +3,64 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*' # Trigger on version tags, e.g., v1.0.1
-  workflow_dispatch: {} # Allow manual trigger from GitHub Actions UI
+      - 'v*'
+  workflow_dispatch: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-windows:
     name: Build on Windows
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install Root Dependencies
+      - name: Install root deps
         run: npm install
 
-      - name: Build Server (Windows)
+      - name: Install server deps
         working-directory: packages/server
-        run: |
-          npm install
-          npx electron-rebuild -f -w better-sqlite3
-          npm run build:win
+        run: npm install
+
+      - name: Build server (Windows)
+        working-directory: packages/server
+        run: npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          USE_HARD_LINKS: false
 
-      - name: Build Agent (Windows)
+      - name: Install agent deps
         working-directory: packages/agent
-        run: npm install && npm run build:win
+        run: npm install
+
+      - name: Build agent (Windows)
+        working-directory: packages/agent
+        run: npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Windows Artifacts
+      - name: List server release files
+        run: ls -la packages/server/release/ || echo "No server release files"
+
+      - name: List agent release files
+        run: ls -la packages/agent/release/ || echo "No agent release files"
+
+      - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
+          if-no-files-found: warn
           path: |
             packages/server/release/*.exe
             packages/agent/release/*.exe
@@ -51,41 +70,52 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
-      - name: Install system dependencies for electron-builder
+      - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y rpm libarchive-tools
+          sudo apt-get update -y
+          sudo apt-get install -y rpm libarchive-tools python3 make g++
 
-      - name: Install Root Dependencies
+      - name: Install root deps
         run: npm install
 
-      - name: Build Server (Linux)
+      - name: Install server deps
         working-directory: packages/server
-        run: |
-          npm install
-          npx electron-rebuild -f -w better-sqlite3
-          npm run build:linux
+        run: npm install
+
+      - name: Build server (Linux)
+        working-directory: packages/server
+        run: npm run build:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Agent (Linux)
+      - name: Install agent deps
         working-directory: packages/agent
-        run: npm install && npm run build:linux
+        run: npm install
+
+      - name: Build agent (Linux)
+        working-directory: packages/agent
+        run: npm run build:linux
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Linux Artifacts
+      - name: List release files
+        run: |
+          ls -la packages/server/release/ || echo "No server release files"
+          ls -la packages/agent/release/ || echo "No agent release files"
+
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
+          if-no-files-found: warn
           path: |
             packages/server/release/*.deb
             packages/server/release/*.AppImage
@@ -98,37 +128,54 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
-      - name: Download Windows Artifacts
+      - name: Download Windows artifacts
         uses: actions/download-artifact@v4
         with:
           name: windows-builds
           path: builds/win
 
-      - name: Download Linux Artifacts
+      - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
           name: linux-builds
           path: builds/linux
 
-      - name: Organize and Rename Files
+      - name: Rename and collect release files
         run: |
           mkdir -p final-release
-          # Copy Windows .exe files
-          find builds/win -name "*Server*Setup*.exe" -exec cp {} final-release/NetCafe-Server-Setup.exe \; 2>/dev/null || find builds/win -name "*.exe" -path "*/server/*" -exec cp {} final-release/NetCafe-Server-Setup.exe \; 2>/dev/null || true
-          find builds/win -name "*Agent*Setup*.exe" -exec cp {} final-release/NetCafe-Agent-Setup.exe \; 2>/dev/null || find builds/win -name "*.exe" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent-Setup.exe \; 2>/dev/null || true
-          # Copy Linux files
-          find builds/linux -name "*Server*.deb" -exec cp {} final-release/NetCafe-Server.deb \; 2>/dev/null || find builds/linux -name "*.deb" -path "*/server/*" -exec cp {} final-release/NetCafe-Server.deb \; 2>/dev/null || true
-          find builds/linux -name "*Server*.AppImage" -exec cp {} final-release/NetCafe-Server.AppImage \; 2>/dev/null || find builds/linux -name "*.AppImage" -path "*/server/*" -exec cp {} final-release/NetCafe-Server.AppImage \; 2>/dev/null || true
-          find builds/linux -name "*Agent*.deb" -exec cp {} final-release/NetCafe-Agent.deb \; 2>/dev/null || find builds/linux -name "*.deb" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent.deb \; 2>/dev/null || true
-          find builds/linux -name "*Agent*.AppImage" -exec cp {} final-release/NetCafe-Agent.AppImage \; 2>/dev/null || find builds/linux -name "*.AppImage" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent.AppImage \; 2>/dev/null || true
-          echo "=== Files to be released ==="
-          ls -la final-release/
 
-      - name: Create Release
+          # Server Windows
+          SERVER_EXE=$(find builds/win -name "*.exe" | grep -i "server" | head -1)
+          if [ -n "$SERVER_EXE" ]; then cp "$SERVER_EXE" final-release/NetCafe-Server-Setup.exe; fi
+
+          # Agent Windows
+          AGENT_EXE=$(find builds/win -name "*.exe" | grep -i "agent" | head -1)
+          if [ -n "$AGENT_EXE" ]; then cp "$AGENT_EXE" final-release/NetCafe-Agent-Setup.exe; fi
+
+          # Server Linux
+          SERVER_DEB=$(find builds/linux -name "*.deb" | grep -i "server" | head -1)
+          if [ -n "$SERVER_DEB" ]; then cp "$SERVER_DEB" final-release/NetCafe-Server.deb; fi
+
+          SERVER_IMG=$(find builds/linux -name "*.AppImage" | grep -i "server" | head -1)
+          if [ -n "$SERVER_IMG" ]; then cp "$SERVER_IMG" final-release/NetCafe-Server.AppImage; fi
+
+          # Agent Linux
+          AGENT_DEB=$(find builds/linux -name "*.deb" | grep -i "agent" | head -1)
+          if [ -n "$AGENT_DEB" ]; then cp "$AGENT_DEB" final-release/NetCafe-Agent.deb; fi
+
+          AGENT_IMG=$(find builds/linux -name "*.AppImage" | grep -i "agent" | head -1)
+          if [ -n "$AGENT_IMG" ]; then cp "$AGENT_IMG" final-release/NetCafe-Agent.AppImage; fi
+
+          echo "=== Files ready for release ==="
+          ls -lh final-release/
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: final-release/*
           generate_release_notes: true
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

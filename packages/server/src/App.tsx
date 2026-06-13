@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
@@ -265,7 +265,7 @@ export default function App() {
   }
 
   // Pricing plans CRUD
-  const handleSavePlan = async (e: React.FormEvent) => {
+  const handleSavePlan = async (e: FormEvent) => {
     e.preventDefault()
     if (window.ipcRenderer) {
       const priceVal = parseFloat(planPrice) || 0
@@ -307,7 +307,7 @@ export default function App() {
   }
 
   // Blocking Rules CRUD
-  const handleAddRule = async (e: React.FormEvent) => {
+  const handleAddRule = async (e: FormEvent) => {
     e.preventDefault()
     if (window.ipcRenderer && ruleValue) {
       await window.ipcRenderer.invoke('add-block-rule', ruleType, ruleValue, ruleMode)
