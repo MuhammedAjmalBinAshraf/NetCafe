@@ -1,12 +1,12 @@
 import { app, BrowserWindow, ipcMain } from 'electron'
 import path from 'path'
 import { fileURLToPath } from 'url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 import { WebSocketServer } from 'ws'
 import fs from 'fs'
 import Database from 'better-sqlite3'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 let mainWindow: BrowserWindow | null = null
 
@@ -37,10 +37,10 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('lab_name', 'NetCafe Manager');")
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN custom_duration INTEGER;")
-  } catch (e) {}
+  } catch {}
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN discount REAL DEFAULT 0;")
-  } catch (e) {}
+  } catch {}
 }
 
 // WebSocket Server & Metrics Maps
@@ -56,7 +56,7 @@ function broadcastBlockRulesToClients() {
   for (const [ws, _] of clients.entries()) {
     try {
       ws.send(payload)
-    } catch (e) {}
+    } catch {}
   }
 }
 
@@ -162,7 +162,7 @@ function sendCommandToMachine(machineId: number, cmd: any) {
     if (mId === machineId) {
       try {
         ws.send(JSON.stringify(cmd))
-      } catch (e) {}
+      } catch {}
       break
     }
   }
@@ -314,7 +314,7 @@ ipcMain.handle('lock-all', () => {
       ws.send(JSON.stringify({ command: 'lock' }))
       db.prepare("UPDATE machines SET status = 'paused' WHERE id = ?").run(machineId)
       db.prepare("UPDATE sessions SET status = 'paused' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
-    } catch (e) {}
+    } catch {}
   }
   broadcastMachines()
 })
@@ -324,7 +324,7 @@ ipcMain.handle('message-all', (_, message) => {
   for (const [ws, _] of clients.entries()) {
     try {
       ws.send(payload)
-    } catch (e) {}
+    } catch {}
   }
 })
 
@@ -333,7 +333,7 @@ ipcMain.handle('power-all', () => {
   for (const [ws, _] of clients.entries()) {
     try {
       ws.send(payload)
-    } catch (e) {}
+    } catch {}
   }
 })
 
@@ -406,7 +406,7 @@ ipcMain.handle('restore-db', async (_, sourcePath) => {
     broadcastMachines()
     return { success: true }
   } catch (e: any) {
-    try { setupDatabase() } catch(err) {}
+    try { setupDatabase() } catch {}
     return { success: false, error: e.message }
   }
 })

@@ -2,19 +2,14 @@ name: Build and Release
 
 on:
   push:
-    branches:
-      - master
     tags:
-      - 'v*' # Trigger on version tags, e.g., v1.0.0
+      - 'v*' # Trigger on version tags, e.g., v1.0.1
   workflow_dispatch: {} # Allow manual trigger from GitHub Actions UI
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
+  build-windows:
+    name: Build on Windows
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Repository
@@ -24,35 +19,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: Install Dependencies
+      - name: Install Root Dependencies
         run: npm install
 
-      # We need to build the typescript files for server and agent
-      - name: Build TypeScript
+      - name: Build Server (Windows)
+        working-directory: packages/server
         run: |
-          npm run build --workspace=packages/server
-          npm run build --workspace=packages/agent
-
-      # On Windows, build for Windows
-      - name: Build Windows
-        if: matrix.os == 'windows-latest'
-        run: npm run build:all:win
+          npm install
+          npx electron-rebuild -f -w better-sqlite3
+          npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # On Linux, build for Linux
-      - name: Build Linux
-        if: matrix.os == 'ubuntu-latest'
-        run: npm run build:all:linux
+      - name: Build Agent (Windows)
+        working-directory: packages/agent
+        run: npm install && npm run build:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Publish using electron-builder's built-in publishing
-      # But since we run custom scripts, we upload artifacts manually and create a release
       - name: Upload Windows Artifacts
-        if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: windows-builds
@@ -60,8 +46,43 @@ jobs:
             packages/server/release/*.exe
             packages/agent/release/*.exe
 
+  build-linux:
+    name: Build on Linux
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install system dependencies for electron-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm libarchive-tools
+
+      - name: Install Root Dependencies
+        run: npm install
+
+      - name: Build Server (Linux)
+        working-directory: packages/server
+        run: |
+          npm install
+          npx electron-rebuild -f -w better-sqlite3
+          npm run build:linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build Agent (Linux)
+        working-directory: packages/agent
+        run: npm install && npm run build:linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Upload Linux Artifacts
-        if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: linux-builds
@@ -73,14 +94,11 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
       - name: Download Windows Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -93,12 +111,19 @@ jobs:
           name: linux-builds
           path: builds/linux
 
-      - name: Organize Files
+      - name: Organize and Rename Files
         run: |
           mkdir -p final-release
-          find builds -type f -name "*.exe" -exec cp {} final-release/ \;
-          find builds -type f -name "*.deb" -exec cp {} final-release/ \;
-          find builds -type f -name "*.AppImage" -exec cp {} final-release/ \;
+          # Copy Windows .exe files
+          find builds/win -name "*Server*Setup*.exe" -exec cp {} final-release/NetCafe-Server-Setup.exe \; 2>/dev/null || find builds/win -name "*.exe" -path "*/server/*" -exec cp {} final-release/NetCafe-Server-Setup.exe \; 2>/dev/null || true
+          find builds/win -name "*Agent*Setup*.exe" -exec cp {} final-release/NetCafe-Agent-Setup.exe \; 2>/dev/null || find builds/win -name "*.exe" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent-Setup.exe \; 2>/dev/null || true
+          # Copy Linux files
+          find builds/linux -name "*Server*.deb" -exec cp {} final-release/NetCafe-Server.deb \; 2>/dev/null || find builds/linux -name "*.deb" -path "*/server/*" -exec cp {} final-release/NetCafe-Server.deb \; 2>/dev/null || true
+          find builds/linux -name "*Server*.AppImage" -exec cp {} final-release/NetCafe-Server.AppImage \; 2>/dev/null || find builds/linux -name "*.AppImage" -path "*/server/*" -exec cp {} final-release/NetCafe-Server.AppImage \; 2>/dev/null || true
+          find builds/linux -name "*Agent*.deb" -exec cp {} final-release/NetCafe-Agent.deb \; 2>/dev/null || find builds/linux -name "*.deb" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent.deb \; 2>/dev/null || true
+          find builds/linux -name "*Agent*.AppImage" -exec cp {} final-release/NetCafe-Agent.AppImage \; 2>/dev/null || find builds/linux -name "*.AppImage" -path "*/agent/*" -exec cp {} final-release/NetCafe-Agent.AppImage \; 2>/dev/null || true
+          echo "=== Files to be released ==="
+          ls -la final-release/
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
