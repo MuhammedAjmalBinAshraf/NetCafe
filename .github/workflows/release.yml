@@ -1,0 +1,106 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger on version tags, e.g., v1.0.0
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm install
+
+      # We need to build the typescript files for server and agent
+      - name: Build TypeScript
+        run: |
+          npm run build --workspace=packages/server
+          npm run build --workspace=packages/agent
+
+      # On Windows, build for Windows
+      - name: Build Windows
+        if: matrix.os == 'windows-latest'
+        run: npm run build:all:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # On Linux, build for Linux
+      - name: Build Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run build:all:linux
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish using electron-builder's built-in publishing
+      # But since we run custom scripts, we upload artifacts manually and create a release
+      - name: Upload Windows Artifacts
+        if: matrix.os == 'windows-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-builds
+          path: |
+            packages/server/release/*.exe
+            packages/agent/release/*.exe
+
+      - name: Upload Linux Artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-builds
+          path: |
+            packages/server/release/*.deb
+            packages/server/release/*.AppImage
+            packages/agent/release/*.deb
+            packages/agent/release/*.AppImage
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-builds
+          path: builds/win
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-builds
+          path: builds/linux
+
+      - name: Organize Files
+        run: |
+          mkdir -p final-release
+          find builds -type f -name "*.exe" -exec cp {} final-release/ \;
+          find builds -type f -name "*.deb" -exec cp {} final-release/ \;
+          find builds -type f -name "*.AppImage" -exec cp {} final-release/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: final-release/*
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
