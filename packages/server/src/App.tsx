@@ -190,9 +190,6 @@ export default function App() {
     }
   }
 
-  const handleLock = async (machineId: number) => {
-    if (window.ipcRenderer) await window.ipcRenderer.invoke('lock-machine', machineId)
-  }
 
   const handleMsgClick = (machineId: number) => {
     const msg = prompt('Enter message to send client:')

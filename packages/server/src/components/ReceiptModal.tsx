@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react'
-import { Printer, Check, X, ShieldAlert } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Printer, Check, X } from 'lucide-react'
 
 interface Plan {
   id: number
@@ -67,7 +67,6 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
 
   const handlePrint = () => {
     const printContent = printRef.current?.innerHTML
-    const originalContent = document.body.innerHTML
     if (printContent) {
       const win = window.open('', '_blank')
       if (win) {

@@ -2,8 +2,11 @@ name: Build and Release
 
 on:
   push:
+    branches:
+      - master
     tags:
       - 'v*' # Trigger on version tags, e.g., v1.0.0
+  workflow_dispatch: {} # Allow manual trigger from GitHub Actions UI
 
 jobs:
   build:
