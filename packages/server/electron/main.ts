@@ -295,6 +295,18 @@ ipcMain.handle('power-machine', (_, machineId) => {
   sendCommandToMachine(machineId, { command: 'poweroff' })
 })
 
+ipcMain.handle('restart-machine', (_, machineId) => {
+  sendCommandToMachine(machineId, { command: 'restart' })
+})
+
+ipcMain.handle('limit-bandwidth', (_, machineId, rate) => {
+  sendCommandToMachine(machineId, { command: 'limit-bandwidth', payload: { rate: rate || '2mbit' } })
+})
+
+ipcMain.handle('remove-bandwidth', (_, machineId) => {
+  sendCommandToMachine(machineId, { command: 'remove-bandwidth' })
+})
+
 // Global Actions
 ipcMain.handle('lock-all', () => {
   for (const [ws, machineId] of clients.entries()) {

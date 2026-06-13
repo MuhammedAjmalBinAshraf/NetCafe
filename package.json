@@ -4,5 +4,11 @@
   "private": true,
   "workspaces": [
     "packages/*"
-  ]
+  ],
+  "scripts": {
+    "build:server:linux": "npm run build:linux --workspace=packages/server",
+    "build:agent:linux": "npm run build:linux --workspace=packages/agent",
+    "build:all:win": "npm run build:win --workspace=packages/server && npm run build:win --workspace=packages/agent",
+    "build:all:linux": "npm run build:linux --workspace=packages/server && npm run build:linux --workspace=packages/agent"
+  }
 }

@@ -578,3 +578,127 @@ body {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+
+/* Platform Label */
+.platform-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dark);
+  margin-bottom: 8px;
+  width: 100%;
+  text-align: left;
+}
+
+/* Linux Download Buttons */
+.btn-linux {
+  background: linear-gradient(135deg, #16a34a, #15803d);
+  color: white;
+  box-shadow: 0 10px 20px -10px rgba(22, 163, 74, 0.4);
+  margin-bottom: 8px;
+}
+
+.btn-linux:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px -8px rgba(22, 163, 74, 0.5);
+  background: linear-gradient(135deg, #22c55e, #16a34a);
+}
+
+.btn-linux-outline {
+  background: rgba(22, 163, 74, 0.08);
+  color: #4ade80;
+  border: 1px solid rgba(22, 163, 74, 0.25);
+}
+
+.btn-linux-outline:hover {
+  background: rgba(22, 163, 74, 0.15);
+  transform: translateY(-2px);
+  border-color: rgba(22, 163, 74, 0.4);
+}
+
+/* System Requirements Section */
+.requirements-section {
+  padding: 100px 0;
+  background-color: var(--bg-secondary);
+}
+
+.requirements-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 32px;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+@media (min-width: 640px) {
+  .requirements-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.requirements-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  padding: 32px;
+  border-radius: 16px;
+  transition: all 0.3s ease;
+}
+
+.requirements-card:hover {
+  border-color: rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+  transform: translateY(-2px);
+}
+
+.req-platform {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  font-family: var(--font-display);
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: white;
+}
+
+.req-icon {
+  flex-shrink: 0;
+}
+
+.req-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.req-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.req-check {
+  font-weight: 700;
+  flex-shrink: 0;
+  color: var(--color-secondary);
+  font-size: 0.85rem;
+}
+
+.req-check.req-warn {
+  color: #fbbf24;
+}
+
+.req-list code {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  color: #7dd3fc;
+  font-family: monospace;
+}

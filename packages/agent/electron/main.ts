@@ -3,7 +3,7 @@ import WebSocket from 'ws';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 
 let lockWindow: BrowserWindow | null = null;
 let ws: WebSocket | null = null;
@@ -180,17 +180,24 @@ function getCPUUsage(): Promise<number> {
 
 function getActiveWindowTitle(): Promise<string> {
   return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      return resolve('macOS / Linux Client');
+    if (process.platform === 'win32') {
+      const psCmd = `powershell -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetForegroundWindow(); }'; $fg = [Win32]::GetForegroundWindow(); (Get-Process | Where-Object { $_.MainWindowHandle -eq $fg }).MainWindowTitle"`;
+      exec(psCmd, (err, stdout) => {
+        if (err) {
+          resolve('System');
+        } else {
+          resolve(stdout.trim() || 'Desktop');
+        }
+      });
+    } else {
+      exec('xdotool getactivewindow getwindowname', (err, stdout) => {
+        if (err || !stdout) {
+          resolve('Desktop / Shell');
+        } else {
+          resolve(stdout.trim());
+        }
+      });
     }
-    const psCmd = `powershell -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\\"user32.dll\\\")] public static extern IntPtr GetForegroundWindow(); }'; $fg = [Win32]::GetForegroundWindow(); (Get-Process | Where-Object { $_.MainWindowHandle -eq $fg }).MainWindowTitle"`;
-    exec(psCmd, (err, stdout) => {
-      if (err) {
-        resolve('System');
-      } else {
-        resolve(stdout.trim() || 'Desktop');
-      }
-    });
   });
 }
 
@@ -204,8 +211,9 @@ async function captureScreen(): Promise<string> {
 }
 
 function applyHostBlocking(domains: string[]) {
-  if (process.platform !== 'win32') return;
-  const hostsPath = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
+  const hostsPath = process.platform === 'win32'
+    ? 'C:\\Windows\\System32\\drivers\\etc\\hosts'
+    : '/etc/hosts';
   try {
     if (!fs.existsSync(hostsPath)) return;
     let content = fs.readFileSync(hostsPath, 'utf8');
@@ -233,14 +241,64 @@ function applyHostBlocking(domains: string[]) {
     
     fs.writeFileSync(hostsPath, content, 'utf8');
   } catch (e) {
-    console.error('Failed to write hosts file (requires Admin rights):', e);
+    console.error('Failed to write hosts file (requires root/admin privileges):', e);
   }
 }
 
 function enforceAppBlocking(executables: string[]) {
-  if (process.platform !== 'win32') return;
-  executables.forEach((exe) => {
-    exec(`taskkill /F /IM ${exe}`, () => {});
+  if (executables.length === 0) return;
+  if (process.platform === 'win32') {
+    executables.forEach((exe) => {
+      exec(`taskkill /F /IM ${exe}`, () => {});
+    });
+  } else {
+    executables.forEach((exe) => {
+      const name = exe.toLowerCase().endsWith('.exe') ? exe.slice(0, -4) : exe;
+      exec(`pkill -f ${name}`, () => {});
+    });
+  }
+}
+
+function getDefaultInterface(): Promise<string> {
+  return new Promise((resolve) => {
+    exec("ip route | grep default", (err, stdout) => {
+      if (err || !stdout) {
+        return resolve('eth0');
+      }
+      const parts = stdout.trim().split(/\s+/);
+      const devIndex = parts.indexOf('dev');
+      if (devIndex !== -1 && parts[devIndex + 1]) {
+        resolve(parts[devIndex + 1]);
+      } else {
+        resolve('eth0');
+      }
+    });
+  });
+}
+
+function applyBandwidthLimit(rate: string): Promise<void> {
+  return new Promise(async (resolve) => {
+    if (process.platform !== 'linux') return resolve();
+    const iface = await getDefaultInterface();
+    exec(`tc qdisc del dev ${iface} root`, () => {
+      exec(`tc qdisc add dev ${iface} root tbf rate ${rate} burst 32kbit latency 400ms`, (err) => {
+        if (err) console.error(`Failed to apply bandwidth limit on ${iface}:`, err);
+        resolve();
+      });
+    });
+  });
+}
+
+function removeBandwidthLimit(): Promise<void> {
+  return new Promise(async (resolve) => {
+    if (process.platform !== 'linux') return resolve();
+    const iface = await getDefaultInterface();
+    exec(`tc qdisc del dev ${iface} root`, (err) => {
+      if (err) {
+        // Safe to ignore errors if no limit was set
+      }
+      resolve();
+    });
   });
 }
 
@@ -278,7 +336,20 @@ function connectToServer() {
       } else if (msg.command === 'poweroff') {
         if (process.platform === 'win32') {
           exec('shutdown /s /f /t 0');
+        } else {
+          exec('shutdown -h now');
         }
+      } else if (msg.command === 'restart') {
+        if (process.platform === 'win32') {
+          exec('shutdown /r /f /t 0');
+        } else {
+          exec('reboot');
+        }
+      } else if (msg.command === 'limit-bandwidth') {
+        const rate = msg.payload?.rate || '2mbit';
+        await applyBandwidthLimit(rate);
+      } else if (msg.command === 'remove-bandwidth') {
+        await removeBandwidthLimit();
       } else if (msg.command === 'capture-screenshot') {
         try {
           const base64 = await captureScreen();
@@ -322,6 +393,17 @@ function getIPAddress() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'linux' && process.getuid && process.getuid() !== 0) {
+    const args = [process.execPath, ...process.argv.slice(1)];
+    const child = spawn('pkexec', args, {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+    app.quit();
+    return;
+  }
+
   loadConfig();
   createLockWindow();
   connectToServer();

@@ -21,6 +21,8 @@
       </a>
       <ul class="nav-links">
         <li><a href="#features">Features</a></li>
+        <li><a href="#download">Download</a></li>
+        <li><a href="#requirements">Requirements</a></li>
         <li><a href="#setup">Setup Guide</a></li>
         <li><a href="#faq">FAQ</a></li>
       </ul>
@@ -43,18 +45,38 @@
           <div class="download-card">
             <h3>Admin Server</h3>
             <p>For operator / manager PC</p>
-            <a href="downloads/NetCafe-Server-Setup.exe" download id="download-server" class="btn btn-primary btn-lg">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+            <div class="platform-label">Windows</div>
+            <a href="downloads/NetCafe-Server-Setup.exe" download id="download-server-win" class="btn btn-primary btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
               Download Server (.exe)
+            </a>
+            <div class="platform-label" style="margin-top:12px">Linux</div>
+            <a href="downloads/NetCafe-Server.deb" download id="download-server-deb" class="btn btn-linux btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Server (.deb)
+            </a>
+            <a href="downloads/NetCafe-Server.AppImage" download id="download-server-appimage" class="btn btn-linux-outline btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Server (.AppImage)
             </a>
           </div>
           
           <div class="download-card">
             <h3>Client Agent</h3>
             <p>For client / user terminals</p>
-            <a href="downloads/NetCafe-Agent-Setup.exe" download id="download-agent" class="btn btn-secondary btn-lg">
-              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
-              Download Client Agent (.exe)
+            <div class="platform-label">Windows</div>
+            <a href="downloads/NetCafe-Agent-Setup.exe" download id="download-agent-win" class="btn btn-secondary btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Agent (.exe)
+            </a>
+            <div class="platform-label" style="margin-top:12px">Linux</div>
+            <a href="downloads/NetCafe-Agent.deb" download id="download-agent-deb" class="btn btn-linux btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Agent (.deb)
+            </a>
+            <a href="downloads/NetCafe-Agent.AppImage" download id="download-agent-appimage" class="btn btn-linux-outline btn-lg">
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="btn-icon"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+              Download Agent (.AppImage)
             </a>
           </div>
         </div>
@@ -105,6 +127,51 @@
           </div>
           <h3>Billing & Receipts</h3>
           <p>Fully supports Prepaid & Postpaid modes. Calculate charges, apply custom operator discounts, record payments (Cash/UPI), and print receipts.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- System Requirements Section -->
+  <section class="requirements-section" id="requirements">
+    <div class="container">
+      <div class="section-header">
+        <h2>System Requirements</h2>
+        <p>Minimum requirements for running the Admin Server and Client Agent on your network.</p>
+      </div>
+
+      <div class="requirements-grid">
+        <!-- Windows -->
+        <div class="requirements-card">
+          <div class="req-platform">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" class="req-icon icon-blue"><path d="M3 5.557L9.556 4.77v6.174H3V5.557zM10.445 4.64L21 3v7.944H10.445V4.64zM3 11.835h6.556v6.174L3 17.222V11.835zM10.445 11.835H21V20l-10.555-1.347v-6.818z"/></svg>
+            <span>Windows</span>
+          </div>
+          <ul class="req-list">
+            <li><span class="req-check">✓</span> Windows 10 / 11 (64-bit)</li>
+            <li><span class="req-check">✓</span> 4 GB RAM minimum (8 GB recommended)</li>
+            <li><span class="req-check">✓</span> 200 MB free disk space</li>
+            <li><span class="req-check">✓</span> LAN / Wi-Fi network connection</li>
+            <li><span class="req-check req-warn">⚠</span> Admin must run Server as Administrator</li>
+            <li><span class="req-check req-warn">⚠</span> Agent must run as Administrator (hosts file access)</li>
+          </ul>
+        </div>
+
+        <!-- Linux -->
+        <div class="requirements-card">
+          <div class="req-platform">
+            <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" class="req-icon icon-emerald"><path d="M12.504 0c-.155 0-.315.008-.48.021C7.576.218 3.632 4.154 3.632 9.16c0 1.498.388 2.898 1.067 4.113l-2.512 7.23 7.384-2.42C10.78 18.676 11.634 19 12.504 19c5.009 0 8.896-3.932 8.896-9.5 0-5.163-3.887-9.5-8.896-9.5zm0 1.5c4.083 0 7.396 3.591 7.396 8 0 4.81-3.313 8-7.396 8-.758 0-1.498-.135-2.194-.393l-.42-.16-4.393 1.44 1.49-4.3-.202-.36C5.22 12.356 5.132 10.788 5.132 9.16c0-4.41 3.334-7.66 7.372-7.66z"/></svg>
+            <span>Ubuntu / Debian Linux</span>
+          </div>
+          <ul class="req-list">
+            <li><span class="req-check">✓</span> Ubuntu 20.04+ or Debian 11+ (64-bit only)</li>
+            <li><span class="req-check">✓</span> 4 GB RAM minimum (8 GB recommended)</li>
+            <li><span class="req-check">✓</span> 200 MB free disk space</li>
+            <li><span class="req-check">✓</span> LAN / Wi-Fi network connection</li>
+            <li><span class="req-check req-warn">⚠</span> <code>sudo</code> access required for Client Agent</li>
+            <li><span class="req-check req-warn">⚠</span> <code>iproute2</code> package for bandwidth limiting (<code>tc</code>)</li>
+            <li><span class="req-check req-warn">⚠</span> Agent uses <code>pkexec</code> (polkit) for privilege elevation at launch</li>
+          </ul>
         </div>
       </div>
     </div>
@@ -196,7 +263,7 @@
             <span class="faq-icon"></span>
           </button>
           <div class="faq-answer">
-            <p>Domain blocking modifies the local Windows hosts file to redirect specified websites to localhost. Application blocking runs a background scanner checking active executables against the blocklist and terminates unauthorized processes (e.g. Steam.exe) immediately.</p>
+            <p>Domain blocking modifies the local hosts file (<code>C:\Windows\System32\drivers\etc\hosts</code> on Windows, <code>/etc/hosts</code> on Linux) to redirect specified websites to localhost. Application blocking runs a background scanner checking active processes against the blocklist and terminates them immediately — using <code>taskkill</code> on Windows and <code>pkill</code> on Linux.</p>
           </div>
         </div>
 

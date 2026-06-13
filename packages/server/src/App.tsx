@@ -207,6 +207,27 @@ export default function App() {
     }
   }
 
+  const handleRestart = async (machineId: number) => {
+    if (confirm('Are you sure you want to restart this machine?')) {
+      if (window.ipcRenderer) await window.ipcRenderer.invoke('restart-machine', machineId)
+    }
+  }
+
+  const handleLimitSpeed = async (machineId: number) => {
+    const rate = prompt('Enter speed limit (e.g., 2mbit, 512kbit, 5mbit):', '2mbit')
+    if (window.ipcRenderer && rate) {
+      await window.ipcRenderer.invoke('limit-bandwidth', machineId, rate)
+      alert(`Applied bandwidth limit of ${rate} to machine.`);
+    }
+  }
+
+  const handleRemoveSpeed = async (machineId: number) => {
+    if (window.ipcRenderer) {
+      await window.ipcRenderer.invoke('remove-bandwidth', machineId)
+      alert('Removed bandwidth limit from machine.');
+    }
+  }
+
   // Global actions
   const handleLockAll = async () => {
     if (window.ipcRenderer) await window.ipcRenderer.invoke('lock-all')
@@ -633,6 +654,12 @@ export default function App() {
                               className="flex-1 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 rounded"
                             >
                               Message
+                            </button>
+                            <button
+                              onClick={() => handleRestart(machine.id)}
+                              className="flex-1 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 rounded"
+                            >
+                              Restart
                             </button>
                             <button
                               onClick={() => handlePower(machine.id)}
@@ -1074,6 +1101,49 @@ export default function App() {
                       <RefreshCw size={12} /> Capture Live Screen
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* Bandwidth Control */}
+              {selectedDrawerMachine.status !== 'offline' && (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Bandwidth Control</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleLimitSpeed(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-amber-900/30 hover:bg-amber-800/50 border border-amber-800/40 text-amber-300 hover:text-amber-200 rounded text-xs font-bold transition-all"
+                    >
+                      Limit Speed
+                    </button>
+                    <button
+                      onClick={() => handleRemoveSpeed(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/50 text-slate-300 hover:text-white rounded text-xs font-bold transition-all"
+                    >
+                      Remove Limit
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-600">Linux only: uses tc qdisc (iproute2). No-op on Windows.</p>
+                </div>
+              )}
+
+              {/* Remote Actions */}
+              {selectedDrawerMachine.status !== 'offline' && (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Remote Actions</div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleRestart(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"
+                    >
+                      Restart
+                    </button>
+                    <button
+                      onClick={() => handlePower(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 text-red-400 hover:text-red-300 rounded text-xs font-bold transition-all"
+                    >
+                      Shutdown
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

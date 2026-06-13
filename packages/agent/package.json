@@ -4,15 +4,43 @@
   "main": "dist/main.js",
   "scripts": {
     "start": "electron .",
-    "build": "tsc"
+    "build": "tsc",
+    "build:win": "tsc && electron-builder --win",
+    "build:linux": "tsc && electron-builder --linux"
   },
   "dependencies": {
     "ws": "^8.16.0"
   },
   "devDependencies": {
     "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
     "typescript": "^5.4.5",
     "@types/ws": "^8.5.10",
     "@types/node": "^20.12.7"
+  },
+  "build": {
+    "appId": "com.netcafe.agent",
+    "productName": "NetCafe Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
   }
 }
