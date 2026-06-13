@@ -5,8 +5,8 @@
   "scripts": {
     "start": "electron .",
     "build": "tsc",
-    "build:win": "tsc && electron-builder --win",
-    "build:linux": "tsc && electron-builder --linux"
+    "build:win": "tsc && electron-builder --win -p never",
+    "build:linux": "tsc && electron-builder --linux -p never"
   },
   "dependencies": {
     "ws": "^8.16.0"
