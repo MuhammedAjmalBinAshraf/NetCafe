@@ -19,6 +19,9 @@ jobs:
     defaults:
       run:
         shell: bash
+    env:
+      ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 
     steps:
       - name: Checkout
@@ -29,8 +32,14 @@ jobs:
         with:
           node-version: 22
 
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+
       - name: Install root deps
-        run: npm install
+        run: npm install --prefer-offline
 
 
       - name: Build server (Windows)
@@ -39,6 +48,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           USE_HARD_LINKS: false
+          ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+          ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 
 
       - name: Build agent (Windows)
@@ -46,6 +57,8 @@ jobs:
         run: npm run build:win:ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+          ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 
       - name: List server release files
         run: ls -la packages/server/release/ || echo "No server release files"
