@@ -626,6 +626,9 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
 
 ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId: string) => {
   try {
+    if (!newServerUrl.startsWith('ws://') && !newServerUrl.startsWith('wss://')) {
+      newServerUrl = 'ws://' + newServerUrl;
+    }
     serverUrl = newServerUrl;
     machineId = newMachineId;
     fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
@@ -801,8 +804,15 @@ function removeBandwidthLimit(): Promise<void> {
 }
 
 function connectToServer() {
-  const socket = new WebSocket(serverUrl);
-  ws = socket;
+  let socket: WebSocket;
+  try {
+    socket = new WebSocket(serverUrl);
+    ws = socket;
+  } catch (err) {
+    console.error('WebSocket connection failed synchronously:', err);
+    setTimeout(connectToServer, 5000);
+    return;
+  }
 
   socket.on('open', () => {
     console.log('Connected to server');
