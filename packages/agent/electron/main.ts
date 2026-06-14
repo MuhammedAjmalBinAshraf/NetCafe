@@ -626,19 +626,36 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
 
 ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId: string) => {
   try {
-    if (!newServerUrl.startsWith('ws://') && !newServerUrl.startsWith('wss://')) {
-      newServerUrl = 'ws://' + newServerUrl;
+    let normalizedUrl = newServerUrl.trim();
+    if (!normalizedUrl.startsWith('ws://') && !normalizedUrl.startsWith('wss://')) {
+      normalizedUrl = 'ws://' + normalizedUrl;
     }
-    serverUrl = newServerUrl;
+    
+    // Auto-append port :9000 if not specified
+    try {
+      const parsed = new URL(normalizedUrl);
+      if (!parsed.port) {
+        normalizedUrl = `${parsed.protocol}//${parsed.hostname}:9000${parsed.pathname}${parsed.search}${parsed.hash}`.replace(/\/$/, '');
+      }
+    } catch (e) {
+      if (!/:[0-9]+$/.test(normalizedUrl)) {
+        normalizedUrl = normalizedUrl + ':9000';
+      }
+    }
+
+    serverUrl = normalizedUrl;
     machineId = newMachineId;
     fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
     
-    // Close existing socket and reconnect
+    // Close existing socket and reconnect immediately
     if (ws) {
-      ws.close();
-    } else {
-      connectToServer();
+      try {
+        ws.removeAllListeners('close');
+        ws.close();
+      } catch {}
+      ws = null;
     }
+    connectToServer();
 
     // Destroy and recreate lock screen window to reflect new config
     if (lockWindow && !lockWindow.isDestroyed()) {
