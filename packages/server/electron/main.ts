@@ -35,6 +35,19 @@ function setupDatabase() {
   }
   db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('lab_name', 'NetCafe Manager');")
+  // Users (customer accounts) table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY,
+      username TEXT UNIQUE NOT NULL,
+      password TEXT NOT NULL,
+      display_name TEXT,
+      phone TEXT,
+      email TEXT,
+      balance_minutes INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN custom_duration INTEGER;")
   } catch {}
@@ -104,6 +117,31 @@ wss.on('connection', (ws) => {
             clearTimeout(pending.timeout)
             pending.resolve(data.payload)
             pendingScreenshots.delete(machineId)
+          }
+        }
+      }
+      else if (data.type === 'user-login') {
+        const machineId = clients.get(ws)
+        if (machineId && db) {
+          const { username, password } = data.payload || {}
+          const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password)
+          if (!user) {
+            ws.send(JSON.stringify({ command: 'login-fail', message: 'Invalid username or password.' }))
+          } else if ((user.balance_minutes || 0) <= 0) {
+            ws.send(JSON.stringify({ command: 'login-fail', message: 'No balance remaining. Please top up at the front desk.' }))
+          } else {
+            // Close any existing open session for this machine
+            db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
+            // Open a new prepaid session using the user's full balance
+            db.prepare(`
+              INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration)
+              VALUES (?, ?, NULL, datetime('now'), 'prepaid', 'active', ?)
+            `).run(machineId, user.display_name || user.username, user.balance_minutes)
+            db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
+            // Deduct balance
+            db.prepare('UPDATE users SET balance_minutes = 0 WHERE id = ?').run(user.id)
+            ws.send(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, duration: user.balance_minutes }))
+            broadcastMachines()
           }
         }
       }
@@ -486,3 +524,63 @@ ipcMain.handle('capture-screenshot', async (_, machineId) => {
     }
   })
 })
+
+// ─── User Account Management IPC Handlers ─────────────────────────────────────
+ipcMain.handle('get-users', () => {
+  return db.prepare('SELECT id, username, display_name, phone, email, balance_minutes, created_at FROM users ORDER BY created_at DESC').all()
+})
+
+ipcMain.handle('create-user', (_, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number) => {
+  try {
+    const info = db.prepare('INSERT INTO users (username, password, display_name, phone, email, balance_minutes) VALUES (?, ?, ?, ?, ?, ?)').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0)
+    return { success: true, id: info.lastInsertRowid }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('update-user', (_, id: number, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number) => {
+  try {
+    if (password && password.trim() !== '') {
+      db.prepare('UPDATE users SET username = ?, password = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ? WHERE id = ?').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0, id)
+    } else {
+      db.prepare('UPDATE users SET username = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ? WHERE id = ?').run(username, displayName || null, phone || null, email || null, balanceMinutes || 0, id)
+    }
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('delete-user', (_, id: number) => {
+  try {
+    db.prepare('DELETE FROM users WHERE id = ?').run(id)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('topup-user', (_, id: number, minutes: number) => {
+  try {
+    db.prepare('UPDATE users SET balance_minutes = balance_minutes + ? WHERE id = ?').run(minutes, id)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('bulk-create-users', (_, users: { username: string; password: string; display_name: string; balance_minutes: number }[]) => {
+  const results: { username: string; success: boolean; error?: string }[] = []
+  const stmt = db.prepare('INSERT OR IGNORE INTO users (username, password, display_name, balance_minutes) VALUES (?, ?, ?, ?)')
+  for (const u of users) {
+    try {
+      stmt.run(u.username, u.password, u.display_name || null, u.balance_minutes || 0)
+      results.push({ username: u.username, success: true })
+    } catch (e: any) {
+      results.push({ username: u.username, success: false, error: e.message })
+    }
+  }
+  return results
+})
+

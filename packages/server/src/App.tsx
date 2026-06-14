@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
-  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Eye
+  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Eye,
+  UserCircle2
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -23,6 +24,16 @@ interface BlockRule {
   is_active: boolean
 }
 
+interface User {
+  id: number
+  username: string
+  display_name: string | null
+  phone: string | null
+  email: string | null
+  balance_minutes: number
+  created_at: string
+}
+
 export default function App() {
   // Authentication State
   const [isAuthenticated, setIsAuthenticated] = useState(false)
@@ -32,7 +43,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null)
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'reports' | 'settings'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'reports' | 'settings' | 'users'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [plans, setPlans] = useState<Plan[]>([])
   const [blockRules, setBlockRules] = useState<BlockRule[]>([])
@@ -74,6 +85,29 @@ export default function App() {
   const [globalMessage, setGlobalMessage] = useState('')
   const [isGlobalMessageOpen, setIsGlobalMessageOpen] = useState(false)
 
+  // User Management states
+  const [users, setUsers] = useState<User[]>([])
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false)
+  const [editingUser, setEditingUser] = useState<User | null>(null)
+  
+  // User Form fields
+  const [userUsername, setUserUsername] = useState('')
+  const [userPassword, setUserPassword] = useState('')
+  const [userDisplayName, setUserDisplayName] = useState('')
+  const [userPhone, setUserPhone] = useState('')
+  const [userEmail, setUserEmail] = useState('')
+  const [userBalanceMinutes, setUserBalanceMinutes] = useState('0')
+  const [userSearchQuery, setUserSearchQuery] = useState('')
+
+  // Bulk add states
+  const [isBulkUserModalOpen, setIsBulkUserModalOpen] = useState(false)
+  const [bulkCsvText, setBulkCsvText] = useState('')
+
+  // Top-Up states
+  const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false)
+  const [topUpUser, setTopUpUser] = useState<User | null>(null)
+  const [topUpMinutes, setTopUpMinutes] = useState('60')
+
   // Time remaining auto-ticker
   useEffect(() => {
     const timer = setInterval(() => {
@@ -97,6 +131,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-plans').then(setPlans)
       window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       window.ipcRenderer.invoke('get-settings').then(setSettings)
+      window.ipcRenderer.invoke('get-users').then(setUsers)
       
       // Listen for machines update broadcasts
       window.ipcRenderer.on('machines-updated', (_, data) => {
@@ -121,6 +156,8 @@ export default function App() {
         window.ipcRenderer.invoke('get-reports-summary').then(setReportsData)
       } else if (activeTab === 'settings') {
         window.ipcRenderer.invoke('get-settings').then(setSettings)
+      } else if (activeTab === 'users') {
+        window.ipcRenderer.invoke('get-users').then(setUsers)
       }
     }
   }, [activeTab, isAuthenticated])
@@ -142,6 +179,160 @@ export default function App() {
       setIsAuthenticated(true)
       setCurrentUser({ username: 'admin', role: 'admin' })
     }
+  }
+
+  // User Management Actions
+  const fetchUsers = () => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('get-users').then(setUsers)
+    }
+  }
+
+  const handleOpenAddUser = () => {
+    setEditingUser(null)
+    setUserUsername('')
+    setUserPassword('')
+    setUserDisplayName('')
+    setUserPhone('')
+    setUserEmail('')
+    setUserBalanceMinutes('0')
+    setIsUserModalOpen(true)
+  }
+
+  const handleOpenEditUser = (user: User) => {
+    setEditingUser(user)
+    setUserUsername(user.username)
+    setUserPassword('') // Keep blank unless updating
+    setUserDisplayName(user.display_name || '')
+    setUserPhone(user.phone || '')
+    setUserEmail(user.email || '')
+    setUserBalanceMinutes(user.balance_minutes.toString())
+    setIsUserModalOpen(true)
+  }
+
+  const handleSaveUser = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!window.ipcRenderer) return
+    const balance = parseInt(userBalanceMinutes) || 0
+    if (editingUser) {
+      const res = await window.ipcRenderer.invoke(
+        'update-user',
+        editingUser.id,
+        userUsername,
+        userPassword,
+        userDisplayName,
+        userPhone,
+        userEmail,
+        balance
+      )
+      if (res.success) {
+        setIsUserModalOpen(false)
+        fetchUsers()
+      } else {
+        alert('Error updating user: ' + res.error)
+      }
+    } else {
+      if (!userPassword) {
+        alert('Password is required for new users')
+        return
+      }
+      const res = await window.ipcRenderer.invoke(
+        'create-user',
+        userUsername,
+        userPassword,
+        userDisplayName,
+        userPhone,
+        userEmail,
+        balance
+      )
+      if (res.success) {
+        setIsUserModalOpen(false)
+        fetchUsers()
+      } else {
+        alert('Error creating user: ' + res.error)
+      }
+    }
+  }
+
+  const handleDeleteUser = async (id: number) => {
+    if (!confirm('Are you sure you want to delete this user?')) return
+    if (!window.ipcRenderer) return
+    const res = await window.ipcRenderer.invoke('delete-user', id)
+    if (res.success) {
+      fetchUsers()
+    } else {
+      alert('Error deleting user: ' + res.error)
+    }
+  }
+
+  const handleOpenTopUp = (user: User) => {
+    setTopUpUser(user)
+    setTopUpMinutes('60')
+    setIsTopUpModalOpen(true)
+  }
+
+  const handleConfirmTopUp = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!topUpUser || !window.ipcRenderer) return
+    const mins = parseInt(topUpMinutes) || 0
+    if (mins <= 0) {
+      alert('Please enter a valid number of minutes')
+      return
+    }
+    const res = await window.ipcRenderer.invoke('topup-user', topUpUser.id, mins)
+    if (res.success) {
+      setIsTopUpModalOpen(false)
+      fetchUsers()
+    } else {
+      alert('Error topping up balance: ' + res.error)
+    }
+  }
+
+  const handleBulkAddUsers = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!window.ipcRenderer) return
+    
+    const lines = bulkCsvText.split('\n')
+    const parsedUsers: any[] = []
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim()
+      if (!line) continue
+      const parts = line.split(',')
+      if (parts.length < 2) {
+        alert(`Line ${i + 1} is invalid. Format must be: username,password,display_name,balance_minutes`)
+        return
+      }
+      const uUsername = parts[0].trim()
+      const uPassword = parts[1].trim()
+      const uDisplayName = parts[2] ? parts[2].trim() : ''
+      const uBalance = parts[3] ? parseInt(parts[3].trim()) || 0 : 0
+      
+      if (!uUsername || !uPassword) {
+        alert(`Line ${i + 1} is missing username or password.`)
+        return
+      }
+      parsedUsers.push({
+        username: uUsername,
+        password: uPassword,
+        display_name: uDisplayName,
+        balance_minutes: uBalance
+      })
+    }
+    
+    if (parsedUsers.length === 0) {
+      alert('No user data to import.')
+      return
+    }
+    
+    const results = await window.ipcRenderer.invoke('bulk-create-users', parsedUsers)
+    const successCount = results.filter((r: any) => r.success).length
+    const failCount = results.length - successCount
+    
+    alert(`Import Complete!\nSuccessfully imported: ${successCount}\nFailed (or duplicates): ${failCount}`)
+    setIsBulkUserModalOpen(false)
+    setBulkCsvText('')
+    fetchUsers()
   }
 
   // Machine controls
@@ -429,6 +620,16 @@ export default function App() {
     )
   }
 
+  const filteredUsers = users.filter((u) => {
+    const query = userSearchQuery.toLowerCase()
+    return (
+      u.username.toLowerCase().includes(query) ||
+      (u.display_name && u.display_name.toLowerCase().includes(query)) ||
+      (u.phone && u.phone.includes(query)) ||
+      (u.email && u.email.toLowerCase().includes(query))
+    )
+  })
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
       {/* Top Header */}
@@ -511,6 +712,14 @@ export default function App() {
               }`}
             >
               <BarChart3 size={18} /> Reports
+            </button>
+            <button
+              onClick={() => { setActiveTab('users'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <UserCircle2 size={18} /> Users
             </button>
             <button
               onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null) }}
@@ -973,6 +1182,122 @@ export default function App() {
             </div>
           )}
 
+          {/* TAB: Users */}
+          {activeTab === 'users' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 pb-4 border-b border-slate-900">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Manage User Accounts</h2>
+                  <p className="text-slate-400 text-sm mt-1">Create and top up prepaid customer accounts.</p>
+                </div>
+                <div className="flex gap-2.5">
+                  <button
+                    onClick={() => setIsBulkUserModalOpen(true)}
+                    className="flex items-center gap-2 px-4 py-2 border border-slate-800 hover:bg-slate-900 text-slate-300 rounded text-sm font-semibold transition-colors"
+                  >
+                    <Download size={16} /> Bulk Import CSV
+                  </button>
+                  <button
+                    onClick={handleOpenAddUser}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-semibold transition-colors"
+                  >
+                    <Plus size={16} /> Add User
+                  </button>
+                </div>
+              </div>
+
+              {/* Search Bar */}
+              <div className="flex items-center bg-slate-900/40 border border-slate-900 rounded-lg px-3 py-2 max-w-md">
+                <input
+                  type="text"
+                  placeholder="Search users..."
+                  value={userSearchQuery}
+                  onChange={(e) => setUserSearchQuery(e.target.value)}
+                  className="bg-transparent border-none text-white outline-none w-full text-sm"
+                />
+                {userSearchQuery && (
+                  <button onClick={() => setUserSearchQuery('')} className="text-slate-500 hover:text-slate-300 text-xs font-bold font-mono">
+                    CLEAR
+                  </button>
+                )}
+              </div>
+
+              {/* Users Table */}
+              <div className="bg-slate-900/20 border border-slate-900 rounded-xl overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-900 bg-slate-950/40 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                        <th className="p-4">Username</th>
+                        <th className="p-4">Display Name</th>
+                        <th className="p-4">Balance</th>
+                        <th className="p-4">Contact Details</th>
+                        <th className="p-4">Created At</th>
+                        <th className="p-4 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-900 text-sm text-slate-300">
+                      {filteredUsers.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="p-8 text-center text-slate-500">
+                            No users found.
+                          </td>
+                        </tr>
+                      ) : (
+                        filteredUsers.map((user) => (
+                          <tr key={user.id} className="hover:bg-slate-900/10 transition-colors">
+                            <td className="p-4 font-bold text-white">{user.username}</td>
+                            <td className="p-4">{user.display_name || <span className="text-slate-600 italic">—</span>}</td>
+                            <td className="p-4">
+                              <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${
+                                user.balance_minutes > 0 ? 'bg-emerald-950 text-emerald-400 border border-emerald-900' : 'bg-rose-950 text-rose-400 border border-rose-900'
+                              }`}>
+                                {user.balance_minutes} min
+                              </span>
+                            </td>
+                            <td className="p-4 space-y-0.5 text-xs text-slate-400">
+                              {user.phone && <div>📞 {user.phone}</div>}
+                              {user.email && <div>✉️ {user.email}</div>}
+                              {!user.phone && !user.email && <span className="text-slate-600 italic">—</span>}
+                            </td>
+                            <td className="p-4 text-xs text-slate-400">
+                              {new Date(user.created_at).toLocaleDateString()}
+                            </td>
+                            <td className="p-4 text-right">
+                              <div className="flex justify-end gap-2">
+                                <button
+                                  onClick={() => handleOpenTopUp(user)}
+                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold transition-colors"
+                                  title="Top-up minutes"
+                                >
+                                  Top-Up
+                                </button>
+                                <button
+                                  onClick={() => handleOpenEditUser(user)}
+                                  className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded transition-colors"
+                                  title="Edit account"
+                                >
+                                  <Edit size={14} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteUser(user.id)}
+                                  className="p-1 bg-red-950/20 hover:bg-red-900/20 border border-red-900/20 text-red-400 rounded transition-colors"
+                                  title="Delete account"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+
         </main>
 
         {/* Remote monitoring Details Drawer (Sidebar) */}
@@ -1284,6 +1609,234 @@ export default function App() {
         onClose={() => setIsReceiptModalOpen(false)}
         onConfirm={handleConfirmClose}
       />
+
+      {/* User Create/Edit Modal */}
+      {isUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <form onSubmit={handleSaveUser} className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <h3 className="text-md font-bold text-white">
+                {editingUser ? 'Edit User Account' : 'Create User Account'}
+              </h3>
+              <button type="button" onClick={() => setIsUserModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Username *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="john_doe"
+                    value={userUsername}
+                    onChange={(e) => setUserUsername(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                    Password {editingUser ? '(leave blank to keep)' : '*'}
+                  </label>
+                  <input
+                    type="password"
+                    required={!editingUser}
+                    placeholder="••••••••"
+                    value={userPassword}
+                    onChange={(e) => setUserPassword(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Display Name</label>
+                <input
+                  type="text"
+                  placeholder="John Doe"
+                  value={userDisplayName}
+                  onChange={(e) => setUserDisplayName(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Phone</label>
+                  <input
+                    type="text"
+                    placeholder="555-0199"
+                    value={userPhone}
+                    onChange={(e) => setUserPhone(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Email</label>
+                  <input
+                    type="email"
+                    placeholder="john@example.com"
+                    value={userEmail}
+                    onChange={(e) => setUserEmail(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Initial Balance (Minutes)</label>
+                <input
+                  type="number"
+                  required
+                  placeholder="0"
+                  value={userBalanceMinutes}
+                  onChange={(e) => setUserBalanceMinutes(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                />
+              </div>
+            </div>
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsUserModalOpen(false)}
+                className="px-3 py-1.5 border border-slate-800 hover:bg-slate-800 text-slate-400 rounded text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded text-xs transition-colors"
+              >
+                Save User
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Bulk Import Modal */}
+      {isBulkUserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <form onSubmit={handleBulkAddUsers} className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <h3 className="text-md font-bold text-white">Bulk Import User Accounts</h3>
+              <button type="button" onClick={() => setIsBulkUserModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="p-3 bg-slate-950/80 rounded border border-blue-900/30 text-xs text-slate-400 space-y-2">
+                <p className="font-bold text-blue-400">CSV Import Instructions:</p>
+                <p>Provide user details in comma-separated values (CSV) format. One user account per line.</p>
+                <div className="font-mono bg-slate-950 p-2 rounded text-[10px] text-slate-300">
+                  username,password,display_name,balance_minutes
+                </div>
+                <p className="text-amber-400/80">Example:<br />john_doe,pass123,John Doe,120<br />jane_smith,pass456,Jane Smith,60</p>
+                <p className="text-slate-500">Note: Password and Username are required. Duplicates will be ignored.</p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">CSV Input Data</label>
+                <textarea
+                  required
+                  rows={8}
+                  placeholder="username,password,display_name,balance_minutes"
+                  value={bulkCsvText}
+                  onChange={(e) => setBulkCsvText(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none text-sm font-mono transition-colors resize-none"
+                />
+              </div>
+            </div>
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsBulkUserModalOpen(false)}
+                className="px-3 py-1.5 border border-slate-800 hover:bg-slate-800 text-slate-400 rounded text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded text-xs transition-colors"
+              >
+                Import Accounts
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Top-up Balance Modal */}
+      {isTopUpModalOpen && topUpUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <form onSubmit={handleConfirmTopUp} className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <h3 className="text-md font-bold text-white">Top-up User Balance</h3>
+              <button type="button" onClick={() => setIsTopUpModalOpen(false)} className="text-slate-400 hover:text-white">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-slate-950/50 p-3.5 rounded border border-slate-900 text-sm space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-slate-400">User:</span>
+                  <span className="font-bold text-white">{topUpUser.display_name || topUpUser.username}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Current Balance:</span>
+                  <span className="font-bold text-emerald-400">{topUpUser.balance_minutes} minutes</span>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Add Minutes</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  placeholder="60"
+                  value={topUpMinutes}
+                  onChange={(e) => setTopUpMinutes(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                />
+              </div>
+
+              {/* Quick Presets */}
+              <div className="space-y-1">
+                <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Quick Presets</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[30, 60, 120, 300].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setTopUpMinutes(preset.toString())}
+                      className="py-1 px-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-xs font-semibold transition-colors"
+                    >
+                      +{preset}m
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="p-3 bg-slate-950 border-t border-slate-800 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsTopUpModalOpen(false)}
+                className="px-3 py-1.5 border border-slate-800 hover:bg-slate-800 text-slate-400 rounded text-xs transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-medium rounded text-xs transition-colors"
+              >
+                Confirm Top-Up
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   )
 }
