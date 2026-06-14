@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import { exec, spawn } from 'child_process';
+import dgram from 'dgram';
 
 let lockWindow: BrowserWindow | null = null;
 let ws: WebSocket | null = null;
@@ -255,6 +256,85 @@ function createLockWindow() {
       padding-top: 0.75rem;
       border-top: 1px solid rgba(255,255,255,0.04);
     }
+    
+    /* Settings panel styling */
+    .settings-trigger {
+      position: fixed;
+      top: 1.5rem;
+      right: 1.5rem;
+      width: 40px;
+      height: 40px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1.25rem;
+      transition: background 0.2s, transform 0.2s, border-color 0.2s;
+      z-index: 100;
+    }
+    .settings-trigger:hover {
+      background: rgba(255, 255, 255, 0.12);
+      border-color: rgba(255, 255, 255, 0.2);
+      transform: rotate(30deg);
+    }
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 6, 23, 0.9);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease-in-out;
+    }
+    .settings-modal.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .settings-content {
+      background: #0f172a;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 20px;
+      width: 380px;
+      padding: 1.75rem;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      position: relative;
+      animation: modalSlide 0.3s cubic-bezier(0.16,1,0.3,1);
+    }
+    @keyframes modalSlide {
+      from { transform: scale(0.95); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+    .settings-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.25rem;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding-bottom: 0.75rem;
+    }
+    .settings-header h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: white;
+    }
+    .settings-close {
+      font-size: 1.5rem;
+      color: #64748b;
+      cursor: pointer;
+      transition: color 0.15s;
+      line-height: 1;
+    }
+    .settings-close:hover {
+      color: white;
+    }
   </style>
 </head>
 <body>
@@ -282,10 +362,65 @@ function createLockWindow() {
     <div class="walk-in-hint">Visit the front desk to start a walk-in session.</div>
 
     <div class="info-panel">
-      <div class="info-line"><span class="info-label">Server</span><span class="info-value">${serverUrl}</span></div>
+      <div class="info-line"><span class="info-label">Server</span><span class="info-value" id="infoServerUrl">${serverUrl}</span></div>
+      <div class="info-line"><span class="info-label">Terminal</span><span class="info-value">${machineId}</span></div>
       <div class="info-line"><span class="info-label">Config</span><span class="info-value">${configPath}</span></div>
     </div>
     <div class="footer">Do not power off this terminal.</div>
+  </div>
+
+  <!-- Settings Gear Button -->
+  <div class="settings-trigger" id="settingsTrigger" title="Operator Configuration">⚙️</div>
+
+  <!-- Settings Modal -->
+  <div class="settings-modal" id="settingsModal">
+    <div class="settings-content">
+      <div class="settings-header">
+        <h3>⚙️ Terminal Configuration</h3>
+        <span class="settings-close" id="settingsClose">×</span>
+      </div>
+
+      <!-- PIN Gate -->
+      <div id="pinGate">
+        <div style="margin-bottom:0.75rem;">
+          <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Operator PIN</label>
+          <input type="password" id="pinInput" placeholder="Enter operator PIN" autocomplete="off"
+            style="width:100%;padding:0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.9rem;outline:none;" />
+          <div id="pinError" style="margin-top:0.5rem;color:#fca5a5;font-size:0.78rem;display:none;"></div>
+        </div>
+        <button id="pinUnlockBtn"
+          style="width:100%;padding:0.65rem;background:linear-gradient(135deg,#3b82f6,#6366f1);border:none;border-radius:10px;color:white;font-size:0.88rem;font-weight:700;cursor:pointer;">
+          Unlock Settings
+        </button>
+      </div>
+
+      <!-- Config Form (hidden until PIN passes) -->
+      <div id="configForm" style="display:none;">
+        <div style="margin-bottom:0.9rem;">
+          <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Server URL</label>
+          <input type="text" id="cfgServerUrl" placeholder="ws://192.168.1.10:9000" autocomplete="off"
+            style="width:100%;padding:0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.88rem;outline:none;" />
+          <div style="margin-top:0.3rem;font-size:0.7rem;color:#475569;">WebSocket address of the NetCafe server on your LAN</div>
+        </div>
+        <div style="margin-bottom:1.1rem;">
+          <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Terminal Name (Machine ID)</label>
+          <input type="text" id="cfgMachineId" placeholder="PC-01" autocomplete="off"
+            style="width:100%;padding:0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.88rem;outline:none;" />
+          <div style="margin-top:0.3rem;font-size:0.7rem;color:#475569;">Unique name for this terminal shown on the server dashboard</div>
+        </div>
+        <div id="cfgStatus" style="margin-bottom:0.75rem;padding:0.5rem 0.75rem;border-radius:8px;font-size:0.78rem;display:none;"></div>
+        <div style="display:flex;gap:0.5rem;">
+          <button id="cfgCancelBtn"
+            style="flex:1;padding:0.6rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#94a3b8;font-size:0.85rem;font-weight:600;cursor:pointer;">
+            Cancel
+          </button>
+          <button id="cfgSaveBtn"
+            style="flex:2;padding:0.6rem;background:linear-gradient(135deg,#3b82f6,#6366f1);border:none;border-radius:10px;color:white;font-size:0.88rem;font-weight:700;cursor:pointer;">
+            Save &amp; Reconnect
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -334,6 +469,103 @@ function createLockWindow() {
       loginBtn.addEventListener('click', attemptLogin);
       passwordEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptLogin(); });
       usernameEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') passwordEl.focus(); });
+
+      // ── Settings Gear Logic ──────────────────────────────────────────────────
+      const settingsTrigger = document.getElementById('settingsTrigger');
+      const settingsModal = document.getElementById('settingsModal');
+      const settingsClose = document.getElementById('settingsClose');
+      const pinGate = document.getElementById('pinGate');
+      const pinInput = document.getElementById('pinInput');
+      const pinError = document.getElementById('pinError');
+      const pinUnlockBtn = document.getElementById('pinUnlockBtn');
+      const configForm = document.getElementById('configForm');
+      const cfgServerUrl = document.getElementById('cfgServerUrl');
+      const cfgMachineId = document.getElementById('cfgMachineId');
+      const cfgSaveBtn = document.getElementById('cfgSaveBtn');
+      const cfgCancelBtn = document.getElementById('cfgCancelBtn');
+      const cfgStatus = document.getElementById('cfgStatus');
+
+      const VALID_PINS = ['admin', '9999'];
+
+      function openSettings() {
+        // Reset state
+        pinGate.style.display = 'block';
+        configForm.style.display = 'none';
+        pinInput.value = '';
+        pinError.style.display = 'none';
+        cfgStatus.style.display = 'none';
+        settingsModal.classList.add('active');
+        setTimeout(() => pinInput.focus(), 200);
+      }
+
+      function closeSettings() {
+        settingsModal.classList.remove('active');
+      }
+
+      function showConfigForm() {
+        pinGate.style.display = 'none';
+        configForm.style.display = 'block';
+        // Pre-fill current values from the info panel
+        cfgServerUrl.value = document.getElementById('infoServerUrl').textContent || '${serverUrl}';
+        cfgMachineId.value = '${machineId}';
+        setTimeout(() => cfgServerUrl.focus(), 100);
+      }
+
+      settingsTrigger.addEventListener('click', openSettings);
+      settingsClose.addEventListener('click', closeSettings);
+      cfgCancelBtn.addEventListener('click', closeSettings);
+
+      pinUnlockBtn.addEventListener('click', () => {
+        const pin = pinInput.value.trim();
+        if (VALID_PINS.includes(pin)) {
+          pinError.style.display = 'none';
+          showConfigForm();
+        } else {
+          pinError.textContent = 'Incorrect PIN. Please try again.';
+          pinError.style.display = 'block';
+          pinInput.value = '';
+          pinInput.focus();
+        }
+      });
+      pinInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') pinUnlockBtn.click(); });
+
+      cfgSaveBtn.addEventListener('click', async () => {
+        const newUrl = cfgServerUrl.value.trim();
+        const newId = cfgMachineId.value.trim();
+        if (!newUrl || !newId) {
+          cfgStatus.textContent = 'Both fields are required.';
+          cfgStatus.style.background = 'rgba(239,68,68,0.12)';
+          cfgStatus.style.color = '#fca5a5';
+          cfgStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+          cfgStatus.style.display = 'block';
+          return;
+        }
+        cfgSaveBtn.disabled = true;
+        cfgSaveBtn.textContent = 'Saving...';
+        try {
+          const result = await ipcRenderer.invoke('save-agent-config', newUrl, newId);
+          if (result.success) {
+            cfgStatus.textContent = '✅ Configuration saved! Reconnecting...';
+            cfgStatus.style.background = 'rgba(16,185,129,0.12)';
+            cfgStatus.style.color = '#6ee7b7';
+            cfgStatus.style.border = '1px solid rgba(16,185,129,0.2)';
+            cfgStatus.style.display = 'block';
+            setTimeout(closeSettings, 1500);
+          } else {
+            cfgStatus.textContent = 'Error: ' + (result.error || 'Unknown error');
+            cfgStatus.style.background = 'rgba(239,68,68,0.12)';
+            cfgStatus.style.color = '#fca5a5';
+            cfgStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+            cfgStatus.style.display = 'block';
+          }
+        } catch (e) {
+          cfgStatus.textContent = 'Failed to save configuration.';
+          cfgStatus.style.display = 'block';
+        } finally {
+          cfgSaveBtn.disabled = false;
+          cfgSaveBtn.textContent = 'Save & Reconnect';
+        }
+      });
     })();
   </script>
 </body>
@@ -387,6 +619,31 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
       origResolve(result);
     };
   });
+});
+
+ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId: string) => {
+  try {
+    serverUrl = newServerUrl;
+    machineId = newMachineId;
+    fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
+    
+    // Close existing socket and reconnect
+    if (ws) {
+      ws.close();
+    } else {
+      connectToServer();
+    }
+
+    // Destroy and recreate lock screen window to reflect new config
+    if (lockWindow && !lockWindow.isDestroyed()) {
+      lockWindow.destroy();
+      lockWindow = null;
+      createLockWindow();
+    }
+    return { success: true };
+  } catch (e: any) {
+    return { success: false, error: e.message };
+  }
 });
 
 // ─── OS metrics Helpers ────────────────────────────────────────────────────────
@@ -655,6 +912,68 @@ function getIPAddress() {
   return '127.0.0.1';
 }
 
+let udpListener: dgram.Socket | null = null;
+function startUdpDiscovery() {
+  if (udpListener) return;
+  const socket = dgram.createSocket('udp4');
+  
+  socket.on('message', (msg, rinfo) => {
+    // If we're already connected to the server, ignore UDP broadcasts
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      return;
+    }
+    
+    try {
+      const data = JSON.parse(msg.toString());
+      if (data.service === 'netcafe-server' && data.wsUrl) {
+        if (serverUrl !== data.wsUrl) {
+          console.log(`Auto-discovered new NetCafe Server at ${data.wsUrl}. Updating configuration.`);
+          serverUrl = data.wsUrl;
+          try {
+            fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
+            
+            // Re-create the lock screen to update variables in the template literal
+            if (lockWindow && !lockWindow.isDestroyed()) {
+              lockWindow.destroy();
+              lockWindow = null;
+              createLockWindow();
+            }
+          } catch (e) {
+            console.error('Failed to save discovered config:', e);
+          }
+          
+          if (ws) {
+            ws.close();
+          } else {
+            connectToServer();
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore invalid JSON or malformed packets
+    }
+  });
+
+  socket.on('error', (err) => {
+    console.error('UDP Listener error:', err);
+    try {
+      socket.close();
+    } catch {}
+    udpListener = null;
+    setTimeout(startUdpDiscovery, 10000);
+  });
+
+  try {
+    socket.bind(9090, () => {
+      console.log('UDP Discovery Listener bound on port 9090');
+    });
+    udpListener = socket;
+  } catch (err) {
+    console.error('Failed to bind UDP Listener:', err);
+    udpListener = null;
+  }
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() !== 0) {
     const args = [process.execPath, ...process.argv.slice(1)];
@@ -668,6 +987,7 @@ app.whenReady().then(() => {
   }
 
   loadConfig();
+  startUdpDiscovery();
   createLockWindow();
   connectToServer();
 

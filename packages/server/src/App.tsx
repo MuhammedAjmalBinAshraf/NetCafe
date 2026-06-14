@@ -412,7 +412,27 @@ export default function App() {
   const handleRemoveSpeed = async (machineId: number) => {
     if (window.ipcRenderer) {
       await window.ipcRenderer.invoke('remove-bandwidth', machineId)
-      alert('Removed bandwidth limit from machine.');
+      alert('Removed bandwidth limit from machine.')
+    }
+  }
+
+  const handleRenameMachine = async (machine: any) => {
+    const newName = prompt(`Rename terminal "${machine.name}":`, machine.name)
+    if (!newName || newName.trim() === '') return
+    if (!window.ipcRenderer) return
+    const res = await window.ipcRenderer.invoke('rename-machine', machine.id, newName.trim())
+    if (!res.success) alert('Error renaming: ' + res.error)
+    else setSelectedDrawerMachine({ ...machine, name: newName.trim() })
+  }
+
+  const handleDeleteMachine = async (machineId: number) => {
+    if (!confirm('Remove this terminal from the dashboard? This will delete its record from the database.')) return
+    if (!window.ipcRenderer) return
+    const res = await window.ipcRenderer.invoke('delete-machine', machineId)
+    if (res.success) {
+      setSelectedDrawerMachine(null)
+    } else {
+      alert('Error removing terminal: ' + res.error)
     }
   }
 
@@ -1468,6 +1488,26 @@ export default function App() {
                   </div>
                 </div>
               )}
+
+              {/* Terminal Management */}
+              <div className="space-y-2 pt-2 border-t border-slate-900/60">
+                <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Terminal Management</div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleRenameMachine(selectedDrawerMachine)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-slate-800/60 hover:bg-slate-700/60 border border-slate-700/50 text-slate-300 hover:text-white rounded text-xs font-bold transition-all"
+                  >
+                    <Edit size={12} /> Rename
+                  </button>
+                  <button
+                    onClick={() => handleDeleteMachine(selectedDrawerMachine.id)}
+                    className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 text-red-400 hover:text-red-300 rounded text-xs font-bold transition-all"
+                  >
+                    <Trash2 size={12} /> Remove
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-600">Remove clears stale/offline entries from the dashboard.</p>
+              </div>
             </div>
           </aside>
         )}

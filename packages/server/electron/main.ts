@@ -4,6 +4,8 @@ import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
 import fs from 'fs'
 import Database from 'better-sqlite3'
+import os from 'os'
+import dgram from 'dgram'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -224,9 +226,45 @@ function createWindow() {
   }
 }
 
+function getLanIPAddress() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name] || []) {
+      if (net.family === 'IPv4' && !net.internal) {
+        return net.address;
+      }
+    }
+  }
+  return '127.0.0.1';
+}
+
+let udpServer: dgram.Socket | null = null;
+function startUdpBroadcast() {
+  const socket = dgram.createSocket('udp4');
+  socket.bind(() => {
+    socket.setBroadcast(true);
+  });
+  
+  setInterval(() => {
+    try {
+      const serverIP = getLanIPAddress();
+      const payload = JSON.stringify({
+        service: 'netcafe-server',
+        wsUrl: `ws://${serverIP}:9000`
+      });
+      socket.send(payload, 0, payload.length, 9090, '255.255.255.255');
+    } catch (err) {
+      console.error('UDP Broadcast error:', err);
+    }
+  }, 3000);
+  
+  udpServer = socket;
+}
+
 app.whenReady().then(async () => {
   setupDatabase()
   createWindow()
+  startUdpBroadcast()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -582,5 +620,26 @@ ipcMain.handle('bulk-create-users', (_, users: { username: string; password: str
     }
   }
   return results
+})
+
+// ─── Machine Management IPC Handlers ──────────────────────────────────────────
+ipcMain.handle('rename-machine', (_, id: number, newName: string) => {
+  try {
+    db.prepare('UPDATE machines SET name = ? WHERE id = ?').run(newName, id)
+    broadcastMachines()
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('delete-machine', (_, id: number) => {
+  try {
+    db.prepare('DELETE FROM machines WHERE id = ?').run(id)
+    broadcastMachines()
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
 })
 
