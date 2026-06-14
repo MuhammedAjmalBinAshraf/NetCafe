@@ -50,4 +50,22 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
   });
+
+  // 4. Fetch latest release version from GitHub API
+  const versionBadge = document.getElementById('version-badge');
+  if (versionBadge) {
+    fetch('https://api.github.com/repos/MuhammedAjmalBinAshraf/NetCafe/releases/latest')
+      .then(response => response.json())
+      .then(data => {
+        if (data && data.tag_name) {
+          versionBadge.textContent = data.tag_name + ' Stable Release';
+        } else {
+          versionBadge.textContent = 'V1.0 Stable Release';
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching latest release:', err);
+        versionBadge.textContent = 'V1.0 Stable Release';
+      });
+  }
 });
