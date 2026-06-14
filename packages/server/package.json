@@ -1,7 +1,7 @@
 {
   "name": "server",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.8",
   "main": "dist-electron/main.js",
   "type": "module",
   "description": "NetCafe Server application",
@@ -27,7 +27,8 @@
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwind-merge": "^3.0.1",
-    "ws": "^8.18.0"
+    "ws": "^8.18.0",
+    "electron-updater": "^6.1.8"
   },
   "devDependencies": {
     "@eslint/js": "^8.57.0",
@@ -81,6 +82,11 @@
         "deb"
       ],
       "category": "Utility"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "MuhammedAjmalBinAshraf",
+      "repo": "NetCafe"
     }
   }
 }

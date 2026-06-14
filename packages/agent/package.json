@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.0",
+  "version": "1.0.8",
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
   "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
@@ -16,7 +16,8 @@
     "build:linux": "tsc && electron-builder --linux -p never"
   },
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.16.0",
+    "electron-updater": "^6.1.8"
   },
   "devDependencies": {
     "electron": "^30.0.0",
@@ -51,6 +52,11 @@
         "deb"
       ],
       "category": "Utility"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "MuhammedAjmalBinAshraf",
+      "repo": "NetCafe"
     }
   }
 }

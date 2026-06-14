@@ -35,7 +35,7 @@ jobs:
 
       - name: Build server (Windows)
         working-directory: packages/server
-        run: npm run build:win
+        run: npm run build:win -- -p always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           USE_HARD_LINKS: false
@@ -46,7 +46,7 @@ jobs:
 
       - name: Build agent (Windows)
         working-directory: packages/agent
-        run: npm run build:win
+        run: npm run build:win -- -p always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -92,7 +92,7 @@ jobs:
 
       - name: Build server (Linux)
         working-directory: packages/server
-        run: npm run build:linux
+        run: npm run build:linux -- -p always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -102,7 +102,7 @@ jobs:
 
       - name: Build agent (Linux)
         working-directory: packages/agent
-        run: npm run build:linux
+        run: npm run build:linux -- -p always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

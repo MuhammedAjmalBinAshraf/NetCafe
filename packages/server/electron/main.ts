@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { autoUpdater } from 'electron-updater'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { WebSocketServer } from 'ws'
@@ -265,6 +266,31 @@ app.whenReady().then(async () => {
   setupDatabase()
   createWindow()
   startUdpBroadcast()
+
+  // Auto Updater logic for Server
+  autoUpdater.autoDownload = false;
+  autoUpdater.checkForUpdates().catch(err => console.error("Update check failed:", err));
+
+  autoUpdater.on('update-available', async (info) => {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      buttons: ['Yes, download and install', 'Later'],
+      title: 'Update Available',
+      message: `NetCafe Server v${info.version} is available. Do you want to download and install it now?`,
+    });
+    if (response === 0) {
+      autoUpdater.downloadUpdate();
+    }
+  });
+
+  autoUpdater.on('update-downloaded', () => {
+    dialog.showMessageBox({
+      title: 'Install Update',
+      message: 'Update downloaded. The application will restart to install it.'
+    }).then(() => {
+      autoUpdater.quitAndInstall();
+    });
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

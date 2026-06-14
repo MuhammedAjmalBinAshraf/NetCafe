@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu } from 'electron';
+import { autoUpdater } from 'electron-updater';
 import WebSocket from 'ws';
 import path from 'path';
 import os from 'os';
@@ -368,6 +369,8 @@ function createLockWindow() {
     </div>
     <div class="footer">Do not power off this terminal.</div>
   </div>
+
+  ${updateReady ? `<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(16,185,129,0.9);color:white;padding:10px 20px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">✅ Update downloaded — will install on next restart</div>` : ''}
 
   <!-- Settings Gear Button -->
   <div class="settings-trigger" id="settingsTrigger" title="Operator Configuration">⚙️</div>
@@ -913,6 +916,7 @@ function getIPAddress() {
 }
 
 let udpListener: dgram.Socket | null = null;
+let updateReady = false;
 function startUdpDiscovery() {
   if (udpListener) return;
   const socket = dgram.createSocket('udp4');
@@ -990,6 +994,17 @@ app.whenReady().then(() => {
   startUdpDiscovery();
   createLockWindow();
   connectToServer();
+
+  // Auto Updater logic for Agent
+  autoUpdater.autoDownload = true;
+  autoUpdater.checkForUpdates().catch(err => console.error("Agent update check failed:", err));
+
+  autoUpdater.on('update-downloaded', () => {
+    updateReady = true;
+    if (isLocked) {
+      createLockWindow();
+    }
+  });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────
   // Ctrl+Shift+Escape: Task Manager
