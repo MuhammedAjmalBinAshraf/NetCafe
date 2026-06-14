@@ -32,9 +32,6 @@ jobs:
       - name: Install root deps
         run: npm install
 
-      - name: Install server deps
-        working-directory: packages/server
-        run: npm install
 
       - name: Build server (Windows)
         working-directory: packages/server
@@ -43,9 +40,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           USE_HARD_LINKS: false
 
-      - name: Install agent deps
-        working-directory: packages/agent
-        run: npm install
 
       - name: Build agent (Windows)
         working-directory: packages/agent
@@ -89,9 +83,6 @@ jobs:
       - name: Install root deps
         run: npm install
 
-      - name: Install server deps
-        working-directory: packages/server
-        run: npm install
 
       - name: Build server (Linux)
         working-directory: packages/server
@@ -99,9 +90,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install agent deps
-        working-directory: packages/agent
-        run: npm install
 
       - name: Build agent (Linux)
         working-directory: packages/agent
