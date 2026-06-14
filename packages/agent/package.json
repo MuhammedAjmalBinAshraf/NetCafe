@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.9",
+  "version": "1.0.10",
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
   "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
@@ -13,7 +13,9 @@
     "start": "electron .",
     "build": "tsc",
     "build:win": "tsc && electron-builder --win -p never",
-    "build:linux": "tsc && electron-builder --linux -p never"
+    "build:linux": "tsc && electron-builder --linux -p never",
+    "build:win:ci": "tsc && electron-builder --win -p always",
+    "build:linux:ci": "tsc && electron-builder --linux -p always"
   },
   "dependencies": {
     "ws": "^8.16.0",

@@ -1,7 +1,7 @@
 {
   "name": "server",
   "private": true,
-  "version": "1.0.9",
+  "version": "1.0.10",
   "main": "dist-electron/main.js",
   "type": "module",
   "description": "NetCafe Server application",
@@ -16,6 +16,8 @@
     "build": "tsc -b && vite build",
     "build:win": "tsc -b && vite build && electron-builder --win -p never",
     "build:linux": "tsc -b && vite build && electron-builder --linux -p never",
+    "build:win:ci": "tsc -b && vite build && electron-builder --win -p always",
+    "build:linux:ci": "tsc -b && vite build && electron-builder --linux -p always",
     "lint": "eslint .",
     "preview": "vite preview"
   },

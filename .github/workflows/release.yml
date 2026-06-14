@@ -9,6 +9,9 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build on Windows
@@ -35,7 +38,7 @@ jobs:
 
       - name: Build server (Windows)
         working-directory: packages/server
-        run: npm run build:win -- -p always
+        run: npm run build:win:ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           USE_HARD_LINKS: false
@@ -46,7 +49,7 @@ jobs:
 
       - name: Build agent (Windows)
         working-directory: packages/agent
-        run: npm run build:win -- -p always
+        run: npm run build:win:ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -92,7 +95,7 @@ jobs:
 
       - name: Build server (Linux)
         working-directory: packages/server
-        run: npm run build:linux -- -p always
+        run: npm run build:linux:ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -102,7 +105,7 @@ jobs:
 
       - name: Build agent (Linux)
         working-directory: packages/agent
-        run: npm run build:linux -- -p always
+        run: npm run build:linux:ci
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
