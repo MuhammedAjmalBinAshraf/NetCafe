@@ -72,6 +72,9 @@
         }
       ]
     },
+    "nsis": {
+      "include": "installer.nsh"
+    },
     "linux": {
       "target": [
         "AppImage",
