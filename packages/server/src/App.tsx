@@ -3,7 +3,7 @@ import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Eye,
-  UserCircle2
+  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -85,6 +85,9 @@ export default function App() {
   const [globalMessage, setGlobalMessage] = useState('')
   const [isGlobalMessageOpen, setIsGlobalMessageOpen] = useState(false)
 
+  // Auto-updater state
+  const [updateStatus, setUpdateStatus] = useState<{ status: string; info?: any; progress?: any; message?: string } | null>(null)
+
   // User Management states
   const [users, setUsers] = useState<User[]>([])
   const [isUserModalOpen, setIsUserModalOpen] = useState(false)
@@ -132,7 +135,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       window.ipcRenderer.invoke('get-settings').then(setSettings)
       window.ipcRenderer.invoke('get-users').then(setUsers)
-      
+
       // Listen for machines update broadcasts
       window.ipcRenderer.on('machines-updated', (_, data) => {
         setMachines(data)
@@ -141,6 +144,11 @@ export default function App() {
           const updated = data.find((m: any) => m.id === selectedDrawerMachine.id)
           if (updated) setSelectedDrawerMachine(updated)
         }
+      })
+
+      // Listen for auto-updater status events
+      window.ipcRenderer.on('update-status', (_, payload) => {
+        setUpdateStatus(payload)
       })
     }
   }, [selectedDrawerMachine])
@@ -667,6 +675,34 @@ export default function App() {
 
         {/* Global Controls & Tabs */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Update status badge */}
+          {updateStatus && updateStatus.status === 'available' && (
+            <button
+              onClick={() => window.ipcRenderer?.invoke('download-update')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold transition-colors animate-pulse"
+            >
+              <ArrowDownToLine size={13} /> Update Available — Download
+            </button>
+          )}
+          {updateStatus && updateStatus.status === 'downloading' && (
+            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-900/60 text-blue-300 rounded text-xs font-semibold border border-blue-800/40">
+              <Loader2 size={13} className="animate-spin" />
+              Downloading {Math.round(updateStatus.progress?.percent ?? 0)}%
+            </span>
+          )}
+          {updateStatus && updateStatus.status === 'downloaded' && (
+            <button
+              onClick={() => window.ipcRenderer?.invoke('quit-and-install')}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold transition-colors"
+            >
+              <CheckCircle size={13} /> Restart to Install Update
+            </button>
+          )}
+          {updateStatus && updateStatus.status === 'error' && (
+            <span className="flex items-center gap-1.5 px-3 py-1.5 bg-red-950/60 text-red-400 rounded text-xs font-semibold border border-red-900/30" title={updateStatus.message}>
+              <AlertTriangle size={13} /> Update Error
+            </span>
+          )}
           <button
             onClick={() => setIsGlobalMessageOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded text-xs font-semibold transition-colors"
@@ -751,9 +787,31 @@ export default function App() {
             </button>
           </div>
 
-          <div className="p-4 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50">
-            <div>NetCafe Server v1.0.0</div>
-            <div>Database: Connected</div>
+          <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.13</div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              <span>Database: Connected</span>
+            </div>
+            {updateStatus?.status === 'not-available' && (
+              <div className="flex items-center gap-1.5 text-emerald-600">
+                <CheckCircle size={11} /> Up to date
+              </div>
+            )}
+            {updateStatus?.status === 'checking' && (
+              <div className="flex items-center gap-1.5 text-slate-400">
+                <Loader2 size={11} className="animate-spin" /> Checking...
+              </div>
+            )}
+            <button
+              onClick={() => {
+                setUpdateStatus({ status: 'checking' })
+                window.ipcRenderer?.invoke('check-for-updates')
+              }}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold transition-colors"
+            >
+              <RefreshCcw size={11} /> Check for Updates
+            </button>
           </div>
         </nav>
 
@@ -1567,6 +1625,7 @@ export default function App() {
                 <input
                   type="text"
                   required
+                  autoFocus
                   placeholder="e.g. 1 Hour Special"
                   value={planName}
                   onChange={(e) => setPlanName(e.target.value)}

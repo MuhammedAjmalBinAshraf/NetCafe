@@ -78,6 +78,7 @@ jobs:
   build-linux:
     name: Build on Linux
     runs-on: ubuntu-latest
+    if: false
 
     steps:
       - name: Checkout
@@ -128,7 +129,7 @@ jobs:
 
   release:
     name: Create GitHub Release
-    needs: [build-windows, build-linux]
+    needs: [build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -139,12 +140,6 @@ jobs:
         with:
           name: windows-builds
           path: builds/win
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: linux-builds
-          path: builds/linux
 
       - name: Rename and collect release files
         run: |
@@ -157,20 +152,6 @@ jobs:
           # Agent Windows
           AGENT_EXE=$(find builds/win -name "*.exe" | grep -i "agent" | head -1)
           if [ -n "$AGENT_EXE" ]; then cp "$AGENT_EXE" final-release/NetCafe-Agent-Setup.exe; fi
-
-          # Server Linux
-          SERVER_DEB=$(find builds/linux -name "*.deb" | grep -i "server" | head -1)
-          if [ -n "$SERVER_DEB" ]; then cp "$SERVER_DEB" final-release/NetCafe-Server.deb; fi
-
-          SERVER_IMG=$(find builds/linux -name "*.AppImage" | grep -i "server" | head -1)
-          if [ -n "$SERVER_IMG" ]; then cp "$SERVER_IMG" final-release/NetCafe-Server.AppImage; fi
-
-          # Agent Linux
-          AGENT_DEB=$(find builds/linux -name "*.deb" | grep -i "agent" | head -1)
-          if [ -n "$AGENT_DEB" ]; then cp "$AGENT_DEB" final-release/NetCafe-Agent.deb; fi
-
-          AGENT_IMG=$(find builds/linux -name "*.AppImage" | grep -i "agent" | head -1)
-          if [ -n "$AGENT_IMG" ]; then cp "$AGENT_IMG" final-release/NetCafe-Agent.AppImage; fi
 
           echo "=== Files ready for release ==="
           ls -lh final-release/

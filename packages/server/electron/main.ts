@@ -220,6 +220,14 @@ function createWindow() {
     }
   })
 
+  // Register F12 toggle DevTools shortcut
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12' && input.type === 'keyDown') {
+      mainWindow?.webContents.toggleDevTools()
+      event.preventDefault()
+    }
+  })
+
   if (process.env.VITE_DEV_SERVER_URL) {
     mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL)
   } else {
@@ -271,7 +279,12 @@ app.whenReady().then(async () => {
   autoUpdater.autoDownload = false;
   autoUpdater.checkForUpdates().catch(err => console.error("Update check failed:", err));
 
+  autoUpdater.on('checking-for-update', () => {
+    mainWindow?.webContents.send('update-status', { status: 'checking' });
+  });
+
   autoUpdater.on('update-available', async (info) => {
+    mainWindow?.webContents.send('update-status', { status: 'available', info });
     const { response } = await dialog.showMessageBox({
       type: 'info',
       buttons: ['Yes, download and install', 'Later'],
@@ -283,7 +296,20 @@ app.whenReady().then(async () => {
     }
   });
 
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-not-available', (info) => {
+    mainWindow?.webContents.send('update-status', { status: 'not-available', info });
+  });
+
+  autoUpdater.on('error', (err) => {
+    mainWindow?.webContents.send('update-status', { status: 'error', message: err.message });
+  });
+
+  autoUpdater.on('download-progress', (progressObj) => {
+    mainWindow?.webContents.send('update-status', { status: 'downloading', progress: progressObj });
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    mainWindow?.webContents.send('update-status', { status: 'downloaded', info });
     dialog.showMessageBox({
       title: 'Install Update',
       message: 'Update downloaded. The application will restart to install it.'
@@ -669,3 +695,19 @@ ipcMain.handle('delete-machine', (_, id: number) => {
   }
 })
 
+// ─── Auto Updater IPC ──────────────────────────────────────────────────────────
+ipcMain.handle('check-for-updates', () => {
+  autoUpdater.checkForUpdates().catch(err => {
+    mainWindow?.webContents.send('update-status', { status: 'error', message: err.message })
+  })
+})
+
+ipcMain.handle('download-update', () => {
+  autoUpdater.downloadUpdate().catch(err => {
+    mainWindow?.webContents.send('update-status', { status: 'error', message: err.message })
+  })
+})
+
+ipcMain.handle('quit-and-install', () => {
+  autoUpdater.quitAndInstall()
+})
