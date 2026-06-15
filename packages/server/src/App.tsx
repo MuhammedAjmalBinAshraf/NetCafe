@@ -44,7 +44,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null)
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'reports' | 'settings' | 'users'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
@@ -96,17 +96,26 @@ export default function App() {
   const [sessionAppLogs, setSessionAppLogs] = useState<any[]>([])
   const [isAppLogModalOpen, setIsAppLogModalOpen] = useState(false)
   const [isLoadingAppLogs, setIsLoadingAppLogs] = useState(false)
+  const [appLogTab, setAppLogTab] = useState<'apps' | 'processes'>('apps')
+  const [sessionProcessEvents, setSessionProcessEvents] = useState<any[]>([])
 
   const handleViewAppLog = async (sess: any) => {
     setSelectedSessionForLog(sess)
     setIsAppLogModalOpen(true)
     setIsLoadingAppLogs(true)
+    setAppLogTab('apps')
+    setSessionProcessEvents([])
     if (window.ipcRenderer) {
       try {
-        const logs = await window.ipcRenderer.invoke('get-session-app-logs', sess.id)
+        const [logs, events] = await Promise.all([
+          window.ipcRenderer.invoke('get-session-app-logs', sess.id),
+          window.ipcRenderer.invoke('get-session-process-events', sess.id)
+        ])
         setSessionAppLogs(logs)
+        setSessionProcessEvents(Array.isArray(events) ? events : [])
       } catch (err) {
         setSessionAppLogs([])
+        setSessionProcessEvents([])
       } finally {
         setIsLoadingAppLogs(false)
       }
@@ -295,6 +304,8 @@ export default function App() {
         window.ipcRenderer.invoke('get-plans').then(setPlans)
       } else if (activeTab === 'blocking') {
         window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
+      } else if (activeTab === 'safety') {
+        window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
       } else if (activeTab === 'reports' || activeTab === 'sessions') {
         window.ipcRenderer.invoke('get-reports-summary').then(setReportsData)
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
@@ -1133,6 +1144,20 @@ export default function App() {
               <ShieldX size={18} /> Website & Apps
             </button>
             <button
+              id="nav-safety"
+              onClick={() => { setActiveTab('safety'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'safety' ? 'bg-red-700 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <ShieldAlert size={18} /> AI Safety
+              {safetyAlerts.length > 0 && (
+                <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  {safetyAlerts.length > 99 ? '99+' : safetyAlerts.length}
+                </span>
+              )}
+            </button>
+            <button
               onClick={() => { setActiveTab('reports'); setSelectedDrawerMachine(null) }}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                 activeTab === 'reports' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
@@ -1748,6 +1773,86 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: AI Safety */}
+          {activeTab === 'safety' && (
+            <div className="space-y-6">
+              <div className="flex justify-between items-center pb-4 border-b border-slate-900">
+                <h2 className="text-xl font-bold flex items-center gap-2">
+                  <ShieldAlert size={20} className="text-red-400" /> AI Safety Guard
+                </h2>
+                <div className="flex items-center gap-3">
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${
+                    settings.ai_safety_enabled === 'true' ? 'bg-emerald-900 text-emerald-300' : 'bg-slate-800 text-slate-500'
+                  }`}>
+                    {settings.ai_safety_enabled === 'true' ? '● ACTIVE' : '○ INACTIVE'}
+                  </span>
+                  <button
+                    onClick={() => handleUpdateSetting('ai_safety_enabled', settings.ai_safety_enabled === 'true' ? 'false' : 'true')}
+                    className={`px-3 py-1.5 rounded text-xs font-bold transition-all ${
+                      settings.ai_safety_enabled === 'true'
+                        ? 'bg-red-700 hover:bg-red-600 text-white'
+                        : 'bg-emerald-700 hover:bg-emerald-600 text-white'
+                    }`}
+                  >
+                    {settings.ai_safety_enabled === 'true' ? 'Disable Filter' : 'Enable Filter'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
+                <div className="flex justify-between items-center p-4 border-b border-slate-900 bg-slate-950/30">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <AlertTriangle size={15} className="text-amber-400" /> Real-Time Violation Log
+                  </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-500">{safetyAlerts.length} total</span>
+                    {safetyAlerts.length > 0 && (
+                      <button
+                        onClick={handleClearSafetyAlerts}
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 border border-slate-700 hover:border-red-800 rounded text-xs font-semibold transition-all"
+                      >Clear All</button>
+                    )}
+                  </div>
+                </div>
+                {safetyAlerts.length === 0 ? (
+                  <div className="py-16 flex flex-col items-center justify-center text-slate-600">
+                    <ShieldAlert size={40} className="mb-3 text-slate-800" />
+                    <div className="text-sm font-semibold text-slate-500">No violations logged</div>
+                    <div className="text-xs mt-1.5 text-slate-600">Alerts appear instantly when a client searches prohibited content.</div>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
+                          <th className="p-4">Terminal</th>
+                          <th className="p-4">Search Query</th>
+                          <th className="p-4">Reason</th>
+                          <th className="p-4">Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-900">
+                        {safetyAlerts.map((alert: any) => (
+                          <tr key={alert.id} className="hover:bg-red-950/20 transition-colors">
+                            <td className="p-4 font-semibold text-white">{alert.machine_name || `PC-${alert.machine_id}`}</td>
+                            <td className="p-4 font-mono text-red-300 text-xs">{alert.query}</td>
+                            <td className="p-4 text-slate-300 text-xs">{alert.reason}</td>
+                            <td className="p-4 font-mono text-xs text-slate-400">{new Date(alert.timestamp).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-xs text-slate-500 bg-slate-900/30 border border-slate-900 rounded-lg p-3">
+                Configure Gemini API key, filter categories, and custom blocked terms in
+                <button onClick={() => setActiveTab('settings')} className="text-blue-400 hover:underline ml-1">⚙️ Settings → AI Safety Filter</button>.
               </div>
             </div>
           )}
@@ -2733,57 +2838,105 @@ export default function App() {
                 </div>
               </div>
 
-              {isLoadingAppLogs ? (
-                <div className="py-12 flex flex-col items-center justify-center space-y-3">
-                  <Loader2 className="animate-spin text-blue-500" size={32} />
-                  <span className="text-xs text-slate-400">Retrieving application history from database...</span>
-                </div>
-              ) : sessionAppLogs.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 text-sm">
-                  No application usage records found for this session.
-                  <p className="text-xs text-slate-500 mt-1">Logs are automatically captured every 10 seconds via terminal active window heartbeats.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Application Usage Timeline</div>
-                  <div className="space-y-2.5">
-                    {sessionAppLogs.map((log) => {
-                      const hours = Math.floor(log.duration_seconds / 3600);
-                      const minutes = Math.floor((log.duration_seconds % 3600) / 60);
-                      const seconds = log.duration_seconds % 60;
-                      const durationStr = [
-                        hours > 0 ? `${hours}h` : null,
-                        minutes > 0 ? `${minutes}m` : null,
-                        seconds > 0 || (hours === 0 && minutes === 0) ? `${seconds}s` : null
-                      ].filter(Boolean).join(' ');
+              {/* Modal Tab Switcher */}
+              <div className="flex gap-1 bg-slate-950/60 rounded-lg p-1">
+                <button
+                  onClick={() => setAppLogTab('apps')}
+                  className={`flex-1 py-1.5 rounded text-xs font-bold transition-all ${
+                    appLogTab === 'apps' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Activity size={12} className="inline mr-1" />App Usage
+                </button>
+                <button
+                  onClick={() => setAppLogTab('processes')}
+                  className={`flex-1 py-1.5 rounded text-xs font-bold transition-all ${
+                    appLogTab === 'processes' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  ⚙ Process Events ({sessionProcessEvents.length})
+                </button>
+              </div>
 
-                      const totalDuration = sessionAppLogs.reduce((acc, curr) => acc + curr.duration_seconds, 0);
-                      const percent = Math.round((log.duration_seconds / (totalDuration || 1)) * 100);
-
-                      return (
-                        <div key={log.id} className="p-3 bg-slate-950/20 border border-slate-800/60 rounded-lg hover:border-slate-800 transition-colors flex flex-col gap-2">
-                          <div className="flex justify-between items-start gap-4">
-                            <div className="font-mono text-xs text-white truncate max-w-[75%]" title={log.app_title}>
-                              {log.app_title}
-                            </div>
-                            <div className="text-right text-xs">
-                              <span className="text-blue-400 font-semibold">{durationStr}</span>
-                              <span className="text-slate-500 text-[10px] block font-mono">focused {log.focus_count} times</span>
-                            </div>
-                          </div>
-                          <div className="w-full flex items-center gap-2">
-                            <div className="flex-1 h-1.5 bg-slate-950 rounded overflow-hidden">
-                              <div 
-                                className="h-full bg-blue-500 rounded transition-all"
-                                style={{ width: `${percent}%` }}
-                              />
-                            </div>
-                            <span className="text-[10px] font-mono text-slate-450 w-7 text-right">{percent}%</span>
-                          </div>
-                        </div>
-                      )
-                    })}
+              {appLogTab === 'apps' && (
+                isLoadingAppLogs ? (
+                  <div className="py-12 flex flex-col items-center justify-center space-y-3">
+                    <Loader2 className="animate-spin text-blue-500" size={32} />
+                    <span className="text-xs text-slate-400">Retrieving application history from database...</span>
                   </div>
+                ) : sessionAppLogs.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 text-sm">
+                    No application usage records found for this session.
+                    <p className="text-xs text-slate-500 mt-1">Logs are automatically captured every 10 seconds via terminal active window heartbeats.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Application Usage Timeline</div>
+                    <div className="space-y-2.5">
+                      {sessionAppLogs.map((log) => {
+                        const hours = Math.floor(log.duration_seconds / 3600);
+                        const minutes = Math.floor((log.duration_seconds % 3600) / 60);
+                        const seconds = log.duration_seconds % 60;
+                        const durationStr = [
+                          hours > 0 ? `${hours}h` : null,
+                          minutes > 0 ? `${minutes}m` : null,
+                          seconds > 0 || (hours === 0 && minutes === 0) ? `${seconds}s` : null
+                        ].filter(Boolean).join(' ');
+
+                        const totalDuration = sessionAppLogs.reduce((acc, curr) => acc + curr.duration_seconds, 0);
+                        const percent = Math.round((log.duration_seconds / (totalDuration || 1)) * 100);
+
+                        return (
+                          <div key={log.id} className="p-3 bg-slate-950/20 border border-slate-800/60 rounded-lg hover:border-slate-800 transition-colors flex flex-col gap-2">
+                            <div className="flex justify-between items-start gap-4">
+                              <div className="font-mono text-xs text-white truncate max-w-[75%]" title={log.app_title}>
+                                {log.app_title}
+                              </div>
+                              <div className="text-right text-xs">
+                                <span className="text-blue-400 font-semibold">{durationStr}</span>
+                                <span className="text-slate-500 text-[10px] block font-mono">focused {log.focus_count} times</span>
+                              </div>
+                            </div>
+                            <div className="w-full flex items-center gap-2">
+                              <div className="flex-1 h-1.5 bg-slate-950 rounded overflow-hidden">
+                                <div 
+                                  className="h-full bg-blue-500 rounded transition-all"
+                                  style={{ width: `${percent}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] font-mono text-slate-450 w-7 text-right">{percent}%</span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              )}
+
+              {appLogTab === 'processes' && (
+                <div className="space-y-1.5 max-h-[420px] overflow-y-auto">
+                  {sessionProcessEvents.length === 0 ? (
+                    <div className="py-10 text-center text-slate-500 text-sm">No process events recorded for this session.</div>
+                  ) : (
+                    sessionProcessEvents.map((evt: any) => (
+                      <div key={evt.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg border text-xs ${
+                        evt.event_type === 'started'
+                          ? 'bg-emerald-950/30 border-emerald-900/40'
+                          : 'bg-red-950/30 border-red-900/40'
+                      }`}>
+                        <span className={`font-bold w-14 shrink-0 ${
+                          evt.event_type === 'started' ? 'text-emerald-400' : 'text-red-400'
+                        }`}>
+                          {evt.event_type === 'started' ? '▶ START' : '■ STOP'}
+                        </span>
+                        <span className="font-mono flex-1 truncate text-slate-200">{evt.process_name}</span>
+                        <span className="text-slate-500 font-mono shrink-0">
+                          {new Date(evt.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
             </div>
@@ -2791,7 +2944,7 @@ export default function App() {
             <div className="p-4 border-t border-slate-800 flex justify-end bg-slate-950/25">
               <button
                 type="button"
-                onClick={() => { setIsAppLogModalOpen(false); setSelectedSessionForLog(null); setSessionAppLogs([]); }}
+                onClick={() => { setIsAppLogModalOpen(false); setSelectedSessionForLog(null); setSessionAppLogs([]); setSessionProcessEvents([]); }}
                 className="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-all"
               >
                 Close Report

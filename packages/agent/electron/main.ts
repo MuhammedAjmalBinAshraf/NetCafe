@@ -960,9 +960,17 @@ async function handleServerMessage(msg: any) {
       updateMirrorSettings(highRes);
     } else if (msg.command === 'block-inputs') {
       const block = !!msg.payload?.block;
-      if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
-        psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
-        logToUI(`Hardware inputs block state set to: ${block}`);
+      if (process.platform === 'win32') {
+        // Primary: persistent PS process
+        if (psProcess && psProcess.stdin && !psProcess.killed) {
+          psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
+        }
+        // Secondary: direct spawn to guarantee effect (BlockInput needs calling thread to have input)
+        const cmd = block
+          ? `powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($true)"`
+          : `powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`;
+        exec(cmd, () => {});
+        logToUI(`Hardware inputs ${block ? 'BLOCKED' : 'UNBLOCKED'}`);
       }
     } else if (msg.command === 'update-operator-password') {
       // Server pushed a new operator password — persist it and update in-memory state
@@ -1135,6 +1143,31 @@ function getActiveWindowTitle(): Promise<string> {
   });
 }
 
+let lastProcessSet: Set<string> = new Set();
+let processListInitialized = false;
+
+async function getProcessChanges(): Promise<{ started: string[]; closed: string[] }> {
+  return new Promise((resolve) => {
+    exec('tasklist /FO CSV /NH 2>nul', (err, stdout) => {
+      if (err) return resolve({ started: [], closed: [] });
+      const current = new Set<string>();
+      for (const line of stdout.split('\n')) {
+        const m = line.trim().match(/^"([^"]+)"/);
+        if (m) current.add(m[1].toLowerCase());
+      }
+      if (!processListInitialized) {
+        lastProcessSet = current;
+        processListInitialized = true;
+        return resolve({ started: [], closed: [] });
+      }
+      const started = [...current].filter(p => !lastProcessSet.has(p));
+      const closed = [...lastProcessSet].filter(p => !current.has(p));
+      lastProcessSet = current;
+      resolve({ started, closed });
+    });
+  });
+}
+
 async function captureScreen(): Promise<string> {
   const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1280, height: 720 } });
   if (sources.length > 0) {
@@ -1237,10 +1270,10 @@ function removeBandwidthLimit(): Promise<void> {
 }
 
 let mirrorInterval: NodeJS.Timeout | null = null;
-let mirrorWidth = 400;
-let mirrorHeight = 225;
-let mirrorQuality = 40;
-let mirrorIntervalMs = 1500;
+let mirrorWidth = 1280;
+let mirrorHeight = 720;
+let mirrorQuality = 75;
+let mirrorIntervalMs = 800;
 
 function startScreenMirroring() {
   if (mirrorInterval) return;
@@ -1270,10 +1303,10 @@ function stopScreenMirroring() {
 }
 
 function updateMirrorSettings(highRes: boolean) {
-  const newWidth = highRes ? 1024 : 400;
-  const newHeight = highRes ? 576 : 225;
-  const newQuality = highRes ? 70 : 40;
-  const newInterval = highRes ? 1000 : 1500;
+  const newWidth = highRes ? 1920 : 1280;
+  const newHeight = highRes ? 1080 : 720;
+  const newQuality = highRes ? 88 : 75;
+  const newInterval = highRes ? 500 : 800;
 
   if (newWidth !== mirrorWidth || newHeight !== mirrorHeight || newQuality !== mirrorQuality || newInterval !== mirrorIntervalMs) {
     mirrorWidth = newWidth;
@@ -1335,6 +1368,10 @@ function connectToServer() {
     // Safety unblock of hardware inputs on connection loss
     if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
       psProcess.stdin.write("Set-BlockInput $false\n");
+    }
+    // Extra safety unblock via direct spawn
+    if (process.platform === 'win32') {
+      exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
     }
     
     // Enforce lock immediately upon server disconnection
@@ -1705,6 +1742,7 @@ app.whenReady().then(() => {
         resolution = primaryDisplay.size;
       } catch (err) {}
 
+      const processChanges = await getProcessChanges();
       sendToServer({
         type: 'metrics',
         payload: {
@@ -1714,7 +1752,10 @@ app.whenReady().then(() => {
           os: `${os.type()} ${os.release()}`,
           uptime: os.uptime(),
           ip: getIPAddress(),
-          resolution
+          resolution,
+          timestamp: new Date().toISOString(),
+          processesStarted: processChanges.started,
+          processesClosed: processChanges.closed
         }
       });
     }

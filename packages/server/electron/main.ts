@@ -89,6 +89,19 @@ function setupDatabase() {
     );
   `)
 
+  // Session process events table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_process_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER,
+      machine_id INTEGER,
+      event_type TEXT,
+      process_name TEXT,
+      timestamp TEXT,
+      FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+    );
+  `)
+
   // Safety alerts table
   db.exec(`
     CREATE TABLE IF NOT EXISTS safety_alerts (
@@ -261,6 +274,22 @@ function handleClientMessage(socket: net.Socket, data: any) {
             `).run(sessionId, appTitle)
           }
           lastActiveAppMap.set(Number(machineId), appTitle)
+
+          // Log process start/stop events
+          const IGNORED = new Set(['conhost.exe','svchost.exe','csrss.exe','smss.exe','lsass.exe','services.exe','winlogon.exe','wininit.exe','system idle process','system','registry','tasklist.exe','cmd.exe','wmic.exe','wmiprvse.exe'])
+          const evtTs = data.payload.timestamp || new Date().toISOString()
+          for (const proc of (data.payload.processesStarted || []) as string[]) {
+            if (!IGNORED.has(proc.toLowerCase())) {
+              db.prepare(`INSERT INTO session_process_events (session_id, machine_id, event_type, process_name, timestamp) VALUES (?,?,?,?,?)`)
+                .run(sessionId, Number(machineId), 'started', proc, evtTs)
+            }
+          }
+          for (const proc of (data.payload.processesClosed || []) as string[]) {
+            if (!IGNORED.has(proc.toLowerCase())) {
+              db.prepare(`INSERT INTO session_process_events (session_id, machine_id, event_type, process_name, timestamp) VALUES (?,?,?,?,?)`)
+                .run(sessionId, Number(machineId), 'closed', proc, evtTs)
+            }
+          }
         }
       } catch (err) {
         console.error('Failed to log session app usage:', err)
@@ -1252,4 +1281,9 @@ ipcMain.handle('toggle-hardware-lock', (_, machineId, block: boolean) => {
 ipcMain.handle('get-session-app-logs', (_, sessionId) => {
   if (!db) return []
   return db.prepare("SELECT * FROM session_app_logs WHERE session_id = ? ORDER BY duration_seconds DESC").all(sessionId)
+})
+
+ipcMain.handle('get-session-process-events', (_, sessionId) => {
+  if (!db) return []
+  return db.prepare('SELECT * FROM session_process_events WHERE session_id = ? ORDER BY id DESC LIMIT 500').all(sessionId)
 })
