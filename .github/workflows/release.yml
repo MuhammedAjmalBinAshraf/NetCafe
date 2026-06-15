@@ -41,24 +41,23 @@ jobs:
             electron-${{ runner.os }}-
 
       # ELECTRON_SKIP_BINARY_DOWNLOAD=1 prevents both workspaces from racing
-      # to download the same Electron zip simultaneously (EBUSY file-lock crash).
-      - name: Install root workspace deps (skip parallel Electron download)
+      # to copy the same Electron zip simultaneously (EBUSY file-lock crash).
+      - name: Install all deps (skip parallel Electron download)
         run: npm install
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
-      # Download the Electron binary ONCE into the shared cache, sequentially.
-      - name: Download Electron binary (server)
-        working-directory: packages/server
+      # Download the Electron binary ONCE, sequentially, into the shared cache.
+      - name: Download Electron binary (sequential, no race)
         run: node node_modules/electron/install.js
+        working-directory: packages/server
         env:
           ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
 
-      # Rebuild better-sqlite3 native module against Electron's Node.js ABI.
-      # Without this the app crashes on start with a NODE_MODULE_VERSION mismatch.
-      - name: Rebuild better-sqlite3 for Electron
-        working-directory: packages/server
-        run: node_modules/.bin/electron-rebuild -f -w better-sqlite3
+      # @electron/rebuild is in the ROOT package.json devDependencies, so its
+      # binary lives in the ROOT node_modules/.bin/ — run from workspace root.
+      - name: Rebuild better-sqlite3 for Electron ABI
+        run: node_modules/.bin/electron-rebuild -f -w better-sqlite3 --module-dir packages/server
         env:
           ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
 

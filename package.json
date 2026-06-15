@@ -10,5 +10,8 @@
     "build:agent:linux": "npm run build:linux --workspace=packages/agent",
     "build:all:win": "npm run build:win --workspace=packages/server && npm run build:win --workspace=packages/agent",
     "build:all:linux": "npm run build:linux --workspace=packages/server && npm run build:linux --workspace=packages/agent"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.6.0"
   }
 }
