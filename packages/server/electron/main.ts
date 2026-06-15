@@ -7,6 +7,7 @@ import fs from 'fs'
 import Database from 'better-sqlite3'
 import os from 'os'
 import dgram from 'dgram'
+import { exec } from 'child_process'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -224,7 +225,31 @@ tcpServer.on('connection', (socket) => {
     try { socket.destroy() } catch {} 
   })
 })
-tcpServer.listen(9000, '0.0.0.0', () => { logToUI('TCP server listening on port 9000') })
+function setupWindowsFirewall() {
+  if (process.platform !== 'win32') return
+  
+  logToUI('Checking Windows Firewall rules for NetCafe Server...')
+  // Check if rule exists
+  exec('netsh advfirewall firewall show rule name="NetCafe Server TCP"', (err, stdout) => {
+    if (err || !stdout.includes('NetCafe Server TCP')) {
+      logToUI('Firewall rule "NetCafe Server TCP" not found. Attempting to add...')
+      exec('netsh advfirewall firewall add rule name="NetCafe Server TCP" dir=in action=allow protocol=TCP localport=9000', (addErr) => {
+        if (addErr) {
+          logToUI(`Warning: Failed to add firewall rule: ${addErr.message}. Ensure the Server is run as Administrator, or open port 9000 TCP manually in Windows Firewall.`)
+        } else {
+          logToUI('Successfully added Windows Firewall rule for TCP port 9000.')
+        }
+      })
+    } else {
+      logToUI('Windows Firewall rule for TCP port 9000 already exists.')
+    }
+  })
+}
+
+tcpServer.listen(9000, '0.0.0.0', () => { 
+  logToUI('TCP server listening on port 9000') 
+  setupWindowsFirewall()
+})
 
 function getMachinesData() {
   if (!db) return []

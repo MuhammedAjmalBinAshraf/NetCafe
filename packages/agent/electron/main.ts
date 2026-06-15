@@ -1239,8 +1239,16 @@ function connectToServer() {
     setTimeout(connectToServer, 5000);
   });
 
-  socket.on('error', (err) => {
-    logToUI(`TCP connection error: ${err.message}`);
+  socket.on('error', (err: any) => {
+    let explanation = '';
+    if (err.code === 'ETIMEDOUT') {
+      explanation = ' (Connection timed out. Check Windows Firewall on the Server PC and verify port 9000 TCP is allowed/open.)';
+    } else if (err.code === 'ECONNREFUSED') {
+      explanation = ' (Connection refused. Check if NetCafe Server is actually running on the target PC.)';
+    } else if (err.code === 'EHOSTUNREACH') {
+      explanation = ' (Host unreachable. Verify both computers are connected to the same LAN / network.)';
+    }
+    logToUI(`TCP connection error: ${err.message}${explanation}`);
     console.error('TCP error:', err.message);
     // close event will handle reconnect
   });
