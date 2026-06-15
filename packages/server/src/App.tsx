@@ -4,7 +4,7 @@ import {
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
-  Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload
+  Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -185,6 +185,10 @@ export default function App() {
   const [secNewOpPassword, setSecNewOpPassword] = useState('')
   const [secOpPasswordMsg, setSecOpPasswordMsg] = useState('')
 
+  // Mobile remote control states
+  const [serverIp, setServerIp] = useState('127.0.0.1')
+  const [isQrModalOpen, setIsQrModalOpen] = useState(false)
+
   // IPC listener registration guard
   const ipcBound = useRef(false)
 
@@ -225,6 +229,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
       window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
+      window.ipcRenderer.invoke('get-server-ip').then((ip: string) => setServerIp(ip || '127.0.0.1')).catch(() => {})
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -283,6 +288,27 @@ export default function App() {
         window.ipcRenderer?.off('filter-log', filterLogListener)
         ipcBound.current = false
       }
+    }
+  }, [])
+
+  // Poll data periodically if running inside browser bridge mode (non-Electron environment)
+  useEffect(() => {
+    if (window.ipcRenderer && (window.ipcRenderer as any).isBrowserBridge) {
+      const interval = setInterval(() => {
+        window.ipcRenderer.invoke('get-machines')
+          .then((data) => {
+            setMachines(data)
+            setSelectedDrawerMachine((prev: any) => {
+              if (!prev) return prev
+              const updated = data.find((m: any) => m.id === prev.id)
+              return updated || prev
+            })
+          })
+          .catch(() => {})
+        window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs).catch(() => {})
+        window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts).catch(() => {})
+      }, 3000)
+      return () => clearInterval(interval)
     }
   }, [])
 
@@ -987,6 +1013,16 @@ export default function App() {
     const m = Math.floor((secs % 3600) / 60)
     const s = secs % 60
     return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
+  }
+
+  const formatTimestamp = (ts: string) => {
+    if (!ts) return ''
+    const normalized = ts.includes(' ') && !ts.includes('T') ? ts.replace(' ', 'T') + 'Z' : ts
+    try {
+      return new Date(normalized).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    } catch {
+      return ts
+    }
   }
 
   if (!isAuthenticated) {
@@ -2165,6 +2201,37 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Mobile Remote Control */}
+                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
+                  <h3 className="text-md font-bold text-white flex items-center gap-2">
+                    <Smartphone size={18} className="text-emerald-500" /> Mobile Remote Control
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Control the cybercafe server dashboard from any phone, tablet, or secondary device connected to the same Wi-Fi/local network.
+                  </p>
+                  
+                  <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg space-y-3">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Remote Portal URL</span>
+                      <a 
+                        href={`http://${serverIp}:9001`} 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-sm font-mono text-emerald-400 hover:underline break-all"
+                      >
+                        http://{serverIp}:9001
+                      </a>
+                    </div>
+                    
+                    <button
+                      onClick={() => setIsQrModalOpen(true)}
+                      className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-550 text-white rounded text-sm font-semibold transition-all shadow-md shadow-emerald-900/10"
+                    >
+                      <QrCode size={16} /> Show QR Code
+                    </button>
+                  </div>
+                </div>
+
                 {/* DB backups */}
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
                   <h3 className="text-md font-bold text-white flex items-center gap-2">
@@ -3047,6 +3114,10 @@ export default function App() {
                               </div>
                               <span className="text-[10px] font-mono text-slate-450 w-7 text-right">{percent}%</span>
                             </div>
+                            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono mt-1 pt-1 border-t border-slate-900/40">
+                              <span>First Focused: <span className="text-slate-400">{formatTimestamp(log.first_seen)}</span></span>
+                              <span>Last Active: <span className="text-slate-400">{formatTimestamp(log.last_seen)}</span></span>
+                            </div>
                           </div>
                         )
                       })}
@@ -3089,6 +3160,58 @@ export default function App() {
                 className="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-all"
               >
                 Close Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Remote Control QR Code Modal */}
+      {isQrModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-xs overflow-hidden shadow-2xl flex flex-col">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <div className="flex items-center gap-2">
+                <Smartphone className="text-emerald-500 animate-pulse" size={18} />
+                <h3 className="text-sm font-bold text-white">Mobile Remote Control</h3>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setIsQrModalOpen(false)} 
+                className="text-slate-400 hover:text-white transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="p-5 flex flex-col items-center text-center space-y-4">
+              <div className="bg-white p-3 rounded-lg shadow-inner">
+                <img 
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`http://${serverIp}:9001`)}`}
+                  alt="QR Code"
+                  className="w-[200px] h-[200px] block"
+                />
+              </div>
+              
+              <div className="space-y-1.5 w-full">
+                <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Scan QR Code or Open URL</span>
+                <div className="bg-slate-950 border border-slate-850 px-3 py-1.5 rounded font-mono text-xs text-emerald-400 break-all select-all">
+                  http://{serverIp}:9001
+                </div>
+              </div>
+              
+              <p className="text-[11px] text-slate-450 leading-relaxed">
+                Connect your mobile phone or tablet to the same local network (Wi-Fi) to control the cybercafe from anywhere in the room.
+              </p>
+            </div>
+
+            <div className="p-3 border-t border-slate-800 flex justify-end bg-slate-950/20">
+              <button
+                type="button"
+                onClick={() => setIsQrModalOpen(false)}
+                className="w-full py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-all"
+              >
+                Done
               </button>
             </div>
           </div>

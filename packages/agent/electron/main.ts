@@ -1605,6 +1605,51 @@ function startUdpDiscovery() {
   }
 }
 
+let lastReportedWindow = '';
+let lastReportedTime = 0;
+
+async function handleActiveWindowChanged(newTitle: string) {
+  if (isLocked) return; // Ignore window changes when client PC is locked
+  if (newTitle === lastReportedWindow) return; // Deduplicate window change notifications
+  
+  // Rate-limit immediate reporting to avoid spamming the server
+  const now = Date.now();
+  if (now - lastReportedTime < 1000) return;
+  lastReportedTime = now;
+  lastReportedWindow = newTitle;
+
+  if (tcpSocket && !tcpSocket.destroyed) {
+    logToUI(`[Metrics] User activity detected active window changed to: "${newTitle}". Sending real-time update.`);
+    const cpu = await getCPUUsage();
+    const totalMemory = os.totalmem();
+    const freeMemory = os.freemem();
+    const ram = Math.round(((totalMemory - freeMemory) / totalMemory) * 100);
+
+    let resolution = { width: 1920, height: 1080 };
+    try {
+      const primaryDisplay = screen.getPrimaryDisplay();
+      resolution = primaryDisplay.size;
+    } catch (err) {}
+
+    const processChanges = await getProcessChanges();
+    sendToServer({
+      type: 'metrics',
+      payload: {
+        cpu,
+        ram,
+        activeWindow: newTitle,
+        os: `${os.type()} ${os.release()}`,
+        uptime: os.uptime(),
+        ip: getIPAddress(),
+        resolution,
+        timestamp: new Date().toISOString(),
+        processesStarted: processChanges.started,
+        processesClosed: processChanges.closed
+      }
+    });
+  }
+}
+
 let psProcess: any = null;
 
 function initPowerShell() {
@@ -1613,6 +1658,19 @@ function initPowerShell() {
     psProcess = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
+
+    psProcess.stdout.on('data', (data: Buffer) => {
+      const output = data.toString('utf8');
+      const lines = output.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('ACTIVE_WINDOW_CHANGED:')) {
+          const newTitle = trimmed.substring('ACTIVE_WINDOW_CHANGED:'.length);
+          handleActiveWindowChanged(newTitle);
+        }
+      }
+    });
+
     psProcess.stdin.write(`
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -1675,6 +1733,72 @@ function Send-Keys($keys) {
     [System.Windows.Forms.SendKeys]::SendWait($keys)
   } catch {}
 }
+
+$csharpSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+
+public class Win32 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct LASTINPUTINFO {
+        public uint cbSize;
+        public uint dwTime;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    public static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+    [DllImport("user32.dll")]
+    public static extern bool GetLastInputInfo(ref LASTINPUTINFO plii);
+
+    public static string GetActiveWindowTitle() {
+        IntPtr hwnd = GetForegroundWindow();
+        if (hwnd == IntPtr.Zero) return "Desktop";
+        StringBuilder sb = new StringBuilder(256);
+        GetWindowText(hwnd, sb, 256);
+        return sb.ToString().Trim();
+    }
+
+    public static uint GetLastInputTime() {
+        LASTINPUTINFO lii = new LASTINPUTINFO();
+        lii.cbSize = (uint)Marshal.SizeOf(lii);
+        if (GetLastInputInfo(ref lii)) {
+            return lii.dwTime;
+        }
+        return 0;
+    }
+
+    public static void StartMonitoring() {
+        Thread t = new Thread(() => {
+            string lastTitle = "";
+            uint lastInput = 0;
+            while (true) {
+                Thread.Sleep(500);
+                try {
+                    uint currentInput = GetLastInputTime();
+                    if (currentInput != lastInput) {
+                        lastInput = currentInput;
+                        string title = GetActiveWindowTitle();
+                        if (title != lastTitle && !string.IsNullOrEmpty(title)) {
+                            lastTitle = title;
+                            Console.WriteLine("ACTIVE_WINDOW_CHANGED:" + title);
+                        }
+                    }
+                } catch {}
+            }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+}
+'@
+Add-Type -TypeDefinition $csharpSource
+[Win32]::StartMonitoring()
 \n`);
     psProcess.on('exit', () => {
       psProcess = null;
@@ -1890,6 +2014,7 @@ app.whenReady().then(() => {
       const freeMemory = os.freemem();
       const ram = Math.round(((totalMemory - freeMemory) / totalMemory) * 100);
       const activeWindow = await getActiveWindowTitle();
+      lastReportedWindow = activeWindow;
 
       let resolution = { width: 1920, height: 1080 };
       try {

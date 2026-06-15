@@ -9,6 +9,7 @@ import os from 'os'
 import dgram from 'dgram'
 import { exec } from 'child_process'
 import * as XLSX from 'xlsx'
+import express from 'express'
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -22,6 +23,14 @@ if (!gotTheLock) {
     }
   })
 }
+
+// Monkeypatch ipcMain.handle to collect all registered IPC handlers for the LAN web control panel
+const ipcRegistry = new Map<string, Function>();
+const originalHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel: string, handler: Function) => {
+  ipcRegistry.set(channel, handler);
+  return originalHandle(channel, handler);
+};
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -822,6 +831,61 @@ function createWindow() {
   }
 }
 
+function startWebServer() {
+  const webApp = express();
+  
+  // CORS Middleware
+  webApp.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+    res.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(200);
+    } else {
+      next();
+    }
+  });
+
+  webApp.use(express.json({ limit: '50mb' }));
+
+  // IPC Bridge Endpoint
+  webApp.post('/api/ipc', async (req, res) => {
+    const { channel, args } = req.body;
+    const handler = ipcRegistry.get(channel);
+    if (handler) {
+      try {
+        const mockEvent = { sender: { send: () => {} } };
+        const result = await handler(mockEvent, ...args);
+        res.json(result === undefined ? null : result);
+      } catch (err: any) {
+        res.status(500).json({ error: err.message });
+      }
+    } else {
+      res.status(404).json({ error: `IPC channel ${channel} not found` });
+    }
+  });
+
+  // Serve static UI assets in production/packaged app
+  const distPath = path.join(__dirname, '../dist');
+  if (fs.existsSync(distPath)) {
+    webApp.use(express.static(distPath));
+    webApp.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  } else {
+    // Development fallback
+    webApp.get('/', (req, res) => {
+      res.send(`NetCafe Server API running. Serve UI via Vite in development.`);
+    });
+  }
+
+  const port = 9001;
+  webApp.listen(port, '0.0.0.0', () => {
+    logToUI(`Web server started on port ${port} (Available on LAN for mobile control)`);
+  });
+}
+
 function getLanIPAddress() {
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -867,8 +931,15 @@ function startUdpBroadcast() {
 
 app.whenReady().then(async () => {
   setupDatabase()
+  
+  // Register get-server-ip handler
+  ipcMain.handle('get-server-ip', () => {
+    return getLanIPAddress();
+  });
+
   createWindow()
   startUdpBroadcast()
+  startWebServer()
 
   // Auto Updater logic for Server
   autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
