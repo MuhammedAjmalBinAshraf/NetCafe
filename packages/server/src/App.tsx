@@ -71,7 +71,7 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState('')
   const [aiCustomContext, setAiCustomContext] = useState('')
   const [filterLogs, setFilterLogs] = useState<Array<{timestamp: string, level: string, message: string, machineId?: number, query?: string}>>([])
-  const filterLogEndRef = React.useRef<HTMLDivElement>(null)
+  const filterLogEndRef = useRef<HTMLDivElement>(null)
 
   // Modals & Drawers
   const [selectedMachine, setSelectedMachine] = useState<any>(null)
