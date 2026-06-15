@@ -289,6 +289,7 @@ app.whenReady().then(async () => {
   startUdpBroadcast()
 
   // Auto Updater logic for Server
+  autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
   autoUpdater.autoDownload = false;
   autoUpdater.checkForUpdates().catch(err => console.error("Update check failed:", err));
 

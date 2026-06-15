@@ -1141,6 +1141,7 @@ app.whenReady().then(() => {
   connectToServer();
 
   // Auto Updater logic for Agent
+  autoUpdater.channel = 'latest-agent';   // ← must NOT pick up latest-server.yml
   autoUpdater.autoDownload = true;
   autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err));
 
