@@ -39,6 +39,14 @@ let serverUrl = '127.0.0.1:9000';   // display string (host:port)
 let serverHost = '127.0.0.1';
 let serverPort = 9000;
 let machineId = os.hostname();
+let clientUuid = '';
+
+function generateUUID() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
 
 // ─── Address helpers ───────────────────────────────────────────────────────────
 function parseServerAddress(raw: string): { host: string; port: number } {
@@ -53,19 +61,25 @@ function loadConfig() {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
+    let data: any = {};
     if (fs.existsSync(configPath)) {
-      const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (data.serverUrl) {
-        const parsed = parseServerAddress(data.serverUrl);
-        serverHost = parsed.host;
-        serverPort = parsed.port;
-        serverUrl = `${serverHost}:${serverPort}`;
-      }
-      if (data.machineId) machineId = data.machineId;
-    } else {
-      fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
+      data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     }
-    logToUI(`Loaded config: serverUrl=tcp://${serverHost}:${serverPort}, machineId=${machineId}`);
+    if (data.serverUrl) {
+      const parsed = parseServerAddress(data.serverUrl);
+      serverHost = parsed.host;
+      serverPort = parsed.port;
+      serverUrl = `${serverHost}:${serverPort}`;
+    }
+    if (data.machineId) machineId = data.machineId;
+    if (data.clientUuid) {
+      clientUuid = data.clientUuid;
+    } else {
+      clientUuid = generateUUID();
+      data.clientUuid = clientUuid;
+      fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf8');
+    }
+    logToUI(`Loaded config: serverUrl=tcp://${serverHost}:${serverPort}, machineId=${machineId}, clientUuid=${clientUuid}`);
   } catch (e: any) {
     console.error('Failed to load/write config:', e);
     logToUI(`Failed to load/write config: ${e.message}`);
@@ -1266,7 +1280,15 @@ function connectToServer() {
   socket.connect(serverPort, serverHost, () => {
     logToUI(`Connected to server successfully!`);
     const mac = getMACAddress() || machineId;
-    sendToServer({ type: 'register', payload: { mac_address: mac, name: machineId, ip_address: getIPAddress() } });
+    sendToServer({ 
+      type: 'register', 
+      payload: { 
+        mac_address: mac, 
+        name: machineId, 
+        ip_address: getIPAddress(),
+        uuid: clientUuid
+      } 
+    });
     startScreenMirroring();
   });
 

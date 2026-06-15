@@ -65,6 +65,23 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE machines ADD COLUMN hardware_locked INTEGER DEFAULT 0;")
   } catch {}
+  try {
+    db.exec("ALTER TABLE machines ADD COLUMN uuid TEXT UNIQUE;")
+  } catch {}
+
+  // Session app logs table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS session_app_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER,
+      app_title TEXT,
+      duration_seconds INTEGER DEFAULT 0,
+      focus_count INTEGER DEFAULT 0,
+      first_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+    );
+  `)
 
   // Safety alerts table
   db.exec(`
@@ -122,14 +139,21 @@ function broadcastBlockRulesToClients() {
 function handleClientMessage(socket: net.Socket, data: any) {
   if (data.type === 'register') {
     const payload = data.payload
-    let machine = db.prepare("SELECT * FROM machines WHERE mac_address = ?").get(payload.mac_address)
+    let machine = null
+    if (payload.uuid) {
+      machine = db.prepare("SELECT * FROM machines WHERE uuid = ?").get(payload.uuid)
+    }
+    if (!machine && payload.mac_address) {
+      machine = db.prepare("SELECT * FROM machines WHERE mac_address = ?").get(payload.mac_address)
+    }
+    
     if (!machine) {
-      const stmt = db.prepare("INSERT INTO machines (name, mac_address, ip_address, status) VALUES (?, ?, ?, ?)")
-      const info = stmt.run(payload.name || 'New PC', payload.mac_address, payload.ip_address, 'available')
+      const stmt = db.prepare("INSERT INTO machines (name, mac_address, uuid, ip_address, status) VALUES (?, ?, ?, ?, ?)")
+      const info = stmt.run(payload.name || 'New PC', payload.mac_address || null, payload.uuid || null, payload.ip_address, 'available')
       machine = { id: info.lastInsertRowid }
-      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, IP=${payload.ip_address}`)
+      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${payload.ip_address}`)
     } else {
-      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ? WHERE id = ?").run(payload.name || machine.name, payload.ip_address, 'available', machine.id)
+      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, payload.ip_address, 'available', payload.uuid || null, machine.id)
       logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, IP=${payload.ip_address}`)
     }
 
@@ -172,6 +196,37 @@ function handleClientMessage(socket: net.Socket, data: any) {
         resolution: data.payload.resolution || { width: 1920, height: 1080 }
       })
       broadcastMachines()
+
+      // Log application usage to active session log
+      try {
+        const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId)
+        if (activeSession) {
+          const sessionId = activeSession.id
+          const appTitle = data.payload.activeWindow || 'Desktop'
+          
+          const existingLog = db.prepare("SELECT id FROM session_app_logs WHERE session_id = ? AND app_title = ?").get(sessionId, appTitle)
+          const lastApp = lastActiveAppMap.get(Number(machineId))
+          const isNewFocus = lastApp !== appTitle
+
+          if (existingLog) {
+            db.prepare(`
+              UPDATE session_app_logs 
+              SET duration_seconds = duration_seconds + 10,
+                  focus_count = focus_count + ?,
+                  last_seen = datetime('now')
+              WHERE id = ?
+            `).run(isNewFocus ? 1 : 0, existingLog.id)
+          } else {
+            db.prepare(`
+              INSERT INTO session_app_logs (session_id, app_title, duration_seconds, focus_count)
+              VALUES (?, ?, 10, 1)
+            `).run(sessionId, appTitle)
+          }
+          lastActiveAppMap.set(Number(machineId), appTitle)
+        }
+      } catch (err) {
+        console.error('Failed to log session app usage:', err)
+      }
 
       // AI Safety Guard: search query extraction & safety check
       try {
@@ -944,6 +999,7 @@ ipcMain.handle('execute-remote-command', (_, machineId, commandLine) => {
 })
 
 const lastCheckedQueries = new Map<number, string>()
+const lastActiveAppMap = new Map<number, string>()
 
 async function checkQuerySafety(
   machineId: number, 
@@ -1085,4 +1141,9 @@ ipcMain.handle('toggle-hardware-lock', (_, machineId, block: boolean) => {
   sendCommandToMachine(machineId, { command: 'block-inputs', payload: { block } })
   broadcastMachines()
   return { success: true }
+})
+
+ipcMain.handle('get-session-app-logs', (_, sessionId) => {
+  if (!db) return []
+  return db.prepare("SELECT * FROM session_app_logs WHERE session_id = ? ORDER BY duration_seconds DESC").all()
 })

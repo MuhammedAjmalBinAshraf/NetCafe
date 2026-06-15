@@ -4,7 +4,7 @@ import {
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
-  Maximize2, Minimize2, Terminal
+  Maximize2, Minimize2, Terminal, Activity
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -87,6 +87,28 @@ export default function App() {
   const [screenshotLoading, setScreenshotLoading] = useState(false)
   const [screenshotError, setScreenshotError] = useState('')
   const [screenFrames, setScreenFrames] = useState<Record<number, string>>({})
+
+  // Session Application Activity log states
+  const [selectedSessionForLog, setSelectedSessionForLog] = useState<any>(null)
+  const [sessionAppLogs, setSessionAppLogs] = useState<any[]>([])
+  const [isAppLogModalOpen, setIsAppLogModalOpen] = useState(false)
+  const [isLoadingAppLogs, setIsLoadingAppLogs] = useState(false)
+
+  const handleViewAppLog = async (sess: any) => {
+    setSelectedSessionForLog(sess)
+    setIsAppLogModalOpen(true)
+    setIsLoadingAppLogs(true)
+    if (window.ipcRenderer) {
+      try {
+        const logs = await window.ipcRenderer.invoke('get-session-app-logs', sess.id)
+        setSessionAppLogs(logs)
+      } catch (err) {
+        setSessionAppLogs([])
+      } finally {
+        setIsLoadingAppLogs(false)
+      }
+    }
+  }
   const [systemLogs, setSystemLogs] = useState<any[]>([])
   const [isLogsOpen, setIsLogsOpen] = useState(true)
   const logsEndRef = useRef<HTMLDivElement>(null)
@@ -1374,6 +1396,7 @@ export default function App() {
                       <th className="p-4 text-right">Discount</th>
                       <th className="p-4 text-right">Amount</th>
                       <th className="p-4">Payment</th>
+                      <th className="p-4">Activity</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-900 text-slate-200">
@@ -1388,6 +1411,14 @@ export default function App() {
                         <td className="p-4 text-right text-red-400 font-semibold">${(sess.discount || 0).toFixed(2)}</td>
                         <td className="p-4 text-right font-bold text-white">${(sess.total_amount || 0).toFixed(2)}</td>
                         <td className="p-4 text-xs font-semibold text-slate-300">{sess.payment_method || '-'}</td>
+                        <td className="p-4">
+                          <button
+                            onClick={() => handleViewAppLog(sess)}
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-750 text-slate-300 hover:text-white rounded text-xs font-semibold transition-all flex items-center gap-1.5"
+                          >
+                            <Activity size={11} className="text-blue-400" /> View Log
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -2323,6 +2354,114 @@ export default function App() {
         onClose={() => setIsReceiptModalOpen(false)}
         onConfirm={handleConfirmClose}
       />
+
+      {/* Session App Activity Log Modal */}
+      {isAppLogModalOpen && selectedSessionForLog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <div className="flex items-center gap-2">
+                <Activity className="text-blue-500 animate-pulse" size={20} />
+                <h3 className="text-md font-bold text-white">
+                  Session Application Activity Log: #{selectedSessionForLog.id}
+                </h3>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => { setIsAppLogModalOpen(false); setSelectedSessionForLog(null); setSessionAppLogs([]); }} 
+                className="text-slate-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="p-5 overflow-y-auto space-y-4 flex-1">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 bg-slate-950/40 p-3.5 rounded-lg border border-slate-850 text-xs">
+                <div>
+                  <span className="text-slate-500 block">Customer</span>
+                  <span className="text-white font-semibold">{selectedSessionForLog.customer_name}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Terminal / PC</span>
+                  <span className="text-white font-semibold">{selectedSessionForLog.machine_name || `PC-${selectedSessionForLog.machine_id}`}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Start Time</span>
+                  <span className="text-white font-mono">{selectedSessionForLog.start_time}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">End Time</span>
+                  <span className="text-white font-mono">{selectedSessionForLog.end_time || 'Active Session'}</span>
+                </div>
+              </div>
+
+              {isLoadingAppLogs ? (
+                <div className="py-12 flex flex-col items-center justify-center space-y-3">
+                  <Loader2 className="animate-spin text-blue-500" size={32} />
+                  <span className="text-xs text-slate-400">Retrieving application history from database...</span>
+                </div>
+              ) : sessionAppLogs.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 text-sm">
+                  No application usage records found for this session.
+                  <p className="text-xs text-slate-500 mt-1">Logs are automatically captured every 10 seconds via terminal active window heartbeats.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Application Usage Timeline</div>
+                  <div className="space-y-2.5">
+                    {sessionAppLogs.map((log) => {
+                      const hours = Math.floor(log.duration_seconds / 3600);
+                      const minutes = Math.floor((log.duration_seconds % 3600) / 60);
+                      const seconds = log.duration_seconds % 60;
+                      const durationStr = [
+                        hours > 0 ? `${hours}h` : null,
+                        minutes > 0 ? `${minutes}m` : null,
+                        seconds > 0 || (hours === 0 && minutes === 0) ? `${seconds}s` : null
+                      ].filter(Boolean).join(' ');
+
+                      const totalDuration = sessionAppLogs.reduce((acc, curr) => acc + curr.duration_seconds, 0);
+                      const percent = Math.round((log.duration_seconds / (totalDuration || 1)) * 100);
+
+                      return (
+                        <div key={log.id} className="p-3 bg-slate-950/20 border border-slate-800/60 rounded-lg hover:border-slate-800 transition-colors flex flex-col gap-2">
+                          <div className="flex justify-between items-start gap-4">
+                            <div className="font-mono text-xs text-white truncate max-w-[75%]" title={log.app_title}>
+                              {log.app_title}
+                            </div>
+                            <div className="text-right text-xs">
+                              <span className="text-blue-400 font-semibold">{durationStr}</span>
+                              <span className="text-slate-500 text-[10px] block font-mono">focused {log.focus_count} times</span>
+                            </div>
+                          </div>
+                          <div className="w-full flex items-center gap-2">
+                            <div className="flex-1 h-1.5 bg-slate-950 rounded overflow-hidden">
+                              <div 
+                                className="h-full bg-blue-500 rounded transition-all"
+                                style={{ width: `${percent}%` }}
+                              />
+                            </div>
+                            <span className="text-[10px] font-mono text-slate-450 w-7 text-right">{percent}%</span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-800 flex justify-end bg-slate-950/25">
+              <button
+                type="button"
+                onClick={() => { setIsAppLogModalOpen(false); setSelectedSessionForLog(null); setSessionAppLogs([]); }}
+                className="py-1.5 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-all"
+              >
+                Close Report
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* User Create/Edit Modal */}
       {isUserModalOpen && (
