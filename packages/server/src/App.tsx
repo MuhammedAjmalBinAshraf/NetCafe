@@ -2,8 +2,8 @@ import { useEffect, useState, useRef, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
-  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Eye,
-  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2
+  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
+  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -67,6 +67,7 @@ export default function App() {
   const [screenshotBase64, setScreenshotBase64] = useState<string>('')
   const [screenshotLoading, setScreenshotLoading] = useState(false)
   const [screenshotError, setScreenshotError] = useState('')
+  const [screenFrames, setScreenFrames] = useState<Record<number, string>>({})
 
   // Pricing plans CRUD states
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
@@ -140,6 +141,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       window.ipcRenderer.invoke('get-settings').then(setSettings)
       window.ipcRenderer.invoke('get-users').then(setUsers)
+      window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -157,9 +159,15 @@ export default function App() {
       }
       window.ipcRenderer.on('update-status', updateListener)
 
+      const frameListener = (_: any, payload: { machineId: number, base64: string }) => {
+        setScreenFrames((prev) => ({ ...prev, [payload.machineId]: payload.base64 }))
+      }
+      window.ipcRenderer.on('screen-frame-updated', frameListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
+        window.ipcRenderer?.off('screen-frame-updated', frameListener)
         ipcBound.current = false
       }
     }
@@ -495,6 +503,83 @@ export default function App() {
     }
   }
 
+  const handleRemoteMouseEvent = (
+    e: React.MouseEvent<HTMLImageElement>,
+    machineId: number,
+    action: 'click' | 'move' | 'double'
+  ) => {
+    if (!window.ipcRenderer) return
+    
+    if (action === 'click' && e.button === 2) {
+      e.preventDefault()
+    }
+    
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = e.clientX - rect.left
+    const y = e.clientY - rect.top
+    
+    const resolution = selectedDrawerMachine?.metrics?.resolution || { width: 1920, height: 1080 }
+    const scaleX = resolution.width / rect.width
+    const scaleY = resolution.height / rect.height
+    
+    const targetX = Math.round(x * scaleX)
+    const targetY = Math.round(y * scaleY)
+    
+    let button = 'left'
+    if (e.button === 2) {
+      button = 'right'
+    } else if (e.button === 1) {
+      button = 'middle'
+    }
+    
+    const act = action === 'double' ? 'click' : action
+    const btn = action === 'double' ? 'double' : button
+    
+    window.ipcRenderer.invoke('send-remote-input', machineId, {
+      action: act,
+      button: btn,
+      x: targetX,
+      y: targetY
+    })
+  }
+
+  const handleRemoteKeyboardEvent = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
+    if (!window.ipcRenderer) return
+    e.preventDefault()
+    e.stopPropagation()
+    
+    let key = e.key
+    if (key.length === 1) {
+      if ('+^%~{}[]()'.includes(key)) {
+        key = `{${key}}`
+      }
+    } else {
+      const specialKeys: Record<string, string> = {
+        Enter: '{ENTER}',
+        Backspace: '{BACKSPACE}',
+        Tab: '{TAB}',
+        Escape: '{ESC}',
+        Delete: '{DEL}',
+        ArrowUp: '{UP}',
+        ArrowDown: '{DOWN}',
+        ArrowLeft: '{LEFT}',
+        ArrowRight: '{RIGHT}',
+        F1: '{F1}', F2: '{F2}', F3: '{F3}', F4: '{F4}', F5: '{F5}', F6: '{F6}',
+        F7: '{F7}', F8: '{F8}', F9: '{F9}', F10: '{F10}', F11: '{F11}', F12: '{F12}',
+      }
+      if (specialKeys[key]) {
+        key = specialKeys[key]
+      } else {
+        return
+      }
+    }
+    
+    window.ipcRenderer.invoke('send-remote-input', machineId, {
+      action: 'keys',
+      value: key
+    })
+  }
+
   // Pricing plans CRUD
   const handleSavePlan = async (e: FormEvent) => {
     e.preventDefault()
@@ -804,7 +889,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.17</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.18</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
@@ -864,10 +949,11 @@ export default function App() {
                               setScreenshotBase64('')
                               setScreenshotError('')
                             }}
-                            className="text-slate-500 hover:text-blue-400 transition-colors p-0.5 rounded"
-                            title="Remote monitoring metrics"
+                            className="text-slate-400 hover:text-blue-400 hover:bg-slate-800/80 transition-all py-1 px-2 rounded flex items-center gap-1.5 text-xs bg-slate-900/60 border border-slate-800/80"
+                            title="Remote control & metrics"
                           >
-                            <Eye size={16} />
+                            <Menu size={12} />
+                            <span>Manage</span>
                           </button>
                         </div>
                         <div className="flex items-center gap-2">
@@ -876,6 +962,31 @@ export default function App() {
                           </span>
                           <div className={`w-2 h-2 rounded-full ${getStatusColor(machine.status).split(' ')[0]}`} />
                         </div>
+                      </div>
+
+                      {/* Live Screen Mirror Thumbnail */}
+                      <div className="relative w-full h-[120px] bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60 group">
+                        {machine.status !== 'offline' && screenFrames[machine.id] ? (
+                          <img 
+                            src={`data:image/jpeg;base64,${screenFrames[machine.id]}`} 
+                            alt="Live screen preview"
+                            className="w-full h-full object-cover transition-transform group-hover:scale-105"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-1 text-slate-700">
+                            <Monitor size={24} className="opacity-40" />
+                            <span className="text-[9px] font-semibold tracking-wider uppercase">
+                              {machine.status === 'offline' ? 'Offline' : 'Connecting Mirror...'}
+                            </span>
+                          </div>
+                        )}
+                        
+                        {machine.status !== 'offline' && screenFrames[machine.id] && (
+                          <div className="absolute top-2 left-2 flex items-center gap-1 bg-red-600 text-[8px] font-bold text-white px-1.5 py-0.5 rounded shadow-md">
+                            <span className="w-1 h-1 bg-white rounded-full animate-ping" />
+                            <span>LIVE</span>
+                          </div>
+                        )}
                       </div>
                       
                       {/* Body session timers */}
@@ -1480,30 +1591,50 @@ export default function App() {
                 </div>
               )}
 
-              {/* Live view / screenshot capture */}
+              {/* Interactive Live Screen & Remote Control */}
               {selectedDrawerMachine.status !== 'offline' && (
                 <div className="space-y-3 pt-2">
-                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Live screenshot view</div>
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex justify-between items-center">
+                    <span>Interactive Remote View</span>
+                    <span className="text-[10px] text-blue-400 font-mono animate-pulse">Always-On Mirror</span>
+                  </div>
                   
-                  {screenshotBase64 ? (
-                    <div className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950 shadow-inner">
+                  {screenFrames[selectedDrawerMachine.id] || screenshotBase64 ? (
+                    <div 
+                      tabIndex={0}
+                      onKeyDown={(e) => handleRemoteKeyboardEvent(e, selectedDrawerMachine.id)}
+                      className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950 shadow-inner focus:outline-none focus:ring-1 focus:ring-blue-500 relative cursor-crosshair group"
+                      title="Click to control mouse. Focus container to type."
+                    >
                       <img 
-                        src={`data:image/png;base64,${screenshotBase64}`} 
-                        alt="Client Live View" 
-                        className="w-full h-auto"
+                        src={screenFrames[selectedDrawerMachine.id] 
+                          ? `data:image/jpeg;base64,${screenFrames[selectedDrawerMachine.id]}` 
+                          : `data:image/png;base64,${screenshotBase64}`
+                        } 
+                        alt="Client Remote Mirror" 
+                        className="w-full h-auto object-contain"
+                        onMouseDown={(e) => handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'click')}
+                        onDoubleClick={(e) => handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'double')}
+                        onContextMenu={(e) => { e.preventDefault(); handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'click'); }}
                       />
+                      <div className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-[9px] text-slate-400 py-1 text-center border-t border-slate-900 opacity-90 group-focus:hidden">
+                        Click to control. Focus this window to type.
+                      </div>
+                      <div className="absolute inset-x-0 bottom-0 bg-blue-950/90 text-[9px] text-blue-300 py-1 text-center border-t border-blue-900 hidden group-focus:block">
+                        Keyboard Active — keypresses are sent to client
+                      </div>
                     </div>
                   ) : (
                     <div className="h-32 border border-dashed border-slate-800/80 rounded-lg flex flex-col justify-center items-center text-center p-4 bg-slate-950/20">
                       {screenshotLoading ? (
                         <div className="text-slate-400 text-xs flex flex-col items-center gap-2">
-                          <RefreshCw size={24} className="animate-spin text-blue-500" />
+                          <Loader2 size={24} className="animate-spin text-blue-500" />
                           <span>Requesting screenshot from agent...</span>
                         </div>
                       ) : (
                         <div className="text-xs text-slate-500 space-y-2">
                           {screenshotError && <div className="text-red-400 font-medium mb-1">{screenshotError}</div>}
-                          <div>No live screenshot loaded.</div>
+                          <div>No live screenshot loaded. Connecting to agent mirror...</div>
                         </div>
                       )}
                     </div>
@@ -1514,7 +1645,7 @@ export default function App() {
                       onClick={() => handleCaptureScreenshot(selectedDrawerMachine.id)}
                       className="w-full flex items-center justify-center gap-2 py-1.5 bg-slate-850 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded text-xs font-bold transition-all"
                     >
-                      <RefreshCw size={12} /> Capture Live Screen
+                      <RefreshCw size={12} /> Force Screenshot Refresh
                     </button>
                   )}
                 </div>

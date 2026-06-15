@@ -67,6 +67,7 @@ const tcpServer = net.createServer()
 const clients = new Map<net.Socket, number>() // socket -> machine.id
 const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number }>()
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
+const latestScreenFrames = new Map<number, string>()
 
 function broadcastBlockRulesToClients() {
   if (!db) return
@@ -90,6 +91,16 @@ function handleClientMessage(socket: net.Socket, data: any) {
     } else {
       db.prepare("UPDATE machines SET ip_address = ?, status = ? WHERE id = ?").run(payload.ip_address, 'available', machine.id)
     }
+
+    // Clean up stale sockets for this machine ID
+    const targetId = Number(machine.id)
+    for (const [s, mId] of clients.entries()) {
+      if (Number(mId) === targetId && s !== socket) {
+        clients.delete(s)
+        try { s.destroy() } catch {}
+      }
+    }
+
     clients.set(socket, machine.id)
 
     // Send current active block rules to this client
@@ -107,9 +118,19 @@ function handleClientMessage(socket: net.Socket, data: any) {
         activeWindow: data.payload.activeWindow || '',
         os: data.payload.os || 'Windows',
         ip: data.payload.ip || socket.remoteAddress || '',
-        uptime: data.payload.uptime || 0
+        uptime: data.payload.uptime || 0,
+        resolution: data.payload.resolution || { width: 1920, height: 1080 }
       })
       broadcastMachines()
+    }
+  }
+  else if (data.type === 'screen-frame') {
+    const machineId = clients.get(socket)
+    if (machineId) {
+      latestScreenFrames.set(machineId, data.payload)
+      if (mainWindow) {
+        mainWindow.webContents.send('screen-frame-updated', { machineId, base64: data.payload })
+      }
     }
   }
   else if (data.type === 'screenshot-response') {
@@ -173,6 +194,7 @@ tcpServer.on('connection', (socket) => {
       db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machineId)
       clients.delete(socket)
       clientMetrics.delete(machineId)
+      latestScreenFrames.delete(machineId)
       broadcastMachines()
     }
   })
@@ -214,13 +236,18 @@ function broadcastMachines() {
   }
 }
 
-function sendCommandToMachine(machineId: number, cmd: any) {
+function sendCommandToMachine(machineId: number | string, cmd: any) {
+  const targetId = Number(machineId)
   for (const [socket, mId] of clients.entries()) {
-    if (mId === machineId) {
-      try {
-        socket.write(JSON.stringify(cmd) + '\n')
-      } catch {}
-      break
+    if (Number(mId) === targetId) {
+      if (socket.writable && !socket.destroyed) {
+        try {
+          socket.write(JSON.stringify(cmd) + '\n')
+        } catch (e) {
+          console.error(`Failed to send command to machine ${machineId}:`, e)
+        }
+        break
+      }
     }
   }
 }
@@ -604,10 +631,13 @@ ipcMain.handle('get-reports-summary', () => {
 ipcMain.handle('capture-screenshot', async (_, machineId) => {
   return new Promise((resolve, reject) => {
     let clientSocket: net.Socket | null = null
+    const targetId = Number(machineId)
     for (const [socket, mId] of clients.entries()) {
-      if (mId === machineId) {
-        clientSocket = socket
-        break
+      if (Number(mId) === targetId) {
+        if (socket.writable && !socket.destroyed) {
+          clientSocket = socket
+          break
+        }
       }
     }
 
@@ -616,17 +646,17 @@ ipcMain.handle('capture-screenshot', async (_, machineId) => {
     }
 
     const timeout = setTimeout(() => {
-      pendingScreenshots.delete(machineId)
+      pendingScreenshots.delete(targetId)
       reject(new Error('Screenshot request timed out'))
     }, 7000)
 
-    pendingScreenshots.set(machineId, { resolve, reject, timeout })
+    pendingScreenshots.set(targetId, { resolve, reject, timeout })
 
     try {
       clientSocket.write(JSON.stringify({ command: 'capture-screenshot' }) + '\n')
     } catch (e) {
       clearTimeout(timeout)
-      pendingScreenshots.delete(machineId)
+      pendingScreenshots.delete(targetId)
       reject(e)
     }
   })
@@ -710,6 +740,19 @@ ipcMain.handle('delete-machine', (_, id: number) => {
   } catch (e: any) {
     return { success: false, error: e.message }
   }
+})
+
+// ─── Remote Screen & Input Control IPC Handlers ──────────────────────────────
+ipcMain.handle('get-latest-screen-frames', () => {
+  const obj: Record<number, string> = {}
+  for (const [mId, frame] of latestScreenFrames.entries()) {
+    obj[mId] = frame
+  }
+  return obj
+})
+
+ipcMain.handle('send-remote-input', (_, machineId, inputEvent) => {
+  sendCommandToMachine(machineId, { command: 'remote-input', payload: inputEvent })
 })
 
 // ─── Auto Updater IPC ──────────────────────────────────────────────────────────

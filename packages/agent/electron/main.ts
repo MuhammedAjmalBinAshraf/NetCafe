@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import net from 'net';
 import path from 'path';
@@ -821,6 +821,18 @@ async function handleServerMessage(msg: any) {
       } catch (err: any) {
         console.error(err);
       }
+    } else if (msg.command === 'remote-input') {
+      const { action, x, y, button, value } = msg.payload || {};
+      if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
+        if (action === 'click') {
+          psProcess.stdin.write(`Send-MouseClick "${button || 'left'}" ${x} ${y}\n`);
+        } else if (action === 'move') {
+          psProcess.stdin.write(`Set-MousePos ${x} ${y}\n`);
+        } else if (action === 'keys') {
+          const escaped = (value || '').replace(/"/g, '`"');
+          psProcess.stdin.write(`Send-Keys "${escaped}"\n`);
+        }
+      }
     } else if (msg.command === 'update-blockrules') {
       activeBlockRules = msg.rules || [];
 
@@ -1084,6 +1096,35 @@ function removeBandwidthLimit(): Promise<void> {
   });
 }
 
+let mirrorInterval: NodeJS.Timeout | null = null;
+
+function startScreenMirroring() {
+  if (mirrorInterval) return;
+  mirrorInterval = setInterval(async () => {
+    if (tcpSocket && !tcpSocket.destroyed) {
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: 400, height: 225 }
+        });
+        if (sources.length > 0) {
+          const jpegBase64 = sources[0].thumbnail.toJPEG(40).toString('base64');
+          sendToServer({ type: 'screen-frame', payload: jpegBase64 });
+        }
+      } catch (err) {
+        // silently ignore capture errors
+      }
+    }
+  }, 1500);
+}
+
+function stopScreenMirroring() {
+  if (mirrorInterval) {
+    clearInterval(mirrorInterval);
+    mirrorInterval = null;
+  }
+}
+
 // ─── TCP Connection ────────────────────────────────────────────────────────────
 function connectToServer() {
   const socket = new net.Socket();
@@ -1093,6 +1134,7 @@ function connectToServer() {
   socket.connect(serverPort, serverHost, () => {
     console.log(`Connected to server TCP ${serverHost}:${serverPort}`);
     sendToServer({ type: 'register', payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() } });
+    startScreenMirroring();
   });
 
   socket.setEncoding('utf8');
@@ -1111,6 +1153,7 @@ function connectToServer() {
   socket.on('close', () => {
     console.log('Disconnected, retrying in 5s');
     tcpSocket = null;
+    stopScreenMirroring();
     setTimeout(connectToServer, 5000);
   });
 
@@ -1195,7 +1238,64 @@ function startUdpDiscovery() {
   }
 }
 
+let psProcess: any = null;
+
+function initPowerShell() {
+  if (process.platform !== 'win32') return;
+  try {
+    psProcess = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    psProcess.stdin.write(`
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$memberDefinition = @'
+[DllImport("user32.dll")]
+public static extern void mouse_event(int dwFlags, int dx, int dy, int cButtons, int dwExtraInfo);
+'@
+$type = Add-Type -MemberDefinition $memberDefinition -Name "Win32Mouse" -Namespace "Win32" -PassThru
+function Set-MousePos($x, $y) {
+  [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($x, $y)
+}
+function Send-MouseClick($btn, $x, $y) {
+  if ($x -ne $null -and $y -ne $null) {
+    Set-MousePos $x $y
+  }
+  if ($btn -eq "left") {
+    $type::mouse_event(0x0002, 0, 0, 0, 0)
+    $type::mouse_event(0x0004, 0, 0, 0, 0)
+  } elseif ($btn -eq "right") {
+    $type::mouse_event(0x0008, 0, 0, 0, 0)
+    $type::mouse_event(0x0010, 0, 0, 0, 0)
+  } elseif ($btn -eq "double") {
+    $type::mouse_event(0x0002, 0, 0, 0, 0)
+    $type::mouse_event(0x0004, 0, 0, 0, 0)
+    $type::mouse_event(0x0002, 0, 0, 0, 0)
+    $type::mouse_event(0x0004, 0, 0, 0, 0)
+  }
+}
+function Send-Keys($keys) {
+  try {
+    [System.Windows.Forms.SendKeys]::SendWait($keys)
+  } catch {}
+}
+\n`);
+    psProcess.on('exit', () => {
+      psProcess = null;
+      setTimeout(initPowerShell, 1000);
+    });
+    psProcess.on('error', (err: any) => {
+      console.error('PowerShell process error:', err);
+    });
+  } catch (err) {
+    console.error('Failed to init PowerShell process:', err);
+  }
+}
+
 app.whenReady().then(() => {
+  if (process.platform === 'win32') {
+    initPowerShell();
+  }
   if (process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() !== 0) {
     const args = [process.execPath, ...process.argv.slice(1)];
     const child = spawn('pkexec', args, {
@@ -1224,10 +1324,10 @@ app.whenReady().then(() => {
   }
 
   autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking' }));
-  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', info }));
+  autoUpdater.on('update-available', (info: any) => sendUpdateStatus({ status: 'available', info }));
   autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'not-available' }));
   autoUpdater.on('error', (err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
-  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', progress }));
+  autoUpdater.on('download-progress', (progress: any) => sendUpdateStatus({ status: 'downloading', progress }));
   autoUpdater.on('update-downloaded', () => {
     updateReady = true;
     sendUpdateStatus({ status: 'downloaded' });
@@ -1296,6 +1396,12 @@ app.whenReady().then(() => {
       const ram = Math.round(((totalMemory - freeMemory) / totalMemory) * 100);
       const activeWindow = await getActiveWindowTitle();
 
+      let resolution = { width: 1920, height: 1080 };
+      try {
+        const primaryDisplay = screen.getPrimaryDisplay();
+        resolution = primaryDisplay.size;
+      } catch (err) {}
+
       sendToServer({
         type: 'metrics',
         payload: {
@@ -1304,7 +1410,8 @@ app.whenReady().then(() => {
           activeWindow,
           os: `${os.type()} ${os.release()}`,
           uptime: os.uptime(),
-          ip: getIPAddress()
+          ip: getIPAddress(),
+          resolution
         }
       });
     }
