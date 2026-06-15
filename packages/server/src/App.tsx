@@ -144,6 +144,14 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
+  // Sync mirror quality when managing a terminal
+  useEffect(() => {
+    if (window.ipcRenderer) {
+      const targetId = selectedDrawerMachine ? Number(selectedDrawerMachine.id) : null;
+      window.ipcRenderer.invoke('set-active-mirror', targetId).catch(() => {});
+    }
+  }, [selectedDrawerMachine?.id]);
+
   // Sync IPC Handlers — bind ONCE on mount, clean up on unmount
   useEffect(() => {
     if (window.ipcRenderer && !ipcBound.current) {
@@ -567,16 +575,38 @@ export default function App() {
 
   const getScaledCoordinates = (e: React.MouseEvent<HTMLImageElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    const x = e.clientX - rect.left
-    const y = e.clientY - rect.top
-    
+    const clickXRelative = e.clientX - rect.left
+    const clickYRelative = e.clientY - rect.top
+
+    const naturalWidth = e.currentTarget.naturalWidth || 400
+    const naturalHeight = e.currentTarget.naturalHeight || 225
+    const imageRatio = naturalWidth / naturalHeight
+    const elementRatio = rect.width / rect.height
+
+    let renderWidth = rect.width
+    let renderHeight = rect.height
+    let offsetX = 0
+    let offsetY = 0
+
+    if (elementRatio > imageRatio) {
+      // Bounding box is wider than the image: height-constrained (pillarbox black bars on left/right)
+      renderWidth = rect.height * imageRatio
+      offsetX = (rect.width - renderWidth) / 2
+    } else if (elementRatio < imageRatio) {
+      // Bounding box is taller than the image: width-constrained (letterbox black bars on top/bottom)
+      renderHeight = rect.width / imageRatio
+      offsetY = (rect.height - renderHeight) / 2
+    }
+
+    // Clamp click position to actual rendered image dimensions
+    const clickX = Math.max(0, Math.min(renderWidth, clickXRelative - offsetX))
+    const clickY = Math.max(0, Math.min(renderHeight, clickYRelative - offsetY))
+
     const resolution = selectedDrawerMachine?.metrics?.resolution || { width: 1920, height: 1080 }
-    const scaleX = resolution.width / rect.width
-    const scaleY = resolution.height / rect.height
-    
+
     return {
-      x: Math.round(x * scaleX),
-      y: Math.round(y * scaleY)
+      x: Math.round((clickX / renderWidth) * resolution.width),
+      y: Math.round((clickY / renderHeight) * resolution.height)
     }
   }
 
@@ -1029,7 +1059,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.25</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.26</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
@@ -1090,7 +1120,7 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 flex-1 items-start">
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-6 flex-1 items-start">
                   {machines.map((machine) => (
                     <div 
                       key={machine.id} 

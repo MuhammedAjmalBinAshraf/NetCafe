@@ -937,6 +937,9 @@ async function handleServerMessage(msg: any) {
       // Enforce website blocking immediately
       const domains = activeBlockRules.filter(r => r.type === 'domain').map(r => r.value);
       applyHostBlocking(domains);
+    } else if (msg.command === 'set-mirror-quality') {
+      const highRes = !!msg.payload?.highRes;
+      updateMirrorSettings(highRes);
     }
   } catch (e) {
     console.error('handleServerMessage error:', e);
@@ -1195,6 +1198,10 @@ function removeBandwidthLimit(): Promise<void> {
 }
 
 let mirrorInterval: NodeJS.Timeout | null = null;
+let mirrorWidth = 400;
+let mirrorHeight = 225;
+let mirrorQuality = 40;
+let mirrorIntervalMs = 1500;
 
 function startScreenMirroring() {
   if (mirrorInterval) return;
@@ -1203,23 +1210,43 @@ function startScreenMirroring() {
       try {
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
-          thumbnailSize: { width: 400, height: 225 }
+          thumbnailSize: { width: mirrorWidth, height: mirrorHeight }
         });
         if (sources.length > 0) {
-          const jpegBase64 = sources[0].thumbnail.toJPEG(40).toString('base64');
+          const jpegBase64 = sources[0].thumbnail.toJPEG(mirrorQuality).toString('base64');
           sendToServer({ type: 'screen-frame', payload: jpegBase64 });
         }
       } catch (err) {
         // silently ignore capture errors
       }
     }
-  }, 1500);
+  }, mirrorIntervalMs);
 }
 
 function stopScreenMirroring() {
   if (mirrorInterval) {
     clearInterval(mirrorInterval);
     mirrorInterval = null;
+  }
+}
+
+function updateMirrorSettings(highRes: boolean) {
+  const newWidth = highRes ? 1024 : 400;
+  const newHeight = highRes ? 576 : 225;
+  const newQuality = highRes ? 70 : 40;
+  const newInterval = highRes ? 1000 : 1500;
+
+  if (newWidth !== mirrorWidth || newHeight !== mirrorHeight || newQuality !== mirrorQuality || newInterval !== mirrorIntervalMs) {
+    mirrorWidth = newWidth;
+    mirrorHeight = newHeight;
+    mirrorQuality = newQuality;
+    mirrorIntervalMs = newInterval;
+    
+    if (mirrorInterval) {
+      stopScreenMirroring();
+      startScreenMirroring();
+    }
+    logToUI(`Updated mirror settings: highRes=${highRes} (${mirrorWidth}x${mirrorHeight}, quality=${mirrorQuality}, interval=${mirrorIntervalMs}ms)`);
   }
 }
 
@@ -1257,6 +1284,17 @@ function connectToServer() {
     logToUI('Disconnected from server. Retrying in 5 seconds...');
     tcpSocket = null;
     stopScreenMirroring();
+    
+    // Enforce lock immediately upon server disconnection
+    isLocked = true;
+    currentUser = null;
+    if (!lockWindow || lockWindow.isDestroyed()) {
+      lockWindow = null;
+      createLockWindow();
+    } else {
+      startLockEnforcement();
+    }
+    
     setTimeout(connectToServer, 5000);
   });
 

@@ -83,6 +83,7 @@ const clients = new Map<net.Socket, number>() // socket -> machine.id
 const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number }>()
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
 const latestScreenFrames = new Map<number, string>()
+let activeMirrorMachineId: number | null = null;
 const serverLogsCache: { timestamp: string, message: string }[] = []
 
 function logToUI(msg: string) {
@@ -120,8 +121,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
       machine = { id: info.lastInsertRowid }
       logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, IP=${payload.ip_address}`)
     } else {
-      db.prepare("UPDATE machines SET ip_address = ?, status = ? WHERE id = ?").run(payload.ip_address, 'available', machine.id)
-      logToUI(`Client reconnected: ID=${machine.id}, Name=${machine.name}, IP=${payload.ip_address}`)
+      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ? WHERE id = ?").run(payload.name || machine.name, payload.ip_address, 'available', machine.id)
+      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, IP=${payload.ip_address}`)
     }
 
     // Clean up stale sockets for this machine ID
@@ -272,6 +273,9 @@ tcpServer.on('connection', (socket) => {
       clients.delete(socket)
       clientMetrics.delete(machineId)
       latestScreenFrames.delete(machineId)
+      if (activeMirrorMachineId === Number(machineId)) {
+        activeMirrorMachineId = null
+      }
       broadcastMachines()
     }
   })
@@ -1018,4 +1022,16 @@ ipcMain.handle('set-fullscreen', (_, flag: boolean) => {
     mainWindow.setFullScreen(flag)
     mainWindow.setMenuBarVisibility(!flag)
   }
+})
+
+ipcMain.handle('set-active-mirror', (_, machineId: number | null) => {
+  const targetId = machineId !== null ? Number(machineId) : null
+  if (activeMirrorMachineId !== null && activeMirrorMachineId !== targetId) {
+    sendCommandToMachine(activeMirrorMachineId, { command: 'set-mirror-quality', payload: { highRes: false } })
+  }
+  activeMirrorMachineId = targetId
+  if (activeMirrorMachineId !== null) {
+    sendCommandToMachine(activeMirrorMachineId, { command: 'set-mirror-quality', payload: { highRes: true } })
+  }
+  return { success: true }
 })
