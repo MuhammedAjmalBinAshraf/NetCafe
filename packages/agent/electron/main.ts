@@ -940,6 +940,12 @@ async function handleServerMessage(msg: any) {
     } else if (msg.command === 'set-mirror-quality') {
       const highRes = !!msg.payload?.highRes;
       updateMirrorSettings(highRes);
+    } else if (msg.command === 'block-inputs') {
+      const block = !!msg.payload?.block;
+      if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
+        psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
+        logToUI(`Hardware inputs block state set to: ${block}`);
+      }
     }
   } catch (e) {
     console.error('handleServerMessage error:', e);
@@ -1285,6 +1291,11 @@ function connectToServer() {
     tcpSocket = null;
     stopScreenMirroring();
     
+    // Safety unblock of hardware inputs on connection loss
+    if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
+      psProcess.stdin.write("Set-BlockInput $false\n");
+    }
+    
     // Enforce lock immediately upon server disconnection
     isLocked = true;
     currentUser = null;
@@ -1448,10 +1459,15 @@ Add-Type -AssemblyName System.Drawing
 $memberDefinition = @'
 [DllImport("user32.dll")]
 public static extern void mouse_event(int dwFlags, int dx, int dy, int cButtons, int dwExtraInfo);
+[DllImport("user32.dll")]
+public static extern bool BlockInput(bool fBlockIt);
 '@
 $type = Add-Type -MemberDefinition $memberDefinition -Name "Win32Mouse" -Namespace "Win32" -PassThru
 function Set-MousePos($x, $y) {
   [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($x, $y)
+}
+function Set-BlockInput($block) {
+  $type::BlockInput($block)
 }
 function Send-MouseClick($btn, $x, $y) {
   if ($x -ne $null -and $y -ne $null) {

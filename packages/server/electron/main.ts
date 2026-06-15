@@ -62,6 +62,10 @@ function setupDatabase() {
     db.exec("ALTER TABLE sessions ADD COLUMN discount REAL DEFAULT 0;")
   } catch {}
 
+  try {
+    db.exec("ALTER TABLE machines ADD COLUMN hardware_locked INTEGER DEFAULT 0;")
+  } catch {}
+
   // Safety alerts table
   db.exec(`
     CREATE TABLE IF NOT EXISTS safety_alerts (
@@ -75,6 +79,10 @@ function setupDatabase() {
   // AI safety settings defaults
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_safety_enabled', 'false');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', '');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_porn', 'true');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_violence', 'true');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_self_harm', 'true');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_illegal', 'true');")
 }
 
 // TCP Server & Metrics Maps
@@ -138,6 +146,13 @@ function handleClientMessage(socket: net.Socket, data: any) {
     clients.set(socket, machine.id)
     logToUI(`Mapped client socket to machine ID ${machine.id}`)
 
+    // Enforce hardware lock state on registration if enabled
+    const machineRow = db.prepare("SELECT hardware_locked FROM machines WHERE id = ?").get(machine.id)
+    if (machineRow && machineRow.hardware_locked) {
+      socket.write(JSON.stringify({ command: 'block-inputs', payload: { block: true } }) + '\n')
+      logToUI(`Enforcing hardware input lock on machine ID ${machine.id} on reconnection.`)
+    }
+
     // Send current active block rules to this client
     const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
     socket.write(JSON.stringify({ command: 'update-blockrules', rules }) + '\n')
@@ -180,7 +195,16 @@ function handleClientMessage(socket: net.Socket, data: any) {
             const lastQuery = lastCheckedQueries.get(Number(machineId))
             if (lastQuery !== query) {
               lastCheckedQueries.set(Number(machineId), query)
-              checkQuerySafety(Number(machineId), query, apiKey)
+              const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
+              const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false'
+              const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false'
+              const filterIllegal = db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get()?.value !== 'false'
+              checkQuerySafety(Number(machineId), query, apiKey, {
+                porn: filterPorn,
+                violence: filterViolence,
+                selfHarm: filterSelfHarm,
+                illegal: filterIllegal
+              })
             }
           }
         }
@@ -921,10 +945,15 @@ ipcMain.handle('execute-remote-command', (_, machineId, commandLine) => {
 
 const lastCheckedQueries = new Map<number, string>()
 
-async function checkQuerySafety(machineId: number, query: string, apiKey: string) {
+async function checkQuerySafety(
+  machineId: number, 
+  query: string, 
+  apiKey: string,
+  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean }
+) {
   logToUI(`Safety Guard: Evaluating search query on machine ID ${machineId}: "${query}"`)
   try {
-    const result = await evaluateQuerySafety(query, apiKey)
+    const result = await evaluateQuerySafety(query, apiKey, filters)
     if (result.isUnsafe) {
       logToUI(`Safety Guard VIOLATION: Machine ID ${machineId} searched for prohibited content: "${query}". Category: ${result.category}`)
       
@@ -961,9 +990,24 @@ async function checkQuerySafety(machineId: number, query: string, apiKey: string
   }
 }
 
-async function evaluateQuerySafety(query: string, apiKey: string): Promise<{ isUnsafe: boolean, category: string }> {
+async function evaluateQuerySafety(
+  query: string, 
+  apiKey: string,
+  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean }
+): Promise<{ isUnsafe: boolean, category: string }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-  const prompt = `You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics include: pornography/adult content, severe violence/gore/terrorist activities, self-harm/suicide instructions, and illegal acts/weapons/hacking guides. 
+  
+  let topics: string[] = [];
+  if (filters.porn) topics.push("pornography/adult content");
+  if (filters.violence) topics.push("severe violence/gore/terrorist activities");
+  if (filters.selfHarm) topics.push("self-harm/suicide instructions");
+  if (filters.illegal) topics.push("illegal acts/weapons/hacking guides");
+
+  if (topics.length === 0) {
+    return { isUnsafe: false, category: "" };
+  }
+
+  const prompt = `You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${topics.join(", ")}. 
   Respond strictly in JSON format:
   {
     "isUnsafe": true or false,
@@ -1033,5 +1077,12 @@ ipcMain.handle('set-active-mirror', (_, machineId: number | null) => {
   if (activeMirrorMachineId !== null) {
     sendCommandToMachine(activeMirrorMachineId, { command: 'set-mirror-quality', payload: { highRes: true } })
   }
+  return { success: true }
+})
+
+ipcMain.handle('toggle-hardware-lock', (_, machineId, block: boolean) => {
+  db.prepare("UPDATE machines SET hardware_locked = ? WHERE id = ?").run(block ? 1 : 0, machineId)
+  sendCommandToMachine(machineId, { command: 'block-inputs', payload: { block } })
+  broadcastMachines()
   return { success: true }
 })

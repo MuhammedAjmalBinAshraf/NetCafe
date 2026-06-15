@@ -58,6 +58,15 @@ export default function App() {
   })
   const [settings, setSettings] = useState<any>({ lab_name: 'NetCafe Manager' })
 
+  // AI Safety local state inputs (prevents keystroke DB lag)
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [filterPorn, setFilterPorn] = useState(true)
+  const [filterViolence, setFilterViolence] = useState(true)
+  const [filterSelfHarm, setFilterSelfHarm] = useState(true)
+  const [filterIllegal, setFilterIllegal] = useState(true)
+  const [isSavingSettings, setIsSavingSettings] = useState(false)
+  const [saveStatus, setSaveStatus] = useState('')
+
   // Modals & Drawers
   const [selectedMachine, setSelectedMachine] = useState<any>(null)
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false)
@@ -514,6 +523,12 @@ export default function App() {
     }
   }
 
+  const handleToggleHardwareLock = async (machineId: number, block: boolean) => {
+    if (window.ipcRenderer) {
+      await window.ipcRenderer.invoke('toggle-hardware-lock', machineId, block)
+    }
+  }
+
   const handleRenameMachine = async (machine: any) => {
     const newName = prompt(`Rename terminal "${machine.name}":`, machine.name)
     if (!newName || newName.trim() === '') return
@@ -812,6 +827,39 @@ export default function App() {
       await window.ipcRenderer.invoke('update-settings', key, value)
       const fresh = await window.ipcRenderer.invoke('get-settings')
       setSettings(fresh)
+    }
+  }
+
+  useEffect(() => {
+    if (settings) {
+      setApiKeyInput(settings.gemini_api_key || '')
+      setFilterPorn(settings.filter_porn !== 'false')
+      setFilterViolence(settings.filter_violence !== 'false')
+      setFilterSelfHarm(settings.filter_self_harm !== 'false')
+      setFilterIllegal(settings.filter_illegal !== 'false')
+    }
+  }, [settings])
+
+  const handleSaveSafetySettings = async () => {
+    if (window.ipcRenderer) {
+      setIsSavingSettings(true)
+      setSaveStatus('Saving...')
+      try {
+        await window.ipcRenderer.invoke('update-settings', 'gemini_api_key', apiKeyInput)
+        await window.ipcRenderer.invoke('update-settings', 'filter_porn', filterPorn ? 'true' : 'false')
+        await window.ipcRenderer.invoke('update-settings', 'filter_violence', filterViolence ? 'true' : 'false')
+        await window.ipcRenderer.invoke('update-settings', 'filter_self_harm', filterSelfHarm ? 'true' : 'false')
+        await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
+        
+        const fresh = await window.ipcRenderer.invoke('get-settings')
+        setSettings(fresh)
+        setSaveStatus('Settings saved successfully!')
+        setTimeout(() => setSaveStatus(''), 3000)
+      } catch (err) {
+        setSaveStatus('Failed to save settings.')
+      } finally {
+        setIsSavingSettings(false)
+      }
     }
   }
 
@@ -1640,16 +1688,76 @@ export default function App() {
                       onChange={(e) => handleUpdateSetting('ai_safety_enabled', e.target.checked ? 'true' : 'false')}
                     />
                   </div>
+                  
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase text-slate-400">Gemini API Key</label>
                     <input
                       type="password"
                       placeholder="Enter Gemini API Key..."
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors font-mono"
-                      value={settings.gemini_api_key || ''}
-                      onChange={(e) => handleUpdateSetting('gemini_api_key', e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors font-mono text-sm"
+                      value={apiKeyInput}
+                      onChange={(e) => setApiKeyInput(e.target.value)}
                     />
                     <p className="text-[10px] text-slate-500">Requires a valid Gemini API key to check safety (uses gemini-2.5-flash).</p>
+                  </div>
+
+                  {/* Safety Categories */}
+                  <div className="space-y-2.5 pt-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Filter Safety Categories</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/30 border border-slate-850 p-3.5 rounded-lg">
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
+                          checked={filterPorn}
+                          onChange={(e) => setFilterPorn(e.target.checked)}
+                        />
+                        Pornography & Adult Content
+                      </label>
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
+                          checked={filterViolence}
+                          onChange={(e) => setFilterViolence(e.target.checked)}
+                        />
+                        Violence, Gore & Terrorism
+                      </label>
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
+                          checked={filterSelfHarm}
+                          onChange={(e) => setFilterSelfHarm(e.target.checked)}
+                        />
+                        Self-Harm & Suicide
+                      </label>
+                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
+                          checked={filterIllegal}
+                          onChange={(e) => setFilterIllegal(e.target.checked)}
+                        />
+                        Illegal Acts, Weapons & Hacking
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Submit buttons */}
+                  <div className="flex items-center gap-3.5 pt-1">
+                    <button
+                      onClick={handleSaveSafetySettings}
+                      disabled={isSavingSettings}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded text-xs font-bold transition-all shadow-md"
+                    >
+                      {isSavingSettings ? 'Saving...' : 'Save AI Settings'}
+                    </button>
+                    {saveStatus && (
+                      <span className={`text-xs font-semibold ${saveStatus.includes('successfully') ? 'text-emerald-450 font-bold' : 'text-red-400'}`}>
+                        {saveStatus}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -2029,6 +2137,28 @@ export default function App() {
                       Shutdown
                     </button>
                   </div>
+                </div>
+              )}
+
+              {/* Hardware Input Control */}
+              {selectedDrawerMachine.status !== 'offline' && (
+                <div className="space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Hardware Input Lock</div>
+                  <button
+                    onClick={() => handleToggleHardwareLock(selectedDrawerMachine.id, !selectedDrawerMachine.hardware_locked)}
+                    className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-2 border rounded text-xs font-bold transition-all ${
+                      selectedDrawerMachine.hardware_locked
+                        ? 'bg-red-950/40 hover:bg-red-900/40 border-red-800/60 text-red-400 hover:text-red-300'
+                        : 'bg-slate-800/60 hover:bg-slate-700/60 border-slate-700/50 text-slate-300 hover:text-white'
+                    }`}
+                  >
+                    {selectedDrawerMachine.hardware_locked ? '🔓 Unlock Physical Inputs' : '🔒 Block Physical Inputs'}
+                  </button>
+                  <p className="text-[10px] text-slate-500">
+                    {selectedDrawerMachine.hardware_locked
+                      ? 'Physical keyboard/mouse input is currently blocked on the client PC.'
+                      : 'Block physical keyboard and mouse inputs on the client machine.'}
+                  </p>
                 </div>
               )}
 
@@ -2589,6 +2719,16 @@ export default function App() {
                   className="col-span-2 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
                 >
                   Send Operator Message
+                </button>
+                <button
+                  onClick={() => handleToggleHardwareLock(selectedDrawerMachine.id, !selectedDrawerMachine.hardware_locked)}
+                  className={`col-span-2 py-1 px-1.5 border rounded text-xs font-bold transition-all ${
+                    selectedDrawerMachine.hardware_locked
+                      ? 'bg-red-950/45 hover:bg-red-900/40 border-red-800/60 text-red-400'
+                      : 'bg-slate-800 hover:bg-slate-700 border-slate-700/60 text-slate-200 hover:text-white'
+                  }`}
+                >
+                  {selectedDrawerMachine.hardware_locked ? '🔓 Unlock Physical Inputs' : '🔒 Block Physical Inputs'}
                 </button>
               </div>
             </div>
