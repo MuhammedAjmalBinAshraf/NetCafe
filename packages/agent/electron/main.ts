@@ -10,6 +10,7 @@ import dgram from 'dgram';
 let lockWindow: BrowserWindow | null = null;
 let tcpSocket: net.Socket | null = null;
 let isLocked = true;
+let isAppQuitting = false;
 let activeBlockRules: any[] = [];
 let blockInterval: NodeJS.Timeout | null = null;
 let metricsInterval: NodeJS.Timeout | null = null;
@@ -791,7 +792,7 @@ function createLockWindow() {
   lockWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
 
   lockWindow.on('close', (e) => {
-    if (isLocked) {
+    if (isLocked && !isAppQuitting) {
       e.preventDefault();
     }
   });
@@ -899,11 +900,30 @@ async function handleServerMessage(msg: any) {
       } catch (err: any) {
         console.error(err);
       }
+    } else if (msg.command === 'execute-command') {
+      const { commandLine } = msg.payload || {};
+      logToUI(`Executing remote command: ${commandLine}`);
+      exec(commandLine, { timeout: 15000 }, (error, stdout, stderr) => {
+        const output = stdout + (stderr ? '\n' + stderr : '') + (error ? '\nError: ' + error.message : '');
+        logToUI(`Command output sent back to server.`);
+        sendToServer({
+          type: 'command-result',
+          payload: {
+            commandLine,
+            output: output || 'Command executed with no output.',
+            success: !error
+          }
+        });
+      });
     } else if (msg.command === 'remote-input') {
       const { action, x, y, button, value } = msg.payload || {};
       if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
         if (action === 'click') {
           psProcess.stdin.write(`Send-MouseClick "${button || 'left'}" ${x} ${y}\n`);
+        } else if (action === 'mousedown') {
+          psProcess.stdin.write(`Send-MouseDown "${button || 'left'}" ${x} ${y}\n`);
+        } else if (action === 'mouseup') {
+          psProcess.stdin.write(`Send-MouseUp "${button || 'left'}" ${x} ${y}\n`);
         } else if (action === 'move') {
           psProcess.stdin.write(`Set-MousePos ${x} ${y}\n`);
         } else if (action === 'keys') {
@@ -1266,6 +1286,25 @@ function getIPAddress() {
   return '127.0.0.1';
 }
 
+function setupWindowsFirewall() {
+  if (process.platform !== 'win32') return;
+  logToUI('Checking Windows Firewall rules for NetCafe Agent...');
+  exec('netsh advfirewall firewall show rule name="NetCafe Agent UDP"', (err, stdout) => {
+    if (err || !stdout.includes('NetCafe Agent UDP')) {
+      logToUI('Firewall rule "NetCafe Agent UDP" not found. Attempting to add...');
+      exec('netsh advfirewall firewall add rule name="NetCafe Agent UDP" dir=in action=allow protocol=UDP localport=9090 profile=any', (addErr) => {
+        if (addErr) {
+          logToUI(`Warning: Failed to add UDP firewall rule: ${addErr.message}`);
+        } else {
+          logToUI('Successfully added Windows Firewall rule for UDP port 9090 (all profiles).');
+        }
+      });
+    } else {
+      logToUI('Windows Firewall rule for UDP port 9090 already exists.');
+    }
+  });
+}
+
 let udpListener: dgram.Socket | null = null;
 let updateReady = false;
 function startUdpDiscovery() {
@@ -1376,6 +1415,30 @@ function Send-MouseClick($btn, $x, $y) {
     $type::mouse_event(0x0004, 0, 0, 0, 0)
   }
 }
+function Send-MouseDown($btn, $x, $y) {
+  if ($x -ne $null -and $y -ne $null) {
+    Set-MousePos $x $y
+  }
+  if ($btn -eq "left") {
+    $type::mouse_event(0x0002, 0, 0, 0, 0)
+  } elseif ($btn -eq "right") {
+    $type::mouse_event(0x0008, 0, 0, 0, 0)
+  } elseif ($btn -eq "middle") {
+    $type::mouse_event(0x0020, 0, 0, 0, 0)
+  }
+}
+function Send-MouseUp($btn, $x, $y) {
+  if ($x -ne $null -and $y -ne $null) {
+    Set-MousePos $x $y
+  }
+  if ($btn -eq "left") {
+    $type::mouse_event(0x0004, 0, 0, 0, 0)
+  } elseif ($btn -eq "right") {
+    $type::mouse_event(0x0010, 0, 0, 0, 0)
+  } elseif ($btn -eq "middle") {
+    $type::mouse_event(0x0040, 0, 0, 0, 0)
+  }
+}
 function Send-Keys($keys) {
   try {
     [System.Windows.Forms.SendKeys]::SendWait($keys)
@@ -1410,6 +1473,7 @@ app.whenReady().then(() => {
   }
 
   loadConfig();
+  setupWindowsFirewall();
   startUdpDiscovery();
   createLockWindow();
   connectToServer();
@@ -1537,4 +1601,8 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   // Prevent quitting when lock window is closed
+});
+
+app.on('before-quit', () => {
+  isAppQuitting = true;
 });

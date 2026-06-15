@@ -61,6 +61,20 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN discount REAL DEFAULT 0;")
   } catch {}
+
+  // Safety alerts table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS safety_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER,
+      query TEXT,
+      reason TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
+  // AI safety settings defaults
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_safety_enabled', 'false');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', '');")
 }
 
 // TCP Server & Metrics Maps
@@ -142,6 +156,36 @@ function handleClientMessage(socket: net.Socket, data: any) {
         resolution: data.payload.resolution || { width: 1920, height: 1080 }
       })
       broadcastMachines()
+
+      // AI Safety Guard: search query extraction & safety check
+      try {
+        const safetyEnabled = db.prepare("SELECT value FROM settings WHERE key = 'ai_safety_enabled'").get()?.value === 'true'
+        const apiKey = db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get()?.value
+        
+        if (safetyEnabled && apiKey && apiKey.trim()) {
+          const title = data.payload.activeWindow || ''
+          let query = ''
+          if (title.endsWith(' - Google Search')) {
+            query = title.substring(0, title.length - ' - Google Search'.length)
+          } else if (title.endsWith(' - YouTube')) {
+            query = title.substring(0, title.length - ' - YouTube'.length)
+          } else if (title.endsWith(' - Bing')) {
+            query = title.substring(0, title.length - ' - Bing'.length)
+          } else if (title.includes(' - Yahoo Search') || title.includes('| Yahoo Search Results')) {
+            query = title.replace(' - Yahoo Search', '').replace('| Yahoo Search Results', '').trim()
+          }
+
+          if (query && query.trim()) {
+            const lastQuery = lastCheckedQueries.get(Number(machineId))
+            if (lastQuery !== query) {
+              lastCheckedQueries.set(Number(machineId), query)
+              checkQuerySafety(Number(machineId), query, apiKey)
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Safety Guard trigger error:', err)
+      }
     }
   }
   else if (data.type === 'screen-frame') {
@@ -162,6 +206,17 @@ function handleClientMessage(socket: net.Socket, data: any) {
         pending.resolve(data.payload)
         pendingScreenshots.delete(machineId)
       }
+    }
+  }
+  else if (data.type === 'command-result') {
+    const machineId = clients.get(socket)
+    if (machineId && mainWindow) {
+      mainWindow.webContents.send('remote-command-result', {
+        machineId,
+        commandLine: data.payload.commandLine,
+        output: data.payload.output,
+        success: data.payload.success
+      })
     }
   }
   else if (data.type === 'user-login') {
@@ -229,19 +284,36 @@ function setupWindowsFirewall() {
   if (process.platform !== 'win32') return
   
   logToUI('Checking Windows Firewall rules for NetCafe Server...')
-  // Check if rule exists
+  
+  // Rule for TCP 9000
   exec('netsh advfirewall firewall show rule name="NetCafe Server TCP"', (err, stdout) => {
     if (err || !stdout.includes('NetCafe Server TCP')) {
       logToUI('Firewall rule "NetCafe Server TCP" not found. Attempting to add...')
-      exec('netsh advfirewall firewall add rule name="NetCafe Server TCP" dir=in action=allow protocol=TCP localport=9000', (addErr) => {
+      exec('netsh advfirewall firewall add rule name="NetCafe Server TCP" dir=in action=allow protocol=TCP localport=9000 profile=any', (addErr) => {
         if (addErr) {
-          logToUI(`Warning: Failed to add firewall rule: ${addErr.message}. Ensure the Server is run as Administrator, or open port 9000 TCP manually in Windows Firewall.`)
+          logToUI(`Warning: Failed to add TCP firewall rule: ${addErr.message}`)
         } else {
-          logToUI('Successfully added Windows Firewall rule for TCP port 9000.')
+          logToUI('Successfully added Windows Firewall rule for TCP port 9000 (all profiles).')
         }
       })
     } else {
       logToUI('Windows Firewall rule for TCP port 9000 already exists.')
+    }
+  })
+
+  // Rule for UDP 9090
+  exec('netsh advfirewall firewall show rule name="NetCafe Server UDP"', (err, stdout) => {
+    if (err || !stdout.includes('NetCafe Server UDP')) {
+      logToUI('Firewall rule "NetCafe Server UDP" not found. Attempting to add...')
+      exec('netsh advfirewall firewall add rule name="NetCafe Server UDP" dir=in action=allow protocol=UDP localport=9090 profile=any', (addErr) => {
+        if (addErr) {
+          logToUI(`Warning: Failed to add UDP firewall rule: ${addErr.message}`)
+        } else {
+          logToUI('Successfully added Windows Firewall rule for UDP port 9090 (all profiles).')
+        }
+      })
+    } else {
+      logToUI('Windows Firewall rule for UDP port 9090 already exists.')
     }
   })
 }
@@ -634,6 +706,17 @@ ipcMain.handle('update-settings', (_, key, value) => {
   return db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value)
 })
 
+ipcMain.handle('get-safety-alerts', () => {
+  if (!db) return []
+  return db.prepare("SELECT sa.*, m.name as machine_name FROM safety_alerts sa LEFT JOIN machines m ON sa.machine_id = m.id ORDER BY sa.timestamp DESC").all()
+})
+
+ipcMain.handle('clear-safety-alerts', () => {
+  if (!db) return { success: false }
+  db.prepare("DELETE FROM safety_alerts").run()
+  return { success: true }
+})
+
 ipcMain.handle('backup-db', async (_, targetPath) => {
   try {
     fs.copyFileSync(dbPath, targetPath)
@@ -827,6 +910,87 @@ ipcMain.handle('get-latest-screen-frames', () => {
 ipcMain.handle('send-remote-input', (_, machineId, inputEvent) => {
   sendCommandToMachine(machineId, { command: 'remote-input', payload: inputEvent })
 })
+
+ipcMain.handle('execute-remote-command', (_, machineId, commandLine) => {
+  sendCommandToMachine(machineId, { command: 'execute-command', payload: { commandLine } })
+})
+
+const lastCheckedQueries = new Map<number, string>()
+
+async function checkQuerySafety(machineId: number, query: string, apiKey: string) {
+  logToUI(`Safety Guard: Evaluating search query on machine ID ${machineId}: "${query}"`)
+  try {
+    const result = await evaluateQuerySafety(query, apiKey)
+    if (result.isUnsafe) {
+      logToUI(`Safety Guard VIOLATION: Machine ID ${machineId} searched for prohibited content: "${query}". Category: ${result.category}`)
+      
+      // 1. Log to DB
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)")
+        .run(machineId, query, result.category || 'Unsafe content')
+      
+      // 2. Lock the machine
+      sendCommandToMachine(machineId, { command: 'lock' })
+      
+      // 3. Send operator message to client PC
+      sendCommandToMachine(machineId, { 
+        command: 'message', 
+        payload: `Your terminal has been locked due to a safety violation. Prohibited search query detected: "${query}" (Safety Category: ${result.category || 'Inappropriate Content'}).`
+      })
+      
+      // 4. Send alert update to frontend React UI via IPC
+      if (mainWindow) {
+        mainWindow.webContents.send('safety-alert-triggered', {
+          machineId,
+          query,
+          reason: result.category || 'Unsafe content',
+          timestamp: new Date().toISOString()
+        })
+      }
+      
+      broadcastMachines()
+    } else {
+      logToUI(`Safety Guard: Query "${query}" is allowed.`)
+    }
+  } catch (err: any) {
+    console.error('Safety check failed:', err)
+    logToUI(`Safety Guard Error: ${err.message}`)
+  }
+}
+
+async function evaluateQuerySafety(query: string, apiKey: string): Promise<{ isUnsafe: boolean, category: string }> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const prompt = `You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics include: pornography/adult content, severe violence/gore/terrorist activities, self-harm/suicide instructions, and illegal acts/weapons/hacking guides. 
+  Respond strictly in JSON format:
+  {
+    "isUnsafe": true or false,
+    "category": "Reason/category if unsafe, otherwise empty string"
+  }
+  Query: "${query}"`;
+  
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      })
+    });
+    if (res.ok) {
+      const data: any = await res.json();
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      // Clean JSON formatting if enclosed in code blocks
+      const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(cleaned);
+    } else {
+      const errText = await res.text();
+      throw new Error(`HTTP ${res.status}: ${errText}`);
+    }
+  } catch (e: any) {
+    console.error('Gemini API call failed:', e);
+    throw e;
+  }
+}
 
 ipcMain.handle('get-server-logs', () => {
   return serverLogsCache

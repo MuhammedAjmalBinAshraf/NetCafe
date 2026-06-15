@@ -3,7 +3,8 @@ import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
-  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu
+  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
+  Maximize2, Minimize2, Terminal
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -63,6 +64,15 @@ export default function App() {
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false)
   const [selectedDrawerMachine, setSelectedDrawerMachine] = useState<any>(null)
 
+  // New remote control & safety states
+  const [isRemoteFullscreen, setIsRemoteFullscreen] = useState(false)
+  const [isMouseDown, setIsMouseDown] = useState(false)
+  const [lastMoveTime, setLastMoveTime] = useState(0)
+  const [commandLine, setCommandLine] = useState('')
+  const [commandOutput, setCommandOutput] = useState('')
+  const [isExecutingCommand, setIsExecutingCommand] = useState(false)
+  const [safetyAlerts, setSafetyAlerts] = useState<any[]>([])
+
   // Remote monitoring states
   const [screenshotBase64, setScreenshotBase64] = useState<string>('')
   const [screenshotLoading, setScreenshotLoading] = useState(false)
@@ -71,6 +81,7 @@ export default function App() {
   const [systemLogs, setSystemLogs] = useState<any[]>([])
   const [isLogsOpen, setIsLogsOpen] = useState(true)
   const logsEndRef = useRef<HTMLDivElement>(null)
+  const fullscreenContainerRef = useRef<HTMLDivElement>(null)
 
   // Pricing plans CRUD states
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
@@ -146,6 +157,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
+      window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -177,11 +189,25 @@ export default function App() {
       }
       window.ipcRenderer.on('server-log', serverLogListener)
 
+      const commandResultListener = (_: any, data: any) => {
+        setCommandOutput((prev) => prev + (prev ? '\n' : '') + `> ${data.commandLine}\n${data.output}`)
+        setIsExecutingCommand(false)
+      }
+      window.ipcRenderer.on('remote-command-result', commandResultListener)
+
+      const safetyAlertTriggeredListener = (_: any, data: any) => {
+        alert(`🚨 SAFETY ALERT! Machine ID ${data.machineId} searched for prohibited content: "${data.query}" (${data.reason})`)
+        window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
+      }
+      window.ipcRenderer.on('safety-alert-triggered', safetyAlertTriggeredListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
         window.ipcRenderer?.off('screen-frame-updated', frameListener)
         window.ipcRenderer?.off('server-log', serverLogListener)
+        window.ipcRenderer?.off('remote-command-result', commandResultListener)
+        window.ipcRenderer?.off('safety-alert-triggered', safetyAlertTriggeredListener)
         ipcBound.current = false
       }
     }
@@ -194,6 +220,12 @@ export default function App() {
     }
   }, [systemLogs, isLogsOpen])
 
+  useEffect(() => {
+    if (isRemoteFullscreen && fullscreenContainerRef.current) {
+      fullscreenContainerRef.current.focus()
+    }
+  }, [isRemoteFullscreen])
+
   // Load plans, rules, settings, reports on tab switches
   useEffect(() => {
     if (isAuthenticated && window.ipcRenderer) {
@@ -203,6 +235,7 @@ export default function App() {
         window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       } else if (activeTab === 'reports' || activeTab === 'sessions') {
         window.ipcRenderer.invoke('get-reports-summary').then(setReportsData)
+        window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
       } else if (activeTab === 'settings') {
         window.ipcRenderer.invoke('get-settings').then(setSettings)
       } else if (activeTab === 'users') {
@@ -524,17 +557,7 @@ export default function App() {
     }
   }
 
-  const handleRemoteMouseEvent = (
-    e: React.MouseEvent<HTMLImageElement>,
-    machineId: number,
-    action: 'click' | 'move' | 'double'
-  ) => {
-    if (!window.ipcRenderer) return
-    
-    if (action === 'click' && e.button === 2) {
-      e.preventDefault()
-    }
-    
+  const getScaledCoordinates = (e: React.MouseEvent<HTMLImageElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
@@ -543,24 +566,66 @@ export default function App() {
     const scaleX = resolution.width / rect.width
     const scaleY = resolution.height / rect.height
     
-    const targetX = Math.round(x * scaleX)
-    const targetY = Math.round(y * scaleY)
-    
-    let button = 'left'
-    if (e.button === 2) {
-      button = 'right'
-    } else if (e.button === 1) {
-      button = 'middle'
+    return {
+      x: Math.round(x * scaleX),
+      y: Math.round(y * scaleY)
     }
-    
-    const act = action === 'double' ? 'click' : action
-    const btn = action === 'double' ? 'double' : button
+  }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLImageElement>, machineId: number) => {
+    if (!window.ipcRenderer) return
+    setIsMouseDown(true)
+    const { x, y } = getScaledCoordinates(e)
+    let button = 'left'
+    if (e.button === 2) button = 'right'
+    else if (e.button === 1) button = 'middle'
     
     window.ipcRenderer.invoke('send-remote-input', machineId, {
-      action: act,
-      button: btn,
-      x: targetX,
-      y: targetY
+      action: 'mousedown',
+      button,
+      x,
+      y
+    })
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLImageElement>, machineId: number) => {
+    if (!window.ipcRenderer || !isMouseDown) return
+    const now = Date.now()
+    if (now - lastMoveTime < 80) return
+    setLastMoveTime(now)
+    
+    const { x, y } = getScaledCoordinates(e)
+    window.ipcRenderer.invoke('send-remote-input', machineId, {
+      action: 'move',
+      x,
+      y
+    })
+  }
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLImageElement>, machineId: number) => {
+    if (!window.ipcRenderer) return
+    setIsMouseDown(false)
+    const { x, y } = getScaledCoordinates(e)
+    let button = 'left'
+    if (e.button === 2) button = 'right'
+    else if (e.button === 1) button = 'middle'
+    
+    window.ipcRenderer.invoke('send-remote-input', machineId, {
+      action: 'mouseup',
+      button,
+      x,
+      y
+    })
+  }
+
+  const handleDoubleClick = (e: React.MouseEvent<HTMLImageElement>, machineId: number) => {
+    if (!window.ipcRenderer) return
+    const { x, y } = getScaledCoordinates(e)
+    window.ipcRenderer.invoke('send-remote-input', machineId, {
+      action: 'click',
+      button: 'double',
+      x,
+      y
     })
   }
 
@@ -569,36 +634,64 @@ export default function App() {
     e.preventDefault()
     e.stopPropagation()
     
+    if (['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+      return
+    }
+    
     let key = e.key
-    if (key.length === 1) {
+    const specialKeys: Record<string, string> = {
+      Enter: '{ENTER}',
+      Backspace: '{BACKSPACE}',
+      Tab: '{TAB}',
+      Escape: '{ESC}',
+      Delete: '{DEL}',
+      ArrowUp: '{UP}',
+      ArrowDown: '{DOWN}',
+      ArrowLeft: '{LEFT}',
+      ArrowRight: '{RIGHT}',
+      F1: '{F1}', F2: '{F2}', F3: '{F3}', F4: '{F4}', F5: '{F5}', F6: '{F6}',
+      F7: '{F7}', F8: '{F8}', F9: '{F9}', F10: '{F10}', F11: '{F11}', F12: '{F12}',
+      Space: ' ',
+      ' ': ' ',
+    }
+    
+    let resolvedKey = ''
+    if (specialKeys[key]) {
+      resolvedKey = specialKeys[key]
+    } else if (key.length === 1) {
       if ('+^%~{}[]()'.includes(key)) {
-        key = `{${key}}`
+        resolvedKey = `{${key}}`
+      } else {
+        resolvedKey = key
       }
     } else {
-      const specialKeys: Record<string, string> = {
-        Enter: '{ENTER}',
-        Backspace: '{BACKSPACE}',
-        Tab: '{TAB}',
-        Escape: '{ESC}',
-        Delete: '{DEL}',
-        ArrowUp: '{UP}',
-        ArrowDown: '{DOWN}',
-        ArrowLeft: '{LEFT}',
-        ArrowRight: '{RIGHT}',
-        F1: '{F1}', F2: '{F2}', F3: '{F3}', F4: '{F4}', F5: '{F5}', F6: '{F6}',
-        F7: '{F7}', F8: '{F8}', F9: '{F9}', F10: '{F10}', F11: '{F11}', F12: '{F12}',
-      }
-      if (specialKeys[key]) {
-        key = specialKeys[key]
-      } else {
-        return
-      }
+      return
     }
+    
+    let prefix = ''
+    if (e.ctrlKey) prefix += '^'
+    if (e.shiftKey && key.length > 1) prefix += '+'
+    if (e.altKey) prefix += '%'
     
     window.ipcRenderer.invoke('send-remote-input', machineId, {
       action: 'keys',
-      value: key
+      value: prefix + resolvedKey
     })
+  }
+
+  const handleExecuteCommand = async (machineId: number) => {
+    if (!commandLine.trim() || !window.ipcRenderer) return
+    setIsExecutingCommand(true)
+    setCommandOutput(prev => prev + (prev ? '\n' : '') + `> Sending command: ${commandLine}...`)
+    await window.ipcRenderer.invoke('execute-remote-command', machineId, commandLine)
+    setCommandLine('')
+  }
+
+  const handleClearSafetyAlerts = async () => {
+    if (confirm('Are you sure you want to clear all safety alerts from history?') && window.ipcRenderer) {
+      await window.ipcRenderer.invoke('clear-safety-alerts')
+      window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
+    }
   }
 
   // Pricing plans CRUD
@@ -674,6 +767,24 @@ export default function App() {
       const fresh = await window.ipcRenderer.invoke('get-settings')
       setSettings(fresh)
     }
+  }
+
+  const handleUpdateSetting = async (key: string, value: string) => {
+    if (window.ipcRenderer) {
+      await window.ipcRenderer.invoke('update-settings', key, value)
+      const fresh = await window.ipcRenderer.invoke('get-settings')
+      setSettings(fresh)
+    }
+  }
+
+  const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
+    if (e.key === 'Escape') {
+      setIsRemoteFullscreen(false)
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
+    handleRemoteKeyboardEvent(e, machineId)
   }
 
   const handleBackup = async () => {
@@ -910,7 +1021,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.22</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.23</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
@@ -1400,6 +1511,52 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              {/* AI Safety Alerts Log */}
+              <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-6 space-y-4">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-md font-bold text-white flex items-center gap-2">
+                    <ShieldAlert size={18} className="text-red-500" /> AI Safety Violation Alerts (FG Filtering)
+                  </h3>
+                  {safetyAlerts.length > 0 && (
+                    <button
+                      onClick={handleClearSafetyAlerts}
+                      className="px-3 py-1.5 bg-red-950/20 hover:bg-red-900/30 border border-red-900/30 text-red-400 hover:text-red-350 rounded text-xs font-bold transition-all flex items-center gap-1.5"
+                    >
+                      <Trash2 size={12} /> Clear History
+                    </button>
+                  )}
+                </div>
+
+                {safetyAlerts.length === 0 ? (
+                  <div className="text-xs text-slate-500 text-center py-6 bg-slate-950/20 rounded border border-dashed border-slate-800/80">
+                    No safety violations have been logged. Keep up the good work!
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto rounded border border-slate-900">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-950/80 border-b border-slate-900 text-slate-400">
+                          <th className="p-3 font-semibold">Terminal</th>
+                          <th className="p-3 font-semibold">Search Query</th>
+                          <th className="p-3 font-semibold">Violation Reason</th>
+                          <th className="p-3 font-semibold">Logged At</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-900/50">
+                        {safetyAlerts.map((alert: any) => (
+                          <tr key={alert.id} className="hover:bg-slate-950/25 transition-colors">
+                            <td className="p-3 text-slate-200 font-medium">{alert.machine_name || `ID ${alert.machine_id}`}</td>
+                            <td className="p-3 text-red-300 font-mono select-text bg-slate-950/10 max-w-[200px] truncate" title={alert.query}>{alert.query}</td>
+                            <td className="p-3 text-slate-400">{alert.reason}</td>
+                            <td className="p-3 text-slate-500 font-mono">{new Date(alert.timestamp).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -1425,6 +1582,36 @@ export default function App() {
                       value={settings.lab_name || ''}
                       onChange={(e) => handleUpdateBranding(e.target.value)}
                     />
+                  </div>
+                </div>
+
+                {/* AI Safety Config (FG Filtering) */}
+                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
+                  <h3 className="text-md font-bold text-white flex items-center gap-2">
+                    <ShieldAlert size={18} className="text-red-500" /> AI Safety Filter (FG Filtering)
+                  </h3>
+                  <div className="flex items-center justify-between p-3 bg-slate-950/40 border border-slate-800/60 rounded-lg">
+                    <div className="space-y-0.5">
+                      <label className="text-sm font-semibold text-white">Enable AI Safety Filter</label>
+                      <p className="text-xs text-slate-400">Classifies clients' Google, YouTube, Yahoo, & Bing search queries via Gemini.</p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      className="w-5 h-5 accent-blue-600 rounded bg-slate-950 border border-slate-800 cursor-pointer"
+                      checked={settings.ai_safety_enabled === 'true'}
+                      onChange={(e) => handleUpdateSetting('ai_safety_enabled', e.target.checked ? 'true' : 'false')}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold uppercase text-slate-400">Gemini API Key</label>
+                    <input
+                      type="password"
+                      placeholder="Enter Gemini API Key..."
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors font-mono"
+                      value={settings.gemini_api_key || ''}
+                      onChange={(e) => handleUpdateSetting('gemini_api_key', e.target.value)}
+                    />
+                    <p className="text-[10px] text-slate-500">Requires a valid Gemini API key to check safety (uses gemini-2.5-flash).</p>
                   </div>
                 </div>
 
@@ -1667,6 +1854,13 @@ export default function App() {
                     <span>Interactive Remote View</span>
                     <span className="text-[10px] text-blue-400 font-mono animate-pulse">Always-On Mirror</span>
                   </div>
+
+                  <button
+                    onClick={() => setIsRemoteFullscreen(true)}
+                    className="w-full flex items-center justify-center gap-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition-all shadow-sm"
+                  >
+                    <Maximize2 size={12} /> Go Fullscreen Control
+                  </button>
                   
                   {screenFrames[selectedDrawerMachine.id] || screenshotBase64 ? (
                     <div 
@@ -1682,9 +1876,12 @@ export default function App() {
                         } 
                         alt="Client Remote Mirror" 
                         className="w-full h-auto object-contain"
-                        onMouseDown={(e) => handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'click')}
-                        onDoubleClick={(e) => handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'double')}
-                        onContextMenu={(e) => { e.preventDefault(); handleRemoteMouseEvent(e, selectedDrawerMachine.id, 'click'); }}
+                        onMouseDown={(e) => handleMouseDown(e, selectedDrawerMachine.id)}
+                        onMouseMove={(e) => handleMouseMove(e, selectedDrawerMachine.id)}
+                        onMouseUp={(e) => handleMouseUp(e, selectedDrawerMachine.id)}
+                        onDoubleClick={(e) => handleDoubleClick(e, selectedDrawerMachine.id)}
+                        onContextMenu={(e) => e.preventDefault()}
+                        onDragStart={(e) => e.preventDefault()}
                       />
                       <div className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-[9px] text-slate-400 py-1 text-center border-t border-slate-900 opacity-90 group-focus:hidden">
                         Click to control. Focus this window to type.
@@ -1717,6 +1914,40 @@ export default function App() {
                       <RefreshCw size={12} /> Force Screenshot Refresh
                     </button>
                   )}
+
+                  {/* Remote Console CMD Executor Panel */}
+                  <div className="space-y-2 pt-2 border-t border-slate-900/60">
+                    <div className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                      <Terminal size={12} className="text-blue-400" /> Remote Console CMD
+                    </div>
+                    <div className="bg-slate-950 p-2 rounded-lg border border-slate-900 text-[10px] font-mono text-slate-300 h-28 overflow-y-auto space-y-1">
+                      {commandOutput ? (
+                        <pre className="whitespace-pre-wrap select-text">{commandOutput}</pre>
+                      ) : (
+                        <span className="text-slate-600">Ready to execute console commands on client...</span>
+                      )}
+                    </div>
+                    <form 
+                      onSubmit={(e) => { e.preventDefault(); handleExecuteCommand(selectedDrawerMachine.id); }} 
+                      className="flex gap-1"
+                    >
+                      <input
+                        type="text"
+                        placeholder="cmd.exe command..."
+                        className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-2 py-1 text-xs text-white outline-none transition-colors font-mono"
+                        value={commandLine}
+                        onChange={(e) => setCommandLine(e.target.value)}
+                        disabled={isExecutingCommand}
+                      />
+                      <button
+                        type="submit"
+                        disabled={isExecutingCommand || !commandLine.trim()}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-bold transition-all"
+                      >
+                        {isExecutingCommand ? '...' : 'Run'}
+                      </button>
+                    </form>
+                  </div>
                 </div>
               )}
 
@@ -2150,6 +2381,188 @@ export default function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Fullscreen Remote Viewport Overlay */}
+      {isRemoteFullscreen && selectedDrawerMachine && (
+        <div 
+          ref={fullscreenContainerRef}
+          tabIndex={0}
+          onKeyDown={(e) => handleFullscreenKeyDown(e, selectedDrawerMachine.id)}
+          className="fixed inset-0 z-50 bg-slate-950 flex flex-row focus:outline-none select-none"
+        >
+          {/* Left: Main mirror viewport */}
+          <div className="flex-1 flex flex-col h-full bg-slate-900/10">
+            {/* Top Info Bar */}
+            <div className="bg-slate-950/90 border-b border-slate-900 p-3 flex justify-between items-center text-xs">
+              <div className="flex items-center gap-4">
+                <span className="font-bold text-white text-sm">Remote Mirror: {selectedDrawerMachine.name}</span>
+                <span className="text-slate-400 font-mono">IP: {selectedDrawerMachine.metrics?.ip || selectedDrawerMachine.ip_address || 'Offline'}</span>
+                <span className="text-slate-400 font-mono">Res: {selectedDrawerMachine.metrics?.resolution?.width || 1920}x{selectedDrawerMachine.metrics?.resolution?.height || 1080}</span>
+                <span className="text-slate-400">({selectedDrawerMachine.metrics?.os || 'Unknown'})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleCaptureScreenshot(selectedDrawerMachine.id)}
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded font-bold transition-all flex items-center gap-1"
+                >
+                  <RefreshCw size={12} /> Refresh
+                </button>
+                <button
+                  onClick={() => setIsRemoteFullscreen(false)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded font-bold transition-all flex items-center gap-1"
+                >
+                  <Minimize2 size={12} /> Exit Fullscreen
+                </button>
+              </div>
+            </div>
+
+            {/* Mirror Frame Wrapper */}
+            <div className="flex-1 flex justify-center items-center overflow-hidden p-2 relative bg-slate-950 cursor-crosshair">
+              {screenFrames[selectedDrawerMachine.id] || screenshotBase64 ? (
+                <img 
+                  src={screenFrames[selectedDrawerMachine.id] 
+                    ? `data:image/jpeg;base64,${screenFrames[selectedDrawerMachine.id]}` 
+                    : `data:image/png;base64,${screenshotBase64}`
+                  } 
+                  alt="Client Remote Mirror Fullscreen" 
+                  className="max-w-full max-h-full object-contain pointer-events-auto shadow-2xl"
+                  onMouseDown={(e) => handleMouseDown(e, selectedDrawerMachine.id)}
+                  onMouseMove={(e) => handleMouseMove(e, selectedDrawerMachine.id)}
+                  onMouseUp={(e) => handleMouseUp(e, selectedDrawerMachine.id)}
+                  onDoubleClick={(e) => handleDoubleClick(e, selectedDrawerMachine.id)}
+                  onContextMenu={(e) => e.preventDefault()}
+                  onDragStart={(e) => e.preventDefault()}
+                />
+              ) : (
+                <div className="text-center p-6 space-y-3">
+                  <Loader2 size={36} className="animate-spin text-blue-500 mx-auto" />
+                  <div className="text-sm text-slate-400">Requesting client mirror stream...</div>
+                </div>
+              )}
+              {/* Keyboard Indicator */}
+              <div className="absolute bottom-3 right-3 bg-blue-950/90 text-[10px] text-blue-300 px-3 py-1.5 border border-blue-900/60 rounded-full font-mono shadow-md pointer-events-none">
+                Keyboard control active. Press ESC to exit.
+              </div>
+            </div>
+          </div>
+
+          {/* Right: Remote operations & Console panel */}
+          <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col h-full overflow-y-auto p-4 space-y-5">
+            <div className="pb-3 border-b border-slate-800">
+              <h4 className="font-bold text-white text-sm">Remote Control Panel</h4>
+              <p className="text-[10px] text-slate-400 mt-0.5">Control tools for the current session.</p>
+            </div>
+
+            {/* Sys stats */}
+            <div className="space-y-2.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">System Meters</div>
+              <div className="space-y-2 bg-slate-950/50 rounded-lg p-3 border border-slate-800/40 text-xs">
+                <div>
+                  <div className="flex justify-between text-[11px] font-mono mb-1 text-slate-350">
+                    <span>CPU Load</span>
+                    <span className="font-bold text-white">{selectedDrawerMachine.metrics?.cpu || 0}%</span>
+                  </div>
+                  <div className="h-1.5 w-full bg-slate-950 rounded overflow-hidden">
+                    <div 
+                      className="h-full bg-blue-500 transition-all duration-500" 
+                      style={{ width: `${selectedDrawerMachine.metrics?.cpu || 0}%` }}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <div className="flex justify-between text-[11px] font-mono mb-1 text-slate-350">
+                    <span>RAM Load</span>
+                    <span className="font-bold text-white">{selectedDrawerMachine.metrics?.ram || 0}%</span>
+                  </div>
+                  <div className="h-1.5 w-full bg-slate-950 rounded overflow-hidden">
+                    <div 
+                      className="h-full bg-amber-500 transition-all duration-500" 
+                      style={{ width: `${selectedDrawerMachine.metrics?.ram || 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Active Window */}
+            {selectedDrawerMachine.status === 'in_use' && (
+              <div className="space-y-1.5">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Active Window</div>
+                <div className="bg-slate-950/60 p-2.5 rounded border border-slate-800 text-[11px] font-mono text-slate-300 truncate" title={selectedDrawerMachine.metrics?.activeWindow}>
+                  {selectedDrawerMachine.metrics?.activeWindow || 'No active window reported'}
+                </div>
+              </div>
+            )}
+
+            {/* Terminal Panel */}
+            <div className="space-y-2">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                <Terminal size={12} className="text-blue-400" /> Remote Console CMD
+              </div>
+              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-900 text-[10px] font-mono text-slate-300 h-44 overflow-y-auto space-y-1">
+                {commandOutput ? (
+                  <pre className="whitespace-pre-wrap select-text">{commandOutput}</pre>
+                ) : (
+                  <span className="text-slate-600">Ready to execute console commands on client...</span>
+                )}
+              </div>
+              <form 
+                onSubmit={(e) => { e.preventDefault(); handleExecuteCommand(selectedDrawerMachine.id); }} 
+                className="flex gap-1"
+              >
+                <input
+                  type="text"
+                  placeholder="cmd.exe command..."
+                  className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-2.5 py-1 text-xs text-white outline-none transition-colors font-mono"
+                  value={commandLine}
+                  onChange={(e) => setCommandLine(e.target.value)}
+                  disabled={isExecutingCommand}
+                />
+                <button
+                  type="submit"
+                  disabled={isExecutingCommand || !commandLine.trim()}
+                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-bold transition-all"
+                >
+                  {isExecutingCommand ? '...' : 'Run'}
+                </button>
+              </form>
+            </div>
+
+            {/* Actions */}
+            <div className="space-y-2 pt-2 border-t border-slate-805">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Control Actions</div>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => handleRestart(selectedDrawerMachine.id)}
+                  className="py-1.5 px-2 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"
+                >
+                  Restart
+                </button>
+                <button
+                  onClick={() => handlePower(selectedDrawerMachine.id)}
+                  className="py-1.5 px-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 text-red-400 hover:text-red-350 rounded text-xs font-bold transition-all"
+                >
+                  Shutdown
+                </button>
+                <button
+                  onClick={() => handleMsgClick(selectedDrawerMachine.id)}
+                  className="col-span-2 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
+                >
+                  Send Operator Message
+                </button>
+              </div>
+            </div>
+
+            {/* Exit button */}
+            <button
+              onClick={() => setIsRemoteFullscreen(false)}
+              className="w-full mt-auto py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-white font-bold rounded text-xs transition-colors"
+            >
+              Minimize Viewport
+            </button>
+          </div>
         </div>
       )}
     </div>
