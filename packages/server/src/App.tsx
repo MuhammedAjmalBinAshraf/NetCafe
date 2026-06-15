@@ -5,7 +5,7 @@ import {
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
-  ChevronDown, ChevronUp
+  ChevronDown, ChevronUp, Eye, EyeOff
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -29,6 +29,7 @@ interface BlockRule {
 interface User {
   id: number
   username: string
+  password?: string
   display_name: string | null
   phone: string | null
   email: string | null
@@ -172,6 +173,8 @@ export default function App() {
   const [userEmail, setUserEmail] = useState('')
   const [userBalanceMinutes, setUserBalanceMinutes] = useState('0')
   const [userSearchQuery, setUserSearchQuery] = useState('')
+  const [selectedUserIds, setSelectedUserIds] = useState<number[]>([])
+  const [visiblePasswords, setVisiblePasswords] = useState<Record<number, boolean>>([])
 
   // Bulk add states
   const [isBulkUserModalOpen, setIsBulkUserModalOpen] = useState(false)
@@ -445,7 +448,7 @@ export default function App() {
   const handleOpenEditUser = (user: User) => {
     setEditingUser(user)
     setUserUsername(user.username)
-    setUserPassword('') // Keep blank unless updating
+    setUserPassword(user.password || '') // prefill with existing password
     setUserDisplayName(user.display_name || '')
     setUserPhone(user.phone || '')
     setUserEmail(user.email || '')
@@ -516,18 +519,41 @@ export default function App() {
 
   const handleConfirmTopUp = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!topUpUser || !window.ipcRenderer) return
+    if (!window.ipcRenderer) return
     const mins = parseInt(topUpMinutes) || 0
     if (mins <= 0) {
       alert('Please enter a valid number of minutes')
       return
     }
-    const res = await window.ipcRenderer.invoke('topup-user', topUpUser.id, mins)
+    if (topUpUser) {
+      const res = await window.ipcRenderer.invoke('topup-user', topUpUser.id, mins)
+      if (res.success) {
+        setIsTopUpModalOpen(false)
+        fetchUsers()
+      } else {
+        alert('Error topping up balance: ' + res.error)
+      }
+    } else if (selectedUserIds.length > 0) {
+      const res = await window.ipcRenderer.invoke('bulk-topup-users', selectedUserIds, mins)
+      if (res.success) {
+        setIsTopUpModalOpen(false)
+        setSelectedUserIds([])
+        fetchUsers()
+      } else {
+        alert('Error topping up balance: ' + res.error)
+      }
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    if (!confirm(`Are you sure you want to delete ${selectedUserIds.length} selected users?`)) return
+    if (!window.ipcRenderer) return
+    const res = await window.ipcRenderer.invoke('bulk-delete-users', selectedUserIds)
     if (res.success) {
-      setIsTopUpModalOpen(false)
+      setSelectedUserIds([])
       fetchUsers()
     } else {
-      alert('Error topping up balance: ' + res.error)
+      alert('Error deleting users: ' + res.error)
     }
   }
 
@@ -1148,7 +1174,7 @@ export default function App() {
   })
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
+    <div className="h-screen overflow-hidden bg-slate-950 text-slate-50 flex flex-col">
       {/* Top Header */}
       <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div className="flex items-center justify-between w-full md:w-auto gap-3">
@@ -2597,13 +2623,66 @@ export default function App() {
                 )}
               </div>
 
+              {/* Batch Actions Panel */}
+              {selectedUserIds.length > 0 && (
+                <div className="flex items-center justify-between bg-blue-950/30 border border-blue-900/50 rounded-xl p-4 mb-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                  <div className="text-sm text-blue-300 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <span>Selected <strong className="text-white">{selectedUserIds.length}</strong> {selectedUserIds.length === 1 ? 'user' : 'users'}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        setTopUpUser(null)
+                        setTopUpMinutes('60')
+                        setIsTopUpModalOpen(true)
+                      }}
+                      className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold transition-colors"
+                    >
+                      Batch Top-Up
+                    </button>
+                    <button
+                      onClick={handleBulkDelete}
+                      className="px-3 py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded text-xs font-bold transition-colors"
+                    >
+                      Delete Selected
+                    </button>
+                    <button
+                      onClick={() => setSelectedUserIds([])}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold transition-colors"
+                    >
+                      Deselect All
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* Users Table */}
               <div className="bg-slate-900/20 border border-slate-900 rounded-xl overflow-hidden">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
                       <tr className="border-b border-slate-900 bg-slate-950/40 text-slate-400 text-xs font-bold uppercase tracking-wider">
+                        <th className="p-4 w-12 text-center">
+                          <input
+                            type="checkbox"
+                            checked={filteredUsers.length > 0 && filteredUsers.every(u => selectedUserIds.includes(u.id))}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedUserIds(prev => {
+                                  const union = new Set([...prev, ...filteredUsers.map(u => u.id)])
+                                  return Array.from(union)
+                                })
+                              } else {
+                                const filteredIds = filteredUsers.map(u => u.id)
+                                setSelectedUserIds(prev => prev.filter(id => !filteredIds.includes(id)))
+                              }
+                            }}
+                            className="rounded border-slate-800 bg-slate-950 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
+                          />
+                        </th>
                         <th className="p-4">Username</th>
+                        <th className="p-4">Password</th>
                         <th className="p-4">Display Name</th>
                         <th className="p-4">Balance</th>
                         <th className="p-4">Contact Details</th>
@@ -2614,14 +2693,46 @@ export default function App() {
                     <tbody className="divide-y divide-slate-900 text-sm text-slate-300">
                       {filteredUsers.length === 0 ? (
                         <tr>
-                          <td colSpan={6} className="p-8 text-center text-slate-500">
+                          <td colSpan={8} className="p-8 text-center text-slate-500">
                             No users found.
                           </td>
                         </tr>
                       ) : (
                         filteredUsers.map((user) => (
-                          <tr key={user.id} className="hover:bg-slate-900/10 transition-colors">
+                          <tr 
+                            key={user.id} 
+                            className={`transition-colors ${
+                              selectedUserIds.includes(user.id) ? 'bg-blue-950/10 hover:bg-blue-950/20' : 'hover:bg-slate-900/10'
+                            }`}
+                          >
+                            <td className="p-4 w-12 text-center">
+                              <input
+                                type="checkbox"
+                                checked={selectedUserIds.includes(user.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedUserIds(prev => [...prev, user.id])
+                                  } else {
+                                    setSelectedUserIds(prev => prev.filter(id => id !== user.id))
+                                  }
+                                }}
+                                className="rounded border-slate-800 bg-slate-950 text-blue-600 focus:ring-blue-500 focus:ring-offset-slate-900 w-4 h-4 cursor-pointer"
+                              />
+                            </td>
                             <td className="p-4 font-bold text-white">{user.username}</td>
+                            <td className="p-4 font-mono text-xs">
+                              <div className="flex items-center gap-2">
+                                <span>{visiblePasswords[user.id] ? user.password : '••••••••'}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setVisiblePasswords(prev => ({ ...prev, [user.id]: !prev[user.id] }))}
+                                  className="p-1 text-slate-400 hover:text-white transition-colors"
+                                  title={visiblePasswords[user.id] ? 'Hide password' : 'Show password'}
+                                >
+                                  {visiblePasswords[user.id] ? <EyeOff size={14} /> : <Eye size={14} />}
+                                </button>
+                              </div>
+                            </td>
                             <td className="p-4">{user.display_name || <span className="text-slate-600 italic">—</span>}</td>
                             <td className="p-4">
                               <span className={`px-2.5 py-0.5 rounded-full text-xs font-bold ${

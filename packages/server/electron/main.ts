@@ -1496,7 +1496,7 @@ ipcMain.handle('capture-screenshot', async (_, machineId) => {
 
 // ─── User Account Management IPC Handlers ─────────────────────────────────────
 ipcMain.handle('get-users', () => {
-  return db.prepare('SELECT id, username, display_name, phone, email, balance_minutes, created_at FROM users ORDER BY created_at DESC').all()
+  return db.prepare('SELECT id, username, password, display_name, phone, email, balance_minutes, created_at FROM users ORDER BY created_at DESC').all()
 })
 
 ipcMain.handle('create-user', (_, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number) => {
@@ -1538,6 +1538,27 @@ ipcMain.handle('topup-user', (_, id: number, minutes: number) => {
     return { success: false, error: e.message }
   }
 })
+
+ipcMain.handle('bulk-delete-users', (_, ids: number[]) => {
+  try {
+    const placeholders = ids.map(() => '?').join(',')
+    db.prepare(`DELETE FROM users WHERE id IN (${placeholders})`).run(...ids)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
+ipcMain.handle('bulk-topup-users', (_, ids: number[], minutes: number) => {
+  try {
+    const placeholders = ids.map(() => '?').join(',')
+    db.prepare(`UPDATE users SET balance_minutes = balance_minutes + ? WHERE id IN (${placeholders})`).run(minutes, ...ids)
+    return { success: true }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
+})
+
 
 ipcMain.handle('bulk-create-users', (_, users: { username: string; password: string; display_name: string; balance_minutes: number }[]) => {
   const results: { username: string; success: boolean; error?: string }[] = []
