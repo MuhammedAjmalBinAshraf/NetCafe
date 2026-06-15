@@ -4,7 +4,8 @@ import {
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
-  Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode
+  Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
+  ChevronDown, ChevronUp
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -188,6 +189,12 @@ export default function App() {
   // Mobile remote control states
   const [serverIp, setServerIp] = useState('127.0.0.1')
   const [isQrModalOpen, setIsQrModalOpen] = useState(false)
+
+  // Timeline log details expanded state
+  const [expandedTimelineLogs, setExpandedTimelineLogs] = useState<Record<number, boolean>>({})
+
+  // Fullscreen mirror zoom level state
+  const [zoomLevel, setZoomLevel] = useState<'fit' | '100' | '150' | '200'>('fit')
 
   // IPC listener registration guard
   const ipcBound = useRef(false)
@@ -3094,15 +3101,25 @@ export default function App() {
                         const totalDuration = sessionAppLogs.reduce((acc, curr) => acc + curr.duration_seconds, 0);
                         const percent = Math.round((log.duration_seconds / (totalDuration || 1)) * 100);
 
+                        const isExpanded = !!expandedTimelineLogs[log.id];
+
                         return (
                           <div key={log.id} className="p-3 bg-slate-950/20 border border-slate-800/60 rounded-lg hover:border-slate-800 transition-colors flex flex-col gap-2">
                             <div className="flex justify-between items-start gap-4">
-                              <div className="font-mono text-xs text-white truncate max-w-[75%]" title={log.app_title}>
+                              <div className="font-mono text-xs text-white truncate max-w-[70%]" title={log.app_title}>
                                 {log.app_title}
                               </div>
-                              <div className="text-right text-xs">
-                                <span className="text-blue-400 font-semibold">{durationStr}</span>
-                                <span className="text-slate-500 text-[10px] block font-mono">focused {log.focus_count} times</span>
+                              <div className="flex items-center gap-2 text-xs">
+                                <div className="text-right">
+                                  <span className="text-blue-400 font-semibold">{durationStr}</span>
+                                </div>
+                                <button 
+                                  onClick={() => setExpandedTimelineLogs(prev => ({ ...prev, [log.id]: !prev[log.id] }))}
+                                  className="p-1 hover:bg-slate-900 rounded text-slate-400 hover:text-white transition-colors"
+                                  title="Toggle details"
+                                >
+                                  {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                </button>
                               </div>
                             </div>
                             <div className="w-full flex items-center gap-2">
@@ -3114,10 +3131,26 @@ export default function App() {
                               </div>
                               <span className="text-[10px] font-mono text-slate-450 w-7 text-right">{percent}%</span>
                             </div>
-                            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono mt-1 pt-1 border-t border-slate-900/40">
-                              <span>First Focused: <span className="text-slate-400">{formatTimestamp(log.first_seen)}</span></span>
-                              <span>Last Active: <span className="text-slate-400">{formatTimestamp(log.last_seen)}</span></span>
-                            </div>
+                            {isExpanded && (
+                              <div className="mt-1.5 pt-2 border-t border-slate-900/40 grid grid-cols-2 gap-2 text-[10px] font-mono text-slate-400 bg-slate-950/40 p-2 rounded">
+                                <div>
+                                  <span className="text-slate-500 block">First Focused</span>
+                                  <span className="text-slate-300">{formatTimestamp(log.first_seen)}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-500 block">Last Active</span>
+                                  <span className="text-slate-300">{formatTimestamp(log.last_seen)}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-500 block">Focus Count</span>
+                                  <span className="text-slate-300">{log.focus_count} times</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-500 block">Exact Duration</span>
+                                  <span className="text-slate-300">{log.duration_seconds}s</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
@@ -3465,6 +3498,19 @@ export default function App() {
                 <span className="text-slate-400">({selectedDrawerMachine.metrics?.os || 'Unknown'})</span>
               </div>
               <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 bg-slate-900 px-2.5 py-1 rounded border border-slate-800 text-slate-300">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Zoom:</span>
+                  <select
+                    value={zoomLevel}
+                    onChange={(e) => setZoomLevel(e.target.value as any)}
+                    className="bg-transparent text-white font-bold outline-none cursor-pointer text-xs"
+                  >
+                    <option value="fit" className="bg-slate-950 text-white">Fit Screen</option>
+                    <option value="100" className="bg-slate-950 text-white">100% (Original)</option>
+                    <option value="150" className="bg-slate-950 text-white">150% Zoom</option>
+                    <option value="200" className="bg-slate-950 text-white">200% Zoom</option>
+                  </select>
+                </div>
                 <button
                   onClick={() => handleCaptureScreenshot(selectedDrawerMachine.id)}
                   className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded font-bold transition-all flex items-center gap-1"
@@ -3486,28 +3532,39 @@ export default function App() {
             </div>
 
             {/* Mirror Frame Wrapper */}
-            <div className="flex-1 flex justify-center items-center overflow-hidden p-2 relative bg-slate-950 cursor-crosshair">
-              {screenFrames[selectedDrawerMachine.id] || screenshotBase64 ? (
-                <img 
-                  src={screenFrames[selectedDrawerMachine.id] 
-                    ? `data:image/jpeg;base64,${screenFrames[selectedDrawerMachine.id]}` 
-                    : `data:image/png;base64,${screenshotBase64}`
-                  } 
-                  alt="Client Remote Mirror Fullscreen" 
-                  className="w-full h-full object-contain pointer-events-auto shadow-2xl"
-                  onMouseDown={(e) => handleMouseDown(e, selectedDrawerMachine.id)}
-                  onMouseMove={(e) => handleMouseMove(e, selectedDrawerMachine.id)}
-                  onMouseUp={(e) => handleMouseUp(e, selectedDrawerMachine.id)}
-                  onDoubleClick={(e) => handleDoubleClick(e, selectedDrawerMachine.id)}
-                  onContextMenu={(e) => e.preventDefault()}
-                  onDragStart={(e) => e.preventDefault()}
-                />
-              ) : (
-                <div className="text-center p-6 space-y-3">
-                  <Loader2 size={36} className="animate-spin text-blue-500 mx-auto" />
-                  <div className="text-sm text-slate-400">Requesting client mirror stream...</div>
-                </div>
-              )}
+            <div className={`flex-1 flex ${zoomLevel === 'fit' ? 'justify-center items-center overflow-hidden' : 'justify-start items-start overflow-auto'} p-2 relative bg-slate-950 cursor-crosshair`}>
+              {(() => {
+                if (!(screenFrames[selectedDrawerMachine.id] || screenshotBase64)) {
+                  return (
+                    <div className="text-center p-6 space-y-3 w-full">
+                      <Loader2 size={36} className="animate-spin text-blue-500 mx-auto" />
+                      <div className="text-sm text-slate-400">Requesting client mirror stream...</div>
+                    </div>
+                  );
+                }
+
+                const resolution = selectedDrawerMachine?.metrics?.resolution || { width: 1920, height: 1080 };
+                const zoomWidth = zoomLevel === 'fit' ? undefined : (zoomLevel === '100' ? resolution.width : zoomLevel === '150' ? resolution.width * 1.5 : resolution.width * 2);
+                const zoomHeight = zoomLevel === 'fit' ? undefined : (zoomLevel === '100' ? resolution.height : zoomLevel === '150' ? resolution.height * 1.5 : resolution.height * 2);
+
+                return (
+                  <img 
+                    src={screenFrames[selectedDrawerMachine.id] 
+                      ? `data:image/jpeg;base64,${screenFrames[selectedDrawerMachine.id]}` 
+                      : `data:image/png;base64,${screenshotBase64}`
+                    } 
+                    alt="Client Remote Mirror Fullscreen" 
+                    className={zoomLevel === 'fit' ? "w-full h-full object-contain pointer-events-auto shadow-2xl" : "pointer-events-auto shadow-2xl"}
+                    style={zoomLevel === 'fit' ? {} : { width: `${zoomWidth}px`, height: `${zoomHeight}px`, maxWidth: 'none', maxHeight: 'none' }}
+                    onMouseDown={(e) => handleMouseDown(e, selectedDrawerMachine.id)}
+                    onMouseMove={(e) => handleMouseMove(e, selectedDrawerMachine.id)}
+                    onMouseUp={(e) => handleMouseUp(e, selectedDrawerMachine.id)}
+                    onDoubleClick={(e) => handleDoubleClick(e, selectedDrawerMachine.id)}
+                    onContextMenu={(e) => e.preventDefault()}
+                    onDragStart={(e) => e.preventDefault()}
+                  />
+                );
+              })()}
               {/* Keyboard Indicator */}
               <div className="absolute bottom-3 right-3 bg-blue-950/90 text-[10px] text-blue-300 px-3 py-1.5 border border-blue-900/60 rounded-full font-mono shadow-md pointer-events-none">
                 Keyboard control active. Press ESC to exit.

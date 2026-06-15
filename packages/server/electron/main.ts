@@ -1057,6 +1057,18 @@ ipcMain.handle('set-operator-password', (_, currentPassword, newPassword) => {
 })
 
 ipcMain.handle('get-machines', () => {
+  if (db) {
+    const connectedIds = Array.from(clients.values()).map(Number)
+    const allMachines = db.prepare("SELECT id, status FROM machines").all()
+    for (const mach of allMachines) {
+      const machId = Number(mach.id)
+      const isConnected = connectedIds.includes(machId)
+      if (!isConnected && mach.status !== 'in_use') {
+        db.prepare("DELETE FROM machines WHERE id = ?").run(machId)
+        logToUI(`Removed stale/offline machine ID ${machId} from database during reload.`)
+      }
+    }
+  }
   return getMachinesData()
 })
 

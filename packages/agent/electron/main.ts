@@ -1902,16 +1902,36 @@ app.whenReady().then(() => {
 
   loadConfig();
 
-  // Register the agent to auto-start with Windows so it survives reboots.
-  // setLoginItemSettings writes to HKCU\...\Run in the Windows registry.
   if (process.platform === 'win32' && app.isPackaged) {
+    // Disable standard login item to avoid double-launch
     app.setLoginItemSettings({
-      openAtLogin: true,
-      openAsHidden: false,
+      openAtLogin: false,
       name: 'NetCafe Agent',
       path: process.execPath,
     });
-    logToUI('Auto-start on Windows login: registered.');
+    logToUI('Auto-start standard login item disabled (switching to Task Scheduler).');
+
+    // Register Scheduled Task to run instantly on logon with Highest Privileges
+    const taskName = "NetCafeAgent";
+    const exePath = process.execPath;
+    const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /rl highest /f`;
+    exec(cmd, (err, stdout, stderr) => {
+      if (err) {
+        logToUI(`Task Scheduler registration failed: ${err.message}`);
+      } else {
+        logToUI('Task Scheduler auto-start (instant launch) registered successfully.');
+      }
+    });
+
+    // Also disable Windows Startup Delay for Explorer to ensure instant boot launch
+    const serializeCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "New-Item -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Serialize\' -Force | Out-Null; Set-ItemProperty -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Serialize\' -Name \'StartupDelayInMSec\' -Value 0 -Type DWord -Force"';
+    exec(serializeCmd, (err) => {
+      if (err) {
+        logToUI(`Failed to disable Explorer startup delay: ${err.message}`);
+      } else {
+        logToUI('Disabled Windows Explorer startup delay successfully.');
+      }
+    });
   }
 
   setupWindowsFirewall();
