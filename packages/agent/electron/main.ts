@@ -130,6 +130,7 @@ function createLockWindow() {
     alwaysOnTop: true,
     kiosk: true,
     frame: false,
+    closable: false,
     skipTaskbar: true,
     movable: false,
     resizable: false,
@@ -893,6 +894,8 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
+      // Destroy any existing island window first to prevent timer carry-over
+      destroyIslandWindow();
       // Create and show dynamic island
       createIslandWindow({
         startTime: (msg.session && msg.session.startTime) || new Date().toISOString(),
@@ -1851,7 +1854,26 @@ function checkQuerySafety(query: string): Promise<boolean> {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (process.argv.includes('--install-kiosk')) {
+    try {
+      await runKioskSetup();
+    } catch (e) {
+      console.error(e);
+    }
+    app.quit();
+    return;
+  }
+  if (process.argv.includes('--uninstall-kiosk')) {
+    try {
+      await runKioskUninstall();
+    } catch (e) {
+      console.error(e);
+    }
+    app.quit();
+    return;
+  }
+
   if (process.platform === 'win32') {
     initPowerShell();
 
@@ -1970,6 +1992,22 @@ app.whenReady().then(() => {
   });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────
+  // F12: Developer tools
+  globalShortcut.register('F12', () => {
+    if (isLocked) return false;
+  });
+  // Ctrl+Shift+I: Developer tools
+  globalShortcut.register('Control+Shift+I', () => {
+    if (isLocked) return false;
+  });
+  // Ctrl+Shift+J: Developer tools console
+  globalShortcut.register('Control+Shift+J', () => {
+    if (isLocked) return false;
+  });
+  // Ctrl+Shift+C: Developer tools inspector
+  globalShortcut.register('Control+Shift+C', () => {
+    if (isLocked) return false;
+  });
   // Ctrl+Shift+Escape: Task Manager
   globalShortcut.register('Control+Shift+Escape', () => {
     if (isLocked) return false;
@@ -2505,6 +2543,11 @@ function getIslandHtml(sessionData?: any): string {
   <script>
     const { ipcRenderer } = require('electron');
     let session = ${sessionJson};
+    if (session && session.startTime) {
+      if (!session.startTime.includes('Z') && !session.startTime.includes('+')) {
+        session.startTime = session.startTime.replace(' ', 'T') + 'Z';
+      }
+    }
     let isHovered = false;
     let isFullscreen = false;
     let operatorMessage = '';
@@ -2653,4 +2696,188 @@ function getIslandHtml(sessionData?: any): string {
   </script>
 </body>
 </html>`;
+}
+
+function runPowerShellScript(scriptText: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const tempPath = path.join(app.getPath('temp'), `setup-kiosk-${Date.now()}.ps1`);
+    try {
+      fs.writeFileSync(tempPath, scriptText, 'utf8');
+      const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${tempPath}"`;
+      exec(cmd, (err, stdout) => {
+        try { fs.unlinkSync(tempPath); } catch {}
+        if (err) {
+          reject(err);
+        } else {
+          resolve(stdout);
+        }
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+async function runKioskSetup(): Promise<void> {
+  logToUI('Kiosk Setup: Starting custom shell configuration...');
+  const exePath = process.execPath;
+  const script = `
+    # 1. Create CafeKiosk user if it doesn't exist
+    $userExists = [bool](Get-LocalUser -Name "CafeKiosk" -ErrorAction SilentlyContinue)
+    if (-not $userExists) {
+        net user CafeKiosk "CafeKiosk123!" /add /expires:never /active:yes
+        wmic useraccount where "name='CafeKiosk'" set PasswordExpires=FALSE
+    }
+
+    # 2. Configure Auto-Logon
+    $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+    Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "1" -Type String
+    Set-ItemProperty -Path $winlogon -Name "DefaultUserName" -Value "CafeKiosk" -Type String
+    Set-ItemProperty -Path $winlogon -Name "DefaultPassword" -Value "CafeKiosk123!" -Type String
+    Set-ItemProperty -Path $winlogon -Name "DefaultDomainName" -Value $env:COMPUTERNAME -Type String
+
+    # 3. Enable Shell Launcher feature
+    dism /online /Enable-Feature /all /FeatureName:Client-EmbeddedShellLauncher /NoRestart
+
+    # 4. Get SID of CafeKiosk
+    $objUser = New-Object System.Security.Principal.NTAccount("CafeKiosk")
+    $strSID = $objUser.Translate([System.Security.Principal.SecurityIdentifier]).Value
+
+    # 5. Configure Shell Launcher via WMI if available
+    try {
+        $ShellLauncherClass = [wmiclass]"\\\\localhost\\root\\standardcimv2\\embedded:WESL_UserSetting"
+        if ($ShellLauncherClass) {
+            $ShellLauncherClass.SetEnabled($true)
+            $ShellLauncherClass.SetCustomShell($strSID, "${exePath}", $null, $null, 0)
+        }
+    } catch {}
+
+    # 6. Pre-create User Profile directory and NTUSER.DAT
+    $profilePath = "C:\\Users\\CafeKiosk"
+    if (!(Test-Path $profilePath)) {
+        New-Item -ItemType Directory -Path $profilePath -Force
+        Copy-Item -Path "C:\\Users\\Default\\NTUSER.DAT" -Destination "$profilePath\\NTUSER.DAT" -Force
+    }
+    # Ensure permissions are set properly
+    icacls $profilePath /grant "CafeKiosk:(OI)(CI)F" /T
+
+    # 7. Load Hive, write Shell and GPO registry keys, unload Hive
+    reg load "HKU\\CafeKioskTemp" "$profilePath\\NTUSER.DAT"
+    # Set Kiosk shell in HKCU
+    New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" -Name "Shell" -Value "${exePath}"
+    # Set Kiosk GPO policies in HKCU
+    New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "DisableTaskMgr" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "HideFastUserSwitching" -Value 1 -Type DWord
+    New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Name "DisableCMD" -Value 1 -Type DWord
+    reg unload "HKU\\CafeKioskTemp"
+
+    # 8. Create Scheduled Task to run elevated
+    $action = New-ScheduledTaskAction -Execute '${exePath}';
+    $trigger = New-ScheduledTaskTrigger -AtLogon;
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0);
+    $principal = New-ScheduledTaskPrincipal -UserId "CafeKiosk" -RunLevel Highest;
+    Register-ScheduledTask -TaskName "NetCafeAgent" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force;
+  `;
+
+  try {
+    const out = await runPowerShellScript(script);
+    logToUI(`Kiosk Setup PowerShell stdout: ${out}`);
+  } catch (e: any) {
+    logToUI(`Kiosk Setup PowerShell failed: ${e.message}`);
+  }
+
+  // Install watchdog service
+  try {
+    const { Service } = require('node-windows');
+    const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
+    const svc = new Service({
+      name: 'NetCafeAgentWatchdog',
+      description: 'NetCafe Agent Service Watchdog',
+      script: scriptPath,
+      nodePath: process.execPath,
+      env: [{
+        name: 'ELECTRON_RUN_AS_NODE',
+        value: '1'
+      }]
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      svc.on('install', () => {
+        svc.start();
+        resolve();
+      });
+      svc.on('alreadyinstalled', () => resolve());
+      svc.on('error', (err: any) => reject(err));
+      svc.install();
+    });
+    logToUI('Watchdog Windows Service installed successfully.');
+  } catch (e: any) {
+    logToUI(`Failed to install watchdog service: ${e.message}`);
+  }
+}
+
+async function runKioskUninstall(): Promise<void> {
+  logToUI('Kiosk Uninstall: Restoring standard shell...');
+  const script = `
+    # 1. Disable Auto-Logon
+    $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+    Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "0" -Type String
+    Remove-ItemProperty -Path $winlogon -Name "DefaultUserName" -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $winlogon -Name "DefaultPassword" -ErrorAction SilentlyContinue
+
+    # 2. Disable Shell Launcher WMI if enabled
+    try {
+        $ShellLauncherClass = [wmiclass]"\\\\localhost\\root\\standardcimv2\\embedded:WESL_UserSetting"
+        if ($ShellLauncherClass) {
+            $ShellLauncherClass.SetEnabled($false)
+        }
+    } catch {}
+
+    # 3. Remove Scheduled Task
+    Unregister-ScheduledTask -TaskName "NetCafeAgent" -Confirm:$false -ErrorAction SilentlyContinue
+
+    # 4. Delete CafeKiosk user and profile list entry
+    net user CafeKiosk /delete
+
+    $profileListPath = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList"
+    Get-ChildItem -Path $profileListPath | ForEach-Object {
+        $val = Get-ItemProperty -Path $_.PSPath
+        if ($val.ProfileImagePath -like "*CafeKiosk") {
+            Remove-Item -Path $_.PSPath -Force -Recurse -ErrorAction SilentlyContinue
+        }
+    }
+    Remove-Item -Path "C:\\Users\\CafeKiosk" -Force -Recurse -ErrorAction SilentlyContinue
+  `;
+
+  try {
+    const out = await runPowerShellScript(script);
+    logToUI(`Kiosk Uninstall PowerShell stdout: ${out}`);
+  } catch (e: any) {
+    logToUI(`Kiosk Uninstall PowerShell failed: ${e.message}`);
+  }
+
+  // Uninstall watchdog service
+  try {
+    const { Service } = require('node-windows');
+    const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
+    const svc = new Service({
+      name: 'NetCafeAgentWatchdog',
+      description: 'NetCafe Agent Service Watchdog',
+      script: scriptPath,
+      nodePath: process.execPath
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      svc.on('uninstall', () => resolve());
+      svc.on('alreadyuninstalled', () => resolve());
+      svc.on('error', (err: any) => reject(err));
+      svc.uninstall();
+    });
+    logToUI('Watchdog Windows Service uninstalled successfully.');
+  } catch (e: any) {
+    logToUI(`Failed to uninstall watchdog service: ${e.message}`);
+  }
 }

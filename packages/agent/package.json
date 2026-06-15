@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.36",
+  "version": "1.0.37",
 
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
@@ -21,7 +21,8 @@
   "dependencies": {
     "ws": "^8.16.0",
     "electron-updater": "^6.1.8",
-    "node-forge": "^1.3.1"
+    "node-forge": "^1.3.1",
+    "node-windows": "^1.0.0-beta.8"
   },
   "devDependencies": {
     "electron": "^30.0.0",
@@ -54,6 +55,9 @@
     "nsis": {
       "include": "installer.nsh"
     },
+    "asarUnpack": [
+      "node_modules/node-windows/**/*"
+    ],
     "linux": {
       "target": [
         "AppImage",

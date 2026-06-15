@@ -216,8 +216,12 @@ export default function App() {
     const timer = setInterval(() => {
       setMachines((prevMachines) =>
         prevMachines.map((m) => {
-          if (m.status === 'in_use' && m.timeRemaining > 0) {
-            return { ...m, timeRemaining: m.timeRemaining - 1 }
+          if (m.status === 'in_use') {
+            if (m.mode === 'prepaid') {
+              return { ...m, timeRemaining: Math.max(0, m.timeRemaining - 1) }
+            } else {
+              return { ...m, timeRemaining: m.timeRemaining + 1 }
+            }
           }
           return m
         })

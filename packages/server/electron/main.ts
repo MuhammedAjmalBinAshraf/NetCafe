@@ -1117,9 +1117,15 @@ ipcMain.handle('get-machines', () => {
     for (const mach of allMachines) {
       const machId = Number(mach.id)
       const isConnected = connectedIds.includes(machId)
-      if (!isConnected && mach.status !== 'in_use') {
-        db.prepare("DELETE FROM machines WHERE id = ?").run(machId)
-        logToUI(`Removed stale/offline machine ID ${machId} from database during reload.`)
+      if (!isConnected) {
+        const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machId)
+        if (!activeSession) {
+          db.prepare("DELETE FROM machines WHERE id = ?").run(machId)
+          logToUI(`Removed stale/offline machine ID ${machId} from database during reload.`)
+        } else {
+          db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machId)
+          logToUI(`Updated disconnected machine ID ${machId} with active session to offline status.`)
+        }
       }
     }
   }
