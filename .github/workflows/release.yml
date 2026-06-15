@@ -47,19 +47,18 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
-      # Download the Electron binary ONCE, sequentially, into the shared cache.
+      # Download Electron binary ONCE sequentially to avoid the EBUSY race.
+      # electron-builder will find it via ELECTRON_CACHE during packaging.
       - name: Download Electron binary (sequential, no race)
         run: node node_modules/electron/install.js
         working-directory: packages/server
         env:
           ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
 
-      # @electron/rebuild is in the ROOT package.json devDependencies, so its
-      # binary lives in the ROOT node_modules/.bin/ — run from workspace root.
-      - name: Rebuild better-sqlite3 for Electron ABI
-        run: node_modules/.bin/electron-rebuild -f -w better-sqlite3 --module-dir packages/server
-        env:
-          ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      # NOTE: No manual electron-rebuild step needed.
+      # electron-builder runs @electron/rebuild internally (npmRebuild: true by
+      # default) and will rebuild better-sqlite3 against the correct Electron ABI
+      # automatically during the packaging step below.
 
       - name: Build server (Windows)
         working-directory: packages/server
