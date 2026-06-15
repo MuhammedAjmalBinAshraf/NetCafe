@@ -27,15 +27,18 @@ function setupDatabase() {
       CREATE TABLE sessions (id INTEGER PRIMARY KEY, machine_id INTEGER, customer_name TEXT, plan_id INTEGER, start_time DATETIME, end_time DATETIME, paused_duration INTEGER, total_amount REAL, payment_method TEXT, mode TEXT, status TEXT);
       CREATE TABLE plans (id INTEGER PRIMARY KEY, name TEXT, rate_type TEXT, price REAL, duration_minutes INTEGER);
       CREATE TABLE block_rules (id INTEGER PRIMARY KEY, type TEXT, value TEXT, mode TEXT, is_active BOOLEAN);
-      CREATE TABLE staff (id INTEGER PRIMARY KEY, username TEXT, password_hash TEXT, role TEXT);
     `)
-    // Seed plans and staff
+    // Seed plans
     db.exec(`
       INSERT INTO plans (name, rate_type, price, duration_minutes) VALUES ('1 Hour', 'fixed', 5.00, 60);
       INSERT INTO plans (name, rate_type, price, duration_minutes) VALUES ('2 Hours', 'fixed', 9.00, 120);
-      INSERT INTO staff (username, password_hash, role) VALUES ('admin', 'admin', 'admin');
     `)
   }
+  // Staff table — always ensure it exists (idempotent)
+  db.exec(`CREATE TABLE IF NOT EXISTS staff (id INTEGER PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT, role TEXT);`)
+  // Always ensure admin account exists (INSERT OR IGNORE — never overwrites a changed password)
+  db.exec(`INSERT OR IGNORE INTO staff (username, password_hash, role) VALUES ('admin', 'admin', 'admin');`)
+
   db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('lab_name', 'NetCafe Manager');")
   // Users (customer accounts) table

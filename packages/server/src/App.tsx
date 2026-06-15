@@ -623,7 +623,8 @@ export default function App() {
               <input
                 type="text"
                 required
-                placeholder="admin"
+                placeholder="Username"
+                autoFocus
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
@@ -642,9 +643,12 @@ export default function App() {
             </div>
 
             {authError && (
-              <div className="flex items-center gap-2 text-xs bg-red-950/40 border border-red-800/50 p-3 rounded text-red-400">
-                <ShieldAlert size={16} />
-                <span>{authError}</span>
+              <div className="flex flex-col gap-1 text-xs bg-red-950/40 border border-red-800/50 p-3 rounded text-red-400">
+                <div className="flex items-center gap-2">
+                  <ShieldAlert size={16} />
+                  <span>{authError}</span>
+                </div>
+                <div className="text-slate-500 pl-6">Default credentials: <span className="text-slate-400 font-mono">admin / admin</span></div>
               </div>
             )}
 
@@ -800,7 +804,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.16</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.17</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>

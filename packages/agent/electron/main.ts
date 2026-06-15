@@ -379,12 +379,13 @@ function createLockWindow() {
     <div class="info-panel">
       <div class="info-line"><span class="info-label">Server</span><span class="info-value" id="infoServerUrl">tcp://${serverHost}:${serverPort}</span></div>
       <div class="info-line"><span class="info-label">Terminal</span><span class="info-value">${machineId}</span></div>
+      <div class="info-line"><span class="info-label">Version</span><span class="info-value" id="infoVersion">v${app.getVersion()}</span></div>
       <div class="info-line"><span class="info-label">Config</span><span class="info-value">${configPath}</span></div>
     </div>
     <div class="footer">Do not power off this terminal.</div>
   </div>
 
-  ${updateReady ? `<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(16,185,129,0.9);color:white;padding:10px 20px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">✅ Update downloaded — will install on next restart</div>` : ''}
+  ${updateReady ? `<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(16,185,129,0.9);color:white;padding:10px 20px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">✅ Update downloaded — will install on next restart</div>` : `<div id="updateBar" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(37,99,235,0.9);color:white;padding:10px 24px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">🔄 Checking for updates...</div>`}
 
   <!-- Settings Gear Button -->
   <div class="settings-trigger" id="settingsTrigger" title="Operator Configuration">⚙️</div>
@@ -452,6 +453,23 @@ function createLockWindow() {
             </button>
           </div>
           <div id="shellOpStatus" style="margin-top:0.4rem;font-size:0.72rem;display:none;"></div>
+        </div>
+
+        <!-- Software Update Section -->
+        <div style="margin-top:0.5rem;padding:0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;">
+          <div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:0.5rem;">⬆️ Software Update</div>
+          <div style="font-size:0.72rem;color:#475569;margin-bottom:0.5rem;">Current: <span id="updateCurrentVersion" style="color:#94a3b8;font-weight:600;">v${app.getVersion()}</span></div>
+          <div style="display:flex;gap:0.5rem;">
+            <button id="checkUpdateBtn"
+              style="flex:1;padding:0.5rem 0.4rem;background:linear-gradient(135deg,#0ea5e9,#3b82f6);border:none;border-radius:8px;color:white;font-size:0.78rem;font-weight:600;cursor:pointer;">
+              🔍 Check for Update
+            </button>
+            <button id="downloadUpdateBtn"
+              style="flex:1;padding:0.5rem 0.4rem;background:rgba(16,185,129,0.15);border:1px solid rgba(16,185,129,0.3);border-radius:8px;color:#6ee7b7;font-size:0.78rem;font-weight:600;cursor:pointer;display:none;">
+              ⬇️ Download Now
+            </button>
+          </div>
+          <div id="updateStatusText" style="margin-top:0.5rem;font-size:0.72rem;color:#64748b;"></div>
         </div>
       </div>
     </div>
@@ -646,6 +664,60 @@ function createLockWindow() {
 
       shellInstallBtn.addEventListener('click', () => doShellOp('install-as-shell', '\u2705 Installed as shell. Restart to take effect.'));
       shellRestoreBtn.addEventListener('click', () => doShellOp('restore-shell', '\u2705 Shell restored to explorer.exe. Restart to take effect.'));
+
+      // ── Software Update buttons ──────────────────────────────────────────
+      const checkUpdateBtn = document.getElementById('checkUpdateBtn');
+      const downloadUpdateBtn = document.getElementById('downloadUpdateBtn');
+      const updateStatusText = document.getElementById('updateStatusText');
+      const updateBar = document.getElementById('updateBar');
+
+      checkUpdateBtn.addEventListener('click', async () => {
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = '\ud83d\udd04 Checking...';
+        updateStatusText.textContent = '';
+        downloadUpdateBtn.style.display = 'none';
+        try {
+          await ipcRenderer.invoke('manual-check-for-updates');
+        } catch(e) {
+          updateStatusText.style.color = '#f87171';
+          updateStatusText.textContent = 'Check failed: ' + e.message;
+          checkUpdateBtn.disabled = false;
+          checkUpdateBtn.textContent = '\ud83d\udd0d Check for Update';
+        }
+      });
+
+      downloadUpdateBtn.addEventListener('click', async () => {
+        downloadUpdateBtn.disabled = true;
+        downloadUpdateBtn.textContent = '\u23f3 Downloading...';
+        updateStatusText.textContent = 'Download started. App will restart when ready.';
+        await ipcRenderer.invoke('manual-download-update').catch(() => {});
+      });
+
+      ipcRenderer.on('agent-update-status', (_, payload) => {
+        checkUpdateBtn.disabled = false;
+        checkUpdateBtn.textContent = '\ud83d\udd0d Check for Update';
+        if (payload.status === 'not-available') {
+          updateStatusText.style.color = '#22c55e';
+          updateStatusText.textContent = '\u2705 Already on latest version.';
+        } else if (payload.status === 'available') {
+          updateStatusText.style.color = '#38bdf8';
+          updateStatusText.textContent = '\ud83d\udce6 New version available: ' + (payload.info?.version || '');
+          downloadUpdateBtn.style.display = 'block';
+          downloadUpdateBtn.disabled = false;
+          downloadUpdateBtn.textContent = '\u2b07\ufe0f Download Now';
+          if (updateBar) { updateBar.style.display = 'block'; updateBar.textContent = '\ud83d\udce6 Update available — click Download Now in \u2699\ufe0f settings'; }
+        } else if (payload.status === 'downloading') {
+          updateStatusText.style.color = '#94a3b8';
+          updateStatusText.textContent = '\u23f3 Downloading ' + Math.round(payload.progress?.percent ?? 0) + '%';
+        } else if (payload.status === 'downloaded') {
+          updateStatusText.style.color = '#22c55e';
+          updateStatusText.textContent = '\u2705 Download complete. Restart to install.';
+          if (updateBar) { updateBar.style.background = 'rgba(16,185,129,0.9)'; updateBar.style.display = 'block'; updateBar.textContent = '\u2705 Update downloaded \u2014 restart to install'; }
+        } else if (payload.status === 'error') {
+          updateStatusText.style.color = '#f87171';
+          updateStatusText.textContent = '\u274c Error: ' + (payload.message || 'unknown');
+        }
+      });
     })();
   </script>
 </body>
@@ -1142,14 +1214,35 @@ app.whenReady().then(() => {
 
   // Auto Updater logic for Agent
   autoUpdater.channel = 'latest-agent';   // ← must NOT pick up latest-server.yml
-  autoUpdater.autoDownload = true;
+  autoUpdater.autoDownload = false;       // manual download from operator panel
   autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err));
 
+  function sendUpdateStatus(payload: object) {
+    if (lockWindow && !lockWindow.isDestroyed()) {
+      lockWindow.webContents.send('agent-update-status', payload);
+    }
+  }
+
+  autoUpdater.on('checking-for-update', () => sendUpdateStatus({ status: 'checking' }));
+  autoUpdater.on('update-available', (info) => sendUpdateStatus({ status: 'available', info }));
+  autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'not-available' }));
+  autoUpdater.on('error', (err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
+  autoUpdater.on('download-progress', (progress) => sendUpdateStatus({ status: 'downloading', progress }));
   autoUpdater.on('update-downloaded', () => {
     updateReady = true;
+    sendUpdateStatus({ status: 'downloaded' });
+    // Rebuild lock window to show the downloaded banner
     if (isLocked) {
       createLockWindow();
     }
+  });
+
+  // Manual IPC from operator panel
+  ipcMain.handle('manual-check-for-updates', () => {
+    autoUpdater.checkForUpdates().catch((err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
+  });
+  ipcMain.handle('manual-download-update', () => {
+    autoUpdater.downloadUpdate().catch((err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
   });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────
