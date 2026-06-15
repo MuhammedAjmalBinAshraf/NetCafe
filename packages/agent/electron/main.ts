@@ -20,6 +20,11 @@ let metricsInterval: NodeJS.Timeout | null = null;
 let lockEnforceInterval: NodeJS.Timeout | null = null;
 let pendingLoginResolve: ((result: { success: boolean; message?: string }) => void) | null = null;
 let currentUser: string | null = null;
+let islandWindow: BrowserWindow | null = null;
+let isFullscreenApp = false;
+let fullscreenCheckInterval: NodeJS.Timeout | null = null;
+const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
+let nextRequestId = 1;
 
 const agentLogsCache: { timestamp: string, message: string }[] = [];
 
@@ -843,6 +848,16 @@ function sendToServer(data: any) {
 // ─── Server message handler ────────────────────────────────────────────────────
 async function handleServerMessage(msg: any) {
   try {
+    if (msg.type === 'query-check-response') {
+      const { requestId, allowed } = msg.payload || {};
+      const pending = pendingQueryChecks.get(requestId);
+      if (pending) {
+        pending.resolve(allowed);
+        pendingQueryChecks.delete(requestId);
+      }
+      return;
+    }
+
     logToUI(`Received server command: ${msg.command || 'unknown'}`);
     if (msg.command === 'login-success') {
       logToUI(`Server approved member login. Unlocking terminal.`);
@@ -860,6 +875,13 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
+      // Create and show dynamic island
+      createIslandWindow({
+        startTime: new Date().toISOString(),
+        mode: 'prepaid',
+        durationMinutes: msg.duration || null,
+        user: msg.user || 'Guest'
+      });
     } else if (msg.command === 'login-fail') {
       logToUI(`Server rejected member login: ${msg.message || 'Invalid credentials'}`);
       if (pendingLoginResolve) {
@@ -878,6 +900,15 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
+      // Create and show dynamic island
+      createIslandWindow({
+        startTime: (msg.session && msg.session.startTime) || new Date().toISOString(),
+        mode: (msg.session && msg.session.mode) || 'postpaid',
+        durationMinutes: (msg.session && msg.session.durationMinutes) || null,
+        planPrice: (msg.session && msg.session.planPrice) || null,
+        customDuration: (msg.session && msg.session.customDuration) || null,
+        user: msg.user || 'Guest'
+      });
     } else if (msg.command === 'lock') {
       logToUI(`Server requested lock. Setting isLocked = true.`);
       isLocked = true;
@@ -889,13 +920,20 @@ async function handleServerMessage(msg: any) {
         logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
         startLockEnforcement();
       }
+      destroyIslandWindow();
     } else if (msg.command === 'message') {
-      if (!isLocked) {
+      if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('show-message', msg.payload || '');
+      } else {
         dialog.showMessageBox({
           type: 'info',
           title: 'Message from Operator',
           message: msg.payload || ''
         });
+      }
+    } else if (msg.command === 'sync-session') {
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('sync-session-data', msg.session);
       }
     } else if (msg.command === 'poweroff') {
       if (process.platform === 'win32') {
@@ -1289,9 +1327,9 @@ function startScreenMirroring() {
         let captureH = mirrorHeight;
         try {
           const primary = screen.getPrimaryDisplay();
-          // Cap at actual screen resolution
-          captureW = Math.min(mirrorWidth, primary.size.width);
-          captureH = Math.min(mirrorHeight, primary.size.height);
+          const scale = primary.scaleFactor || 1;
+          captureW = Math.min(mirrorWidth, Math.round(primary.size.width * scale));
+          captureH = Math.min(mirrorHeight, Math.round(primary.size.height * scale));
         } catch {}
         
         const sources = await desktopCapturer.getSources({
@@ -1317,10 +1355,10 @@ function stopScreenMirroring() {
 }
 
 function updateMirrorSettings(highRes: boolean, ultraRes: boolean = false) {
-  const newWidth = ultraRes ? 2560 : highRes ? 1920 : 1280;
-  const newHeight = ultraRes ? 1440 : highRes ? 1080 : 720;
-  const newQuality = ultraRes ? 95 : highRes ? 88 : 75;
-  const newInterval = ultraRes ? 300 : highRes ? 500 : 800;
+  const newWidth = ultraRes ? 2560 : highRes ? 1920 : 400;
+  const newHeight = ultraRes ? 1440 : highRes ? 1080 : 225;
+  const newQuality = ultraRes ? 95 : highRes ? 88 : 40;
+  const newInterval = ultraRes ? 300 : highRes ? 500 : 1500;
 
   if (newWidth !== mirrorWidth || newHeight !== mirrorHeight || newQuality !== mirrorQuality || newInterval !== mirrorIntervalMs) {
     mirrorWidth = newWidth;
@@ -1379,6 +1417,12 @@ function connectToServer() {
     tcpSocket = null;
     stopScreenMirroring();
     
+    // Resolve all pending query checks to true
+    for (const pending of pendingQueryChecks.values()) {
+      pending.resolve(true);
+    }
+    pendingQueryChecks.clear();
+    
     // Safety unblock of hardware inputs on connection loss
     if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
       psProcess.stdin.write("Set-BlockInput $false\n");
@@ -1391,6 +1435,7 @@ function connectToServer() {
     // Enforce lock immediately upon server disconnection
     isLocked = true;
     currentUser = null;
+    destroyIslandWindow();
     if (!lockWindow || lockWindow.isDestroyed()) {
       lockWindow = null;
       createLockWindow();
@@ -1620,6 +1665,60 @@ function Send-Keys($keys) {
   }
 }
 
+function checkQuerySafety(query: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    if (!tcpSocket || tcpSocket.destroyed) {
+      logToUI(`[MITM] Server not connected, allowing query "${query}"`);
+      resolve(true);
+      return;
+    }
+
+    const requestId = `${Date.now()}-${nextRequestId++}`;
+    
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('set-evaluating-state', true);
+    }
+
+    const timeout = setTimeout(() => {
+      if (pendingQueryChecks.has(requestId)) {
+        logToUI(`[MITM] Timeout waiting for query check: "${query}"`);
+        const item = pendingQueryChecks.get(requestId);
+        pendingQueryChecks.delete(requestId);
+        
+        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-evaluating-state', false);
+        }
+        
+        resolve(true);
+      }
+    }, 5000);
+
+    pendingQueryChecks.set(requestId, {
+      resolve: (allowed: boolean) => {
+        clearTimeout(timeout);
+        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-evaluating-state', false);
+        }
+        resolve(allowed);
+      },
+      reject: (err: any) => {
+        clearTimeout(timeout);
+        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-evaluating-state', false);
+        }
+        resolve(true);
+      },
+      timeout
+    });
+
+    logToUI(`[MITM] Sending query check request to server: "${query}" (ID: ${requestId})`);
+    sendToServer({
+      type: 'query-check-request',
+      payload: { query, requestId }
+    });
+  });
+}
+
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     initPowerShell();
@@ -1628,9 +1727,11 @@ app.whenReady().then(() => {
     try {
       mitmProxy = new MitmProxy(
         app.getPath('userData'),
-        (query: string) => {
+        async (query: string) => {
           logToUI(`[MITM] Browser query intercepted: "${query}"`);
-          sendToServer({ type: 'browser-query', payload: { query } });
+          const allowed = await checkQuerySafety(query);
+          logToUI(`[MITM] Safety check result for "${query}": ${allowed ? 'ALLOWED' : 'BLOCKED'}`);
+          return allowed;
         },
         logToUI
       );
@@ -1813,3 +1914,590 @@ app.on('before-quit', () => {
     mitmProxy = null;
   }
 });
+
+function checkFullscreen(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      return resolve(false);
+    }
+    const psScript = `
+      Add-Type -AssemblyName System.Windows.Forms;
+      $definition = @'
+        using System;
+        using System.Runtime.InteropServices;
+        public class Win32 {
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll")]
+            [return: MarshalAs(UnmanagedType.Bool)]
+            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT {
+                public int Left;
+                public int Top;
+                public int Right;
+                public int Bottom;
+            }
+        }
+'@;
+      Add-Type -TypeDefinition $definition;
+      $fg = [Win32]::GetForegroundWindow();
+      if ($fg -ne 0) {
+          $rect = New-Object Win32+RECT;
+          if ([Win32]::GetWindowRect($fg, [ref]$rect)) {
+              $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+              if ($rect.Left -le 2 -and $rect.Top -le 2 -and ($rect.Right - $rect.Left) -ge ($screen.Width - 10) -and ($rect.Bottom - $rect.Top) -ge ($screen.Height - 10)) {
+                  Write-Output "true"
+              } else {
+                  Write-Output "false"
+              }
+          } else { Write-Output "false" }
+      } else { Write-Output "false" }
+    `;
+    const child = spawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
+    let output = '';
+    child.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+    child.on('close', () => {
+      resolve(output.trim() === 'true');
+    });
+    child.on('error', () => {
+      resolve(false);
+    });
+  });
+}
+
+function startFullscreenCheck() {
+  if (fullscreenCheckInterval) return;
+  fullscreenCheckInterval = setInterval(async () => {
+    if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+      const isFS = await checkFullscreen();
+      if (isFS !== isFullscreenApp) {
+        isFullscreenApp = isFS;
+        islandWindow.webContents.send('set-fullscreen-state', isFullscreenApp);
+      }
+    }
+  }, 3000);
+}
+
+function stopFullscreenCheck() {
+  if (fullscreenCheckInterval) {
+    clearInterval(fullscreenCheckInterval);
+    fullscreenCheckInterval = null;
+  }
+}
+
+function createIslandWindow(sessionData?: any) {
+  if (islandWindow) return;
+  
+  const primary = screen.getPrimaryDisplay();
+  
+  islandWindow = new BrowserWindow({
+    width: 200,
+    height: 50,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    hasShadow: false,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false
+    }
+  });
+
+  islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+  islandWindow.setIgnoreMouseEvents(true, { forward: true });
+  
+  const x = Math.round(primary.bounds.x + (primary.bounds.width - 200) / 2);
+  const y = primary.bounds.y;
+  islandWindow.setPosition(x, y);
+
+  const htmlContent = getIslandHtml(sessionData);
+  islandWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
+
+  islandWindow.on('closed', () => {
+    islandWindow = null;
+  });
+
+  startFullscreenCheck();
+}
+
+function destroyIslandWindow() {
+  stopFullscreenCheck();
+  if (islandWindow) {
+    try {
+      islandWindow.destroy();
+    } catch {}
+    islandWindow = null;
+  }
+}
+
+ipcMain.on('resize-island', (event, { width, height }) => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    try {
+      islandWindow.setSize(width, height);
+      const primary = screen.getPrimaryDisplay();
+      const x = Math.round(primary.bounds.x + (primary.bounds.width - width) / 2);
+      const y = primary.bounds.y;
+      islandWindow.setPosition(x, y);
+    } catch (e) {
+      console.error('Failed to resize island:', e);
+    }
+  }
+});
+
+ipcMain.on('island-mouse', (event, ignore) => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    islandWindow.setIgnoreMouseEvents(ignore, { forward: true });
+  }
+});
+
+ipcMain.on('exit-session-request', () => {
+  sendToServer({ type: 'client-request-close' });
+});
+
+function getIslandHtml(sessionData?: any): string {
+  const sessionJson = JSON.stringify(sessionData || null);
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      margin: 0;
+      padding: 20px;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: transparent;
+      display: flex;
+      justify-content: center;
+      user-select: none;
+    }
+    #dynamic-island-container {
+      background: rgba(10, 10, 10, 0.95);
+      color: white;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
+      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+    #dynamic-island-container.notch {
+      width: 80px;
+      height: 8px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.98);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
+    }
+    #dynamic-island-container.compact {
+      width: 170px;
+      height: 32px;
+      border-radius: 16px;
+      padding: 0 12px;
+    }
+    #dynamic-island-container.card {
+      width: 340px;
+      height: 125px;
+      border-radius: 24px;
+      padding: 14px;
+      align-items: stretch;
+    }
+    #dynamic-island-container.banner {
+      width: 400px;
+      height: 95px;
+      border-radius: 22px;
+      padding: 14px;
+      background: rgba(185, 28, 28, 0.96);
+      box-shadow: 0 10px 25px rgba(185, 28, 28, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.15);
+      align-items: stretch;
+    }
+    #dynamic-island-container.evaluating {
+      width: 190px;
+      height: 32px;
+      border-radius: 16px;
+      padding: 0 12px;
+      background: rgba(15, 23, 42, 0.98);
+      box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3), 0 0 0 1px rgba(56, 189, 248, 0.2);
+    }
+    .notch-content, .compact-content, .card-content, .banner-content, .evaluating-content {
+      display: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      width: 100%;
+      height: 100%;
+    }
+    #dynamic-island-container.notch .notch-content {
+      display: block;
+      opacity: 1;
+    }
+    #dynamic-island-container.compact .compact-content {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 1;
+    }
+    #dynamic-island-container.card .card-content {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      opacity: 1;
+    }
+    #dynamic-island-container.banner .banner-content {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      opacity: 1;
+    }
+    #dynamic-island-container.evaluating .evaluating-content {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 1;
+    }
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(56, 189, 248, 0.2);
+      border-top-color: #38bdf8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .compact-pill-layout {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.95);
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #22c55e;
+      box-shadow: 0 0 8px #22c55e;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.25); opacity: 0.6; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    .card-grid {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      justify-content: space-between;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .cust-name {
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: -0.2px;
+    }
+    .mode-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.15);
+      text-transform: uppercase;
+    }
+    .card-body {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 4px;
+    }
+    .card-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .info-label {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+    .info-val {
+      font-weight: 600;
+      color: white;
+      font-variant-numeric: tabular-nums;
+    }
+    .card-cost {
+      text-align: right;
+    }
+    .cost-label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+    }
+    .cost-val {
+      font-size: 15px;
+      font-weight: 800;
+      color: #4ade80;
+    }
+    .exit-btn {
+      width: 100%;
+      background: #ef4444;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .exit-btn:hover {
+      background: #dc2626;
+    }
+    .banner-body {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow: hidden;
+      text-align: left;
+    }
+    .banner-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+    .banner-text {
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      color: white;
+    }
+    .dismiss-btn {
+      background: white;
+      color: #b91c1c;
+      border: none;
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform 0.15s ease;
+      align-self: center;
+    }
+    .dismiss-btn:hover {
+      transform: scale(1.05);
+    }
+  </style>
+</head>
+<body>
+  <div id="dynamic-island-container" class="compact">
+    <div class="notch-content"></div>
+    <div class="evaluating-content">
+      <div class="compact-pill-layout" style="color: #38bdf8; gap: 8px;">
+        <div class="spinner"></div>
+        <span>Checking safety...</span>
+      </div>
+    </div>
+    <div class="compact-content">
+      <div class="compact-pill-layout">
+        <div class="status-dot"></div>
+        <span id="compact-time">00:00:00</span>
+      </div>
+    </div>
+    <div class="card-content">
+      <div class="card-grid">
+        <div class="card-header">
+          <span class="cust-name" id="card-username">Walk-in</span>
+          <span class="mode-badge" id="card-mode">Prepaid</span>
+        </div>
+        <div class="card-body">
+          <div class="card-info">
+            <div class="info-label">Remaining: <span id="card-time" class="info-val">00:00:00</span></div>
+            <div class="info-label">Started: <span id="card-start" class="info-val">00:00</span></div>
+          </div>
+          <div class="card-cost">
+            <div class="cost-label">Accrued</div>
+            <div class="cost-val" id="card-cost-val">$0.00</div>
+          </div>
+        </div>
+        <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
+      </div>
+    </div>
+    <div class="banner-content">
+      <div class="banner-body">
+        <div class="banner-title">Alert from Operator</div>
+        <div class="banner-text" id="banner-message-text">Message placeholder</div>
+      </div>
+      <button class="dismiss-btn" onclick="dismissBanner()">OK</button>
+    </div>
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+    let session = ${sessionJson};
+    let isHovered = false;
+    let isFullscreen = false;
+    let operatorMessage = '';
+    let isEvaluating = false;
+
+    const container = document.getElementById('dynamic-island-container');
+
+    container.addEventListener('mouseenter', () => {
+      if (operatorMessage || isEvaluating) return;
+      isHovered = true;
+      updateState();
+    });
+
+    container.addEventListener('mouseleave', () => {
+      isHovered = false;
+      updateState();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      const rect = container.getBoundingClientRect();
+      const isInside = (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
+      ipcRenderer.send('island-mouse', !isInside);
+    });
+
+    function updateState() {
+      if (operatorMessage) {
+        container.className = 'banner';
+      } else if (isEvaluating) {
+        container.className = 'evaluating';
+      } else if (isHovered) {
+        container.className = 'card';
+      } else if (isFullscreen) {
+        container.className = 'notch';
+      } else {
+        container.className = 'compact';
+      }
+    }
+
+    function formatTime(seconds) {
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = seconds % 60;
+      return [
+        h.toString().padStart(2, '0'),
+        m.toString().padStart(2, '0'),
+        s.toString().padStart(2, '0')
+      ].join(':');
+    }
+
+    function updateUI() {
+      if (!session) return;
+      
+      const now = Date.now();
+      const startMs = new Date(session.startTime).getTime();
+      const elapsedSec = Math.max(0, Math.floor((now - startMs) / 1000));
+      
+      let timeStr = '';
+      let costStr = '$0.00';
+      
+      if (session.mode === 'prepaid') {
+        const totalDurationSec = (session.durationMinutes || 0) * 60;
+        const remainingSec = Math.max(0, totalDurationSec - elapsedSec);
+        timeStr = formatTime(remainingSec);
+        costStr = session.planPrice ? '$' + Number(session.planPrice).toFixed(2) : '$0.00';
+        
+        const labelEl = document.querySelector('.card-info .info-label:nth-child(1)');
+        if (labelEl) labelEl.innerHTML = 'Remaining: <span id="card-time" class="info-val">' + timeStr + '</span>';
+      } else {
+        timeStr = formatTime(elapsedSec);
+        const hourlyRate = session.planPrice || 5.0;
+        const accruedCost = (elapsedSec / 3600) * hourlyRate;
+        costStr = '$' + accruedCost.toFixed(2);
+
+        const labelEl = document.querySelector('.card-info .info-label:nth-child(1)');
+        if (labelEl) labelEl.innerHTML = 'Time Used: <span id="card-time" class="info-val">' + timeStr + '</span>';
+      }
+      
+      const compactTimeEl = document.getElementById('compact-time');
+      if (compactTimeEl) compactTimeEl.innerText = timeStr;
+      
+      const cardTimeEl = document.getElementById('card-time');
+      if (cardTimeEl) cardTimeEl.innerText = timeStr;
+      
+      const cardCostEl = document.getElementById('card-cost-val');
+      if (cardCostEl) cardCostEl.innerText = costStr;
+
+      const cardStartEl = document.getElementById('card-start');
+      if (cardStartEl) {
+        const d = new Date(session.startTime);
+        cardStartEl.innerText = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      }
+
+      const cardModeEl = document.getElementById('card-mode');
+      if (cardModeEl) {
+        cardModeEl.innerText = session.mode;
+        cardModeEl.style.background = session.mode === 'prepaid' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(16, 185, 129, 0.3)';
+      }
+
+      const username = session.user || 'Guest';
+      const cardUserEl = document.getElementById('card-username');
+      if (cardUserEl) cardUserEl.innerText = username;
+    }
+
+    function requestExitSession() {
+      ipcRenderer.send('exit-session-request');
+    }
+
+    function dismissBanner() {
+      operatorMessage = '';
+      updateState();
+    }
+
+    ipcRenderer.on('sync-session-data', (event, updatedSession) => {
+      session = { ...session, ...updatedSession };
+      updateUI();
+    });
+
+    ipcRenderer.on('set-fullscreen-state', (event, isFS) => {
+      isFullscreen = isFS;
+      updateState();
+    });
+
+    ipcRenderer.on('set-evaluating-state', (event, evaluating) => {
+      isEvaluating = evaluating;
+      updateState();
+    });
+
+    ipcRenderer.on('show-message', (event, msg) => {
+      operatorMessage = msg;
+      const msgEl = document.getElementById('banner-message-text');
+      if (msgEl) msgEl.innerText = msg;
+      updateState();
+    });
+
+    const resizeObserver = new ResizeObserver(entries => {
+      for (let entry of entries) {
+        const { width, height } = entry.contentRect;
+        ipcRenderer.send('resize-island', { width: Math.ceil(width) + 40, height: Math.ceil(height) + 40 });
+      }
+    });
+    resizeObserver.observe(container);
+
+    setInterval(updateUI, 1000);
+    updateUI();
+    updateState();
+  </script>
+</body>
+</html>`;
+}

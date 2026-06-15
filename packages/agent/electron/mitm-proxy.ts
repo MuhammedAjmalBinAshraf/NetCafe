@@ -51,6 +51,78 @@ function extractSearchQuery(hostname: string, urlPath: string): string | null {
   return null;
 }
 
+function getBlockPageHtml(query: string): string {
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Blocked by NetCafe Safety Guard</title>
+  <style>
+    body {
+      background-color: #0f172a;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background-color: #1e293b;
+      border: 1px solid #ef4444;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      text-align: center;
+    }
+    .icon {
+      color: #ef4444;
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 12px 0;
+      color: #f87171;
+    }
+    p {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      margin: 0 0 20px 0;
+    }
+    .query-box {
+      background-color: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-family: monospace;
+      font-size: 14px;
+      color: #ef4444;
+      word-break: break-all;
+      margin-bottom: 24px;
+    }
+    .footer {
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⚠️</div>
+    <h1>Search Query Blocked</h1>
+    <p>The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.</p>
+    <div class="query-box">"${query}"</div>
+    <div class="footer">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+  </div>
+</body>
+</html>`;
+}
+
 export class MitmProxy {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private caKey!: any;
@@ -63,7 +135,7 @@ export class MitmProxy {
 
   constructor(
     private readonly dataDir: string,
-    private readonly onQuery: (query: string) => void,
+    private readonly onQuery: (query: string) => Promise<boolean>,
     private readonly log: (msg: string) => void
   ) {}
 
@@ -198,13 +270,26 @@ export class MitmProxy {
 
   // ─── Proxy Server ─────────────────────────────────────────────────────────
 
-  private handleHttp(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private async handleHttp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
       const parsed  = new URL(req.url || '', 'http://localhost');
       const query   = extractSearchQuery(parsed.hostname, parsed.pathname + parsed.search);
       if (query) {
         this.log(`[Proxy] HTTP query: "${query}"`);
-        this.onQuery(query);
+        try {
+          const allowed = await this.onQuery(query);
+          if (!allowed) {
+            const blockHtml = getBlockPageHtml(query);
+            res.writeHead(200, {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Content-Length': Buffer.byteLength(blockHtml)
+            });
+            res.end(blockHtml);
+            return;
+          }
+        } catch (err: any) {
+          this.log(`[Proxy] HTTP query safety check error: ${err.message}. Allowing.`);
+        }
       }
     } catch { /* ignore */ }
 
@@ -269,7 +354,7 @@ export class MitmProxy {
 
     // Inspect HTTP requests flowing from browser → real server
     let reqBuffer = '';
-    clientTls.on('data', (data: Buffer) => {
+    clientTls.on('data', async (data: Buffer) => {
       try {
         // Parse first line of HTTP request to extract path
         reqBuffer += data.toString('utf8', 0, Math.min(data.length, 2048));
@@ -282,11 +367,37 @@ export class MitmProxy {
             const query = extractSearchQuery(hostname, match[1]);
             if (query) {
               this.log(`[Proxy] 🔍 HTTPS query intercepted (${hostname}): "${query}"`);
-              this.onQuery(query);
+              clientTls.pause();
+              try {
+                const allowed = await this.onQuery(query);
+                if (!allowed) {
+                  const blockHtml = getBlockPageHtml(query);
+                  const httpResponse = [
+                    'HTTP/1.1 200 OK',
+                    'Content-Type: text/html; charset=utf-8',
+                    `Content-Length: ${Buffer.byteLength(blockHtml)}`,
+                    'Connection: close',
+                    '',
+                    blockHtml
+                  ].join('\r\n');
+                  if (!clientTls.destroyed) {
+                    clientTls.write(httpResponse);
+                    clientTls.end();
+                  }
+                  realSocket.end();
+                  return;
+                }
+              } catch (err: any) {
+                this.log(`[Proxy] Safety check error: ${err.message}. Allowing query for safety fallback.`);
+              } finally {
+                clientTls.resume();
+              }
             }
           }
         }
-      } catch { /* ignore parse errors */ }
+      } catch (err: any) {
+        this.log(`[Proxy] Error parsing request data: ${err.message}`);
+      }
 
       if (!realSocket.destroyed) realSocket.write(data);
     });

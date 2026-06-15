@@ -135,6 +135,25 @@ const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: 
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
 const latestScreenFrames = new Map<number, string>()
 let activeMirrorMachineId: number | null = null;
+let activeFullscreenMachineId: number | null = null;
+
+function isLocalIp(ip?: string): boolean {
+  if (!ip) return false
+  const normalized = ip.trim().toLowerCase()
+  if (normalized === '127.0.0.1' || normalized === '::1' || normalized === '::ffff:127.0.0.1') {
+    return true
+  }
+  const interfaces = os.networkInterfaces()
+  for (const name of Object.keys(interfaces)) {
+    for (const net of interfaces[name] || []) {
+      if (net.address && net.address.toLowerCase() === normalized) {
+        return true
+      }
+    }
+  }
+  return false
+}
+
 const serverLogsCache: { timestamp: string, message: string }[] = []
 
 function logToUI(msg: string) {
@@ -234,6 +253,45 @@ function handleClientMessage(socket: net.Socket, data: any) {
     // Send current active block rules to this client
     const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
     socket.write(JSON.stringify({ command: 'update-blockrules', rules }) + '\n')
+
+    // Look up active session
+    const activeSession = db.prepare(`
+      SELECT s.*, p.duration_minutes as plan_duration, p.price
+      FROM sessions s
+      LEFT JOIN plans p ON s.plan_id = p.id
+      WHERE s.machine_id = ? AND s.end_time IS NULL
+    `).get(machine.id)
+
+    if (activeSession) {
+      socket.write(JSON.stringify({
+        command: 'unlock',
+        user: activeSession.customer_name || 'Guest',
+        session: {
+          startTime: activeSession.start_time,
+          mode: activeSession.mode || 'postpaid',
+          durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
+          planPrice: activeSession.price || null,
+          customDuration: activeSession.custom_duration || null
+        }
+      }) + '\n')
+    } else {
+      socket.write(JSON.stringify({ command: 'lock' }) + '\n')
+    }
+
+    // Send mirror quality setting
+    let highRes = false
+    let ultraRes = false
+    if (Number(machine.id) === activeFullscreenMachineId) {
+      highRes = true
+      ultraRes = true
+    } else if (Number(machine.id) === activeMirrorMachineId) {
+      highRes = true
+      ultraRes = false
+    }
+    socket.write(JSON.stringify({
+      command: 'set-mirror-quality',
+      payload: { highRes, ultraRes }
+    }) + '\n')
 
     broadcastMachines()
   }
@@ -444,6 +502,101 @@ function handleClientMessage(socket: net.Socket, data: any) {
       porn: filterPorn, violence: filterViolence, selfHarm: filterSelfHarm, illegal: filterIllegal, customTerms
     })
   }
+  else if (data.type === 'query-check-request') {
+    const machineId = clients.get(socket)
+    if (!machineId || !db) return
+    const query: string = data.payload?.query || ''
+    const requestId: string = data.payload?.requestId || ''
+    if (!query || query.length < 2) {
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+      }
+      return
+    }
+
+    const ts = new Date().toLocaleTimeString('en-GB', { hour12: false })
+    const emitLog = (level: 'info' | 'warn' | 'block' | 'allow', message: string) => {
+      logToUI(`Safety Guard (Check): ${message}`)
+      if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level, message, machineId: Number(machineId), query })
+    }
+
+    emitLog('info', `[MITM] Check request — Machine ${machineId}: "${query}" (ID: ${requestId})`)
+
+    // Layer 1: custom blocked terms (instant)
+    let customTerms: string[] = []
+    try { customTerms = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get() as any)?.value || '[]') } catch {}
+    const lowerQ = query.toLowerCase()
+    const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
+    if (hit) {
+      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — locking Machine ${machineId}`)
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`)
+      sendCommandToMachine(Number(machineId), { command: 'lock' })
+      sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: blocked search detected ("${hit}").` })
+      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"` })
+      broadcastMachines()
+
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
+      }
+      return
+    }
+
+    // Layer 2: Gemini AI check (only if API key configured)
+    const apiKey = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
+    if (!apiKey) {
+      emitLog('allow', `[MITM] LAYER 2 SKIPPED — No Gemini API key configured`)
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+      }
+      return
+    }
+
+    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false'
+    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false'
+    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false'
+    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false'
+
+    // Run AI evaluation asynchronously so we don't block the main event loop
+    (async () => {
+      try {
+        emitLog('info', `[MITM] LAYER 2: Evaluating query safety via Gemini for Machine ${machineId}: "${query}"`)
+        const result = await evaluateQuerySafety(query, apiKey, {
+          porn: filterPorn, violence: filterViolence, selfHarm: filterSelfHarm, illegal: filterIllegal
+        }, customTerms, emitLog)
+
+        if (result.isUnsafe) {
+          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — Category: "${result.category}" — locking Machine ${machineId}`)
+          db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)")
+            .run(Number(machineId), query, result.category || 'Unsafe content')
+          sendCommandToMachine(Number(machineId), { command: 'lock' })
+          sendCommandToMachine(Number(machineId), { 
+            command: 'message', 
+            payload: `Your terminal has been locked due to a safety violation. Prohibited search query detected: "${query}" (Safety Category: ${result.category || 'Inappropriate Content'}).`
+          })
+          if (mainWindow) {
+            mainWindow.webContents.send('safety-alert-triggered', {
+              machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString()
+            })
+          }
+          broadcastMachines()
+          if (!socket.destroyed) {
+            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
+          }
+        } else {
+          emitLog('allow', `[MITM] LAYER 2 ALLOWED — Query "${query}" is safe`)
+          if (!socket.destroyed) {
+            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+          }
+        }
+      } catch (err: any) {
+        emitLog('warn', `[MITM] LAYER 2 ERROR: ${err.message}. Allowing by default.`)
+        console.error('Safety check failed:', err)
+        if (!socket.destroyed) {
+          socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+        }
+      }
+    })()
+  }
   else if (data.type === 'user-login') {
     const machineId = clients.get(socket)
     if (machineId && db) {
@@ -467,6 +620,20 @@ function handleClientMessage(socket: net.Socket, data: any) {
         socket.write(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, duration: user.balance_minutes }) + '\n')
         broadcastMachines()
       }
+    }
+  }
+  else if (data.type === 'client-request-close') {
+    const machineId = clients.get(socket)
+    if (machineId && db) {
+      db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
+      db.prepare(`
+        UPDATE sessions 
+        SET end_time = datetime('now'), 
+            status = 'completed' 
+        WHERE machine_id = ? AND end_time IS NULL
+      `).run(machineId)
+      socket.write(JSON.stringify({ command: 'lock' }) + '\n')
+      broadcastMachines()
     }
   }
 }
@@ -592,6 +759,12 @@ function sendCommandToMachine(machineId: number | string, cmd: any) {
     if (Number(mId) === targetId) {
       found = true
       if (socket.writable && !socket.destroyed) {
+        if (cmd && (cmd.command === 'poweroff' || cmd.command === 'restart')) {
+          if (isLocalIp(socket.remoteAddress)) {
+            logToUI(`Blocked '${cmd.command}' command for local machine (Server host)`)
+            return
+          }
+        }
         try {
           socket.write(JSON.stringify(cmd) + '\n')
           logToUI(`Successfully sent command '${cmd.command}' to machine ID ${machineId} (${socket.remoteAddress || 'unknown'}:${socket.remotePort || 'unknown'})`)
@@ -825,7 +998,30 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
 
   db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
   logToUI(`Opening session on machine ID ${machineId} for user ${customerName || 'Walk-in'}`)
-  sendCommandToMachine(machineId, { command: 'unlock', user: customerName || 'Guest' })
+
+  const activeSession = db.prepare(`
+    SELECT s.*, p.duration_minutes as plan_duration, p.price
+    FROM sessions s
+    LEFT JOIN plans p ON s.plan_id = p.id
+    WHERE s.machine_id = ? AND s.end_time IS NULL
+  `).get(machineId)
+
+  if (activeSession) {
+    sendCommandToMachine(machineId, {
+      command: 'unlock',
+      user: activeSession.customer_name || 'Guest',
+      session: {
+        startTime: activeSession.start_time,
+        mode: activeSession.mode || 'postpaid',
+        durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
+        planPrice: activeSession.price || null,
+        customDuration: activeSession.custom_duration || null
+      }
+    })
+  } else {
+    sendCommandToMachine(machineId, { command: 'unlock', user: customerName || 'Guest' })
+  }
+  
   broadcastMachines()
 })
 
@@ -839,7 +1035,30 @@ ipcMain.handle('pause-session', (_, machineId) => {
 ipcMain.handle('resume-session', (_, machineId) => {
   db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
   db.prepare("UPDATE sessions SET status = 'active' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
-  sendCommandToMachine(machineId, { command: 'unlock' })
+
+  const activeSession = db.prepare(`
+    SELECT s.*, p.duration_minutes as plan_duration, p.price
+    FROM sessions s
+    LEFT JOIN plans p ON s.plan_id = p.id
+    WHERE s.machine_id = ? AND s.end_time IS NULL
+  `).get(machineId)
+
+  if (activeSession) {
+    sendCommandToMachine(machineId, {
+      command: 'unlock',
+      user: activeSession.customer_name || 'Guest',
+      session: {
+        startTime: activeSession.start_time,
+        mode: activeSession.mode || 'postpaid',
+        durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
+        planPrice: activeSession.price || null,
+        customDuration: activeSession.custom_duration || null
+      }
+    })
+  } else {
+    sendCommandToMachine(machineId, { command: 'unlock' })
+  }
+
   broadcastMachines()
 })
 
@@ -856,6 +1075,27 @@ ipcMain.handle('extend-session', (_, machineId, extraMinutes) => {
       const newDuration = currentDuration + extraMinutes
       db.prepare("UPDATE sessions SET custom_duration = ? WHERE id = ?").run(newDuration, session.id)
     }
+
+    const activeSession = db.prepare(`
+      SELECT s.*, p.duration_minutes as plan_duration, p.price
+      FROM sessions s
+      LEFT JOIN plans p ON s.plan_id = p.id
+      WHERE s.machine_id = ? AND s.end_time IS NULL
+    `).get(machineId)
+
+    if (activeSession) {
+      sendCommandToMachine(machineId, {
+        command: 'sync-session',
+        session: {
+          startTime: activeSession.start_time,
+          mode: activeSession.mode || 'postpaid',
+          durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
+          planPrice: activeSession.price || null,
+          customDuration: activeSession.custom_duration || null
+        }
+      })
+    }
+
     broadcastMachines()
     return { success: true }
   }
@@ -925,6 +1165,9 @@ ipcMain.handle('message-all', (_, message) => {
 ipcMain.handle('power-all', () => {
   const payload = JSON.stringify({ command: 'poweroff' })
   for (const [socket] of clients.entries()) {
+    if (isLocalIp(socket.remoteAddress)) {
+      continue
+    }
     try {
       socket.write(payload + '\n')
     } catch {}
@@ -1392,6 +1635,7 @@ ipcMain.handle('set-active-mirror', (_, machineId: number | null) => {
 
 ipcMain.handle('set-fullscreen-mirror', (_, machineId: number | null) => {
   const targetId = machineId !== null ? Number(machineId) : null
+  activeFullscreenMachineId = targetId
   if (targetId !== null) {
     sendCommandToMachine(targetId, { command: 'set-mirror-quality', payload: { highRes: true, ultraRes: true } })
     logToUI(`Ultra-res mirror activated for machine ${targetId}`)

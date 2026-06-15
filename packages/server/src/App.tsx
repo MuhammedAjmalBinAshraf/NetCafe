@@ -555,13 +555,17 @@ export default function App() {
   }
 
   const handlePower = async (machineId: number) => {
-    if (confirm('Are you sure you want to shutdown this machine?')) {
+    const machine = machines.find((m: any) => m.id === machineId)
+    const machineName = machine ? machine.name : `PC ${machineId}`
+    if (confirm(`Are you sure you want to shutdown terminal "${machineName}"?`)) {
       if (window.ipcRenderer) await window.ipcRenderer.invoke('power-machine', machineId)
     }
   }
 
   const handleRestart = async (machineId: number) => {
-    if (confirm('Are you sure you want to restart this machine?')) {
+    const machine = machines.find((m: any) => m.id === machineId)
+    const machineName = machine ? machine.name : `PC ${machineId}`
+    if (confirm(`Are you sure you want to restart terminal "${machineName}"?`)) {
       if (window.ipcRenderer) await window.ipcRenderer.invoke('restart-machine', machineId)
     }
   }
