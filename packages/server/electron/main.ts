@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { WebSocketServer } from 'ws'
+import net from 'net'
 import fs from 'fs'
 import Database from 'better-sqlite3'
 import os from 'os'
@@ -59,9 +59,9 @@ function setupDatabase() {
   } catch {}
 }
 
-// WebSocket Server & Metrics Maps
-const wss = new WebSocketServer({ port: 9000 })
-const clients = new Map<any, number>() // ws -> machine.id
+// TCP Server & Metrics Maps
+const tcpServer = net.createServer()
+const clients = new Map<net.Socket, number>() // socket -> machine.id
 const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number }>()
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
 
@@ -69,100 +69,113 @@ function broadcastBlockRulesToClients() {
   if (!db) return
   const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
   const payload = JSON.stringify({ command: 'update-blockrules', rules })
-  for (const [ws, _] of clients.entries()) {
+  for (const [socket] of clients.entries()) {
     try {
-      ws.send(payload)
+      socket.write(payload + '\n')
     } catch {}
   }
 }
 
-wss.on('connection', (ws) => {
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message.toString())
-      if (data.type === 'register') {
-        const payload = data.payload
-        let machine = db.prepare("SELECT * FROM machines WHERE mac_address = ?").get(payload.mac_address)
-        if (!machine) {
-          const stmt = db.prepare("INSERT INTO machines (name, mac_address, ip_address, status) VALUES (?, ?, ?, ?)")
-          const info = stmt.run(payload.name || 'New PC', payload.mac_address, payload.ip_address, 'available')
-          machine = { id: info.lastInsertRowid }
-        } else {
-          db.prepare("UPDATE machines SET ip_address = ?, status = ? WHERE id = ?").run(payload.ip_address, 'available', machine.id)
-        }
-        clients.set(ws, machine.id)
-        
-        // Send current active block rules to this client
-        const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
-        ws.send(JSON.stringify({ command: 'update-blockrules', rules }))
-        
+function handleClientMessage(socket: net.Socket, data: any) {
+  if (data.type === 'register') {
+    const payload = data.payload
+    let machine = db.prepare("SELECT * FROM machines WHERE mac_address = ?").get(payload.mac_address)
+    if (!machine) {
+      const stmt = db.prepare("INSERT INTO machines (name, mac_address, ip_address, status) VALUES (?, ?, ?, ?)")
+      const info = stmt.run(payload.name || 'New PC', payload.mac_address, payload.ip_address, 'available')
+      machine = { id: info.lastInsertRowid }
+    } else {
+      db.prepare("UPDATE machines SET ip_address = ?, status = ? WHERE id = ?").run(payload.ip_address, 'available', machine.id)
+    }
+    clients.set(socket, machine.id)
+
+    // Send current active block rules to this client
+    const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
+    socket.write(JSON.stringify({ command: 'update-blockrules', rules }) + '\n')
+
+    broadcastMachines()
+  }
+  else if (data.type === 'metrics') {
+    const machineId = clients.get(socket)
+    if (machineId) {
+      clientMetrics.set(machineId, {
+        cpu: data.payload.cpu || 0,
+        ram: data.payload.ram || 0,
+        activeWindow: data.payload.activeWindow || '',
+        os: data.payload.os || 'Windows',
+        ip: data.payload.ip || socket.remoteAddress || '',
+        uptime: data.payload.uptime || 0
+      })
+      broadcastMachines()
+    }
+  }
+  else if (data.type === 'screenshot-response') {
+    const machineId = clients.get(socket)
+    if (machineId) {
+      const pending = pendingScreenshots.get(machineId)
+      if (pending) {
+        clearTimeout(pending.timeout)
+        pending.resolve(data.payload)
+        pendingScreenshots.delete(machineId)
+      }
+    }
+  }
+  else if (data.type === 'user-login') {
+    const machineId = clients.get(socket)
+    if (machineId && db) {
+      const { username, password } = data.payload || {}
+      const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password)
+      if (!user) {
+        socket.write(JSON.stringify({ command: 'login-fail', message: 'Invalid username or password.' }) + '\n')
+      } else if ((user.balance_minutes || 0) <= 0) {
+        socket.write(JSON.stringify({ command: 'login-fail', message: 'No balance remaining. Please top up at the front desk.' }) + '\n')
+      } else {
+        // Close any existing open session for this machine
+        db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
+        // Open a new prepaid session using the user's full balance
+        db.prepare(`
+          INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration)
+          VALUES (?, ?, NULL, datetime('now'), 'prepaid', 'active', ?)
+        `).run(machineId, user.display_name || user.username, user.balance_minutes)
+        db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
+        // Deduct balance
+        db.prepare('UPDATE users SET balance_minutes = 0 WHERE id = ?').run(user.id)
+        socket.write(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, duration: user.balance_minutes }) + '\n')
         broadcastMachines()
       }
-      else if (data.type === 'metrics') {
-        const machineId = clients.get(ws)
-        if (machineId) {
-          clientMetrics.set(machineId, {
-            cpu: data.payload.cpu || 0,
-            ram: data.payload.ram || 0,
-            activeWindow: data.payload.activeWindow || '',
-            os: data.payload.os || 'Windows',
-            ip: data.payload.ip || (ws as any)._socket?.remoteAddress || '',
-            uptime: data.payload.uptime || 0
-          })
-          broadcastMachines()
-        }
+    }
+  }
+}
+
+tcpServer.on('connection', (socket) => {
+  let buffer = ''
+  socket.setEncoding('utf8')
+  socket.on('data', (chunk) => {
+    buffer += chunk
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      if (!line.trim()) continue
+      try {
+        const data = JSON.parse(line)
+        handleClientMessage(socket, data)
+      } catch (e) {
+        console.error('TCP parse error:', e)
       }
-      else if (data.type === 'screenshot-response') {
-        const machineId = clients.get(ws)
-        if (machineId) {
-          const pending = pendingScreenshots.get(machineId)
-          if (pending) {
-            clearTimeout(pending.timeout)
-            pending.resolve(data.payload)
-            pendingScreenshots.delete(machineId)
-          }
-        }
-      }
-      else if (data.type === 'user-login') {
-        const machineId = clients.get(ws)
-        if (machineId && db) {
-          const { username, password } = data.payload || {}
-          const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password)
-          if (!user) {
-            ws.send(JSON.stringify({ command: 'login-fail', message: 'Invalid username or password.' }))
-          } else if ((user.balance_minutes || 0) <= 0) {
-            ws.send(JSON.stringify({ command: 'login-fail', message: 'No balance remaining. Please top up at the front desk.' }))
-          } else {
-            // Close any existing open session for this machine
-            db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
-            // Open a new prepaid session using the user's full balance
-            db.prepare(`
-              INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration)
-              VALUES (?, ?, NULL, datetime('now'), 'prepaid', 'active', ?)
-            `).run(machineId, user.display_name || user.username, user.balance_minutes)
-            db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
-            // Deduct balance
-            db.prepare('UPDATE users SET balance_minutes = 0 WHERE id = ?').run(user.id)
-            ws.send(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, duration: user.balance_minutes }))
-            broadcastMachines()
-          }
-        }
-      }
-    } catch (e) {
-      console.error(e)
     }
   })
-
-  ws.on('close', () => {
-    const machineId = clients.get(ws)
+  socket.on('close', () => {
+    const machineId = clients.get(socket)
     if (machineId) {
       db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machineId)
-      clients.delete(ws)
+      clients.delete(socket)
       clientMetrics.delete(machineId)
       broadcastMachines()
     }
   })
+  socket.on('error', () => { try { socket.destroy() } catch {} })
 })
+tcpServer.listen(9000, '0.0.0.0', () => { console.log('TCP server listening on port 9000') })
 
 function getMachinesData() {
   if (!db) return []
@@ -199,10 +212,10 @@ function broadcastMachines() {
 }
 
 function sendCommandToMachine(machineId: number, cmd: any) {
-  for (const [ws, mId] of clients.entries()) {
+  for (const [socket, mId] of clients.entries()) {
     if (mId === machineId) {
       try {
-        ws.send(JSON.stringify(cmd))
+        socket.write(JSON.stringify(cmd) + '\n')
       } catch {}
       break
     }
@@ -259,7 +272,7 @@ function startUdpBroadcast() {
       const serverIP = getLanIPAddress();
       const payload = JSON.stringify({
         service: 'netcafe-server',
-        wsUrl: `ws://${serverIP}:9000`
+        wsUrl: `tcp://${serverIP}:9000`
       });
       socket.send(payload, 0, payload.length, 9090, '255.255.255.255');
     } catch (err) {
@@ -437,9 +450,9 @@ ipcMain.handle('remove-bandwidth', (_, machineId) => {
 
 // Global Actions
 ipcMain.handle('lock-all', () => {
-  for (const [ws, machineId] of clients.entries()) {
+  for (const [socket, machineId] of clients.entries()) {
     try {
-      ws.send(JSON.stringify({ command: 'lock' }))
+      socket.write(JSON.stringify({ command: 'lock' }) + '\n')
       db.prepare("UPDATE machines SET status = 'paused' WHERE id = ?").run(machineId)
       db.prepare("UPDATE sessions SET status = 'paused' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
     } catch {}
@@ -449,18 +462,18 @@ ipcMain.handle('lock-all', () => {
 
 ipcMain.handle('message-all', (_, message) => {
   const payload = JSON.stringify({ command: 'message', payload: message })
-  for (const [ws, _] of clients.entries()) {
+  for (const [socket] of clients.entries()) {
     try {
-      ws.send(payload)
+      socket.write(payload + '\n')
     } catch {}
   }
 })
 
 ipcMain.handle('power-all', () => {
   const payload = JSON.stringify({ command: 'poweroff' })
-  for (const [ws, _] of clients.entries()) {
+  for (const [socket] of clients.entries()) {
     try {
-      ws.send(payload)
+      socket.write(payload + '\n')
     } catch {}
   }
 })
@@ -586,27 +599,27 @@ ipcMain.handle('get-reports-summary', () => {
 // Async Screenshot Request
 ipcMain.handle('capture-screenshot', async (_, machineId) => {
   return new Promise((resolve, reject) => {
-    let clientWs: any = null
-    for (const [ws, mId] of clients.entries()) {
+    let clientSocket: net.Socket | null = null
+    for (const [socket, mId] of clients.entries()) {
       if (mId === machineId) {
-        clientWs = ws
+        clientSocket = socket
         break
       }
     }
-    
-    if (!clientWs) {
+
+    if (!clientSocket) {
       return reject(new Error('Machine is offline'))
     }
-    
+
     const timeout = setTimeout(() => {
       pendingScreenshots.delete(machineId)
       reject(new Error('Screenshot request timed out'))
     }, 7000)
-    
+
     pendingScreenshots.set(machineId, { resolve, reject, timeout })
-    
+
     try {
-      clientWs.send(JSON.stringify({ command: 'capture-screenshot' }))
+      clientSocket.write(JSON.stringify({ command: 'capture-screenshot' }) + '\n')
     } catch (e) {
       clearTimeout(timeout)
       pendingScreenshots.delete(machineId)

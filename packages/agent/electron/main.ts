@@ -1,14 +1,14 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu } from 'electron';
 import { autoUpdater } from 'electron-updater';
-import WebSocket from 'ws';
+import net from 'net';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { exec, spawn } from 'child_process';
+import { exec, execSync, spawn } from 'child_process';
 import dgram from 'dgram';
 
 let lockWindow: BrowserWindow | null = null;
-let ws: WebSocket | null = null;
+let tcpSocket: net.Socket | null = null;
 let isLocked = true;
 let activeBlockRules: any[] = [];
 let blockInterval: NodeJS.Timeout | null = null;
@@ -18,8 +18,17 @@ let pendingLoginResolve: ((result: { success: boolean; message?: string }) => vo
 let currentUser: string | null = null;
 
 const configPath = path.join(app.getPath('userData'), 'config.json');
-let serverUrl = 'ws://127.0.0.1:9000';
+let serverUrl = '127.0.0.1:9000';   // display string (host:port)
+let serverHost = '127.0.0.1';
+let serverPort = 9000;
 let machineId = os.hostname();
+
+// ─── Address helpers ───────────────────────────────────────────────────────────
+function parseServerAddress(raw: string): { host: string; port: number } {
+  let s = raw.replace(/^(ws|wss|tcp):\/\//, '');
+  const [host, portStr] = s.split(':');
+  return { host: host || '127.0.0.1', port: parseInt(portStr || '9000', 10) || 9000 };
+}
 
 function loadConfig() {
   try {
@@ -29,10 +38,15 @@ function loadConfig() {
     }
     if (fs.existsSync(configPath)) {
       const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (data.serverUrl) serverUrl = data.serverUrl;
+      if (data.serverUrl) {
+        const parsed = parseServerAddress(data.serverUrl);
+        serverHost = parsed.host;
+        serverPort = parsed.port;
+        serverUrl = `${serverHost}:${serverPort}`;
+      }
       if (data.machineId) machineId = data.machineId;
     } else {
-      fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
+      fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
     }
   } catch (e) {
     console.error('Failed to load/write config:', e);
@@ -363,7 +377,7 @@ function createLockWindow() {
     <div class="walk-in-hint">Visit the front desk to start a walk-in session.</div>
 
     <div class="info-panel">
-      <div class="info-line"><span class="info-label">Server</span><span class="info-value" id="infoServerUrl">${serverUrl}</span></div>
+      <div class="info-line"><span class="info-label">Server</span><span class="info-value" id="infoServerUrl">tcp://${serverHost}:${serverPort}</span></div>
       <div class="info-line"><span class="info-label">Terminal</span><span class="info-value">${machineId}</span></div>
       <div class="info-line"><span class="info-label">Config</span><span class="info-value">${configPath}</span></div>
     </div>
@@ -400,10 +414,10 @@ function createLockWindow() {
       <!-- Config Form (hidden until PIN passes) -->
       <div id="configForm" style="display:none;">
         <div style="margin-bottom:0.9rem;">
-          <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Server URL</label>
-          <input type="text" id="cfgServerUrl" placeholder="ws://192.168.1.10:9000" autocomplete="off"
+          <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Server Address</label>
+          <input type="text" id="cfgServerUrl" placeholder="e.g. 192.168.20.36:9000" autocomplete="off"
             style="width:100%;padding:0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.88rem;outline:none;" />
-          <div style="margin-top:0.3rem;font-size:0.7rem;color:#475569;">WebSocket address of the NetCafe server on your LAN</div>
+          <div style="margin-top:0.3rem;font-size:0.7rem;color:#475569;">TCP address of the NetCafe server on your LAN</div>
         </div>
         <div style="margin-bottom:1.1rem;">
           <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Terminal Name (Machine ID)</label>
@@ -412,7 +426,7 @@ function createLockWindow() {
           <div style="margin-top:0.3rem;font-size:0.7rem;color:#475569;">Unique name for this terminal shown on the server dashboard</div>
         </div>
         <div id="cfgStatus" style="margin-bottom:0.75rem;padding:0.5rem 0.75rem;border-radius:8px;font-size:0.78rem;display:none;"></div>
-        <div style="display:flex;gap:0.5rem;">
+        <div style="display:flex;gap:0.5rem;margin-bottom:0.75rem;">
           <button id="cfgCancelBtn"
             style="flex:1;padding:0.6rem;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#94a3b8;font-size:0.85rem;font-weight:600;cursor:pointer;">
             Cancel
@@ -421,6 +435,23 @@ function createLockWindow() {
             style="flex:2;padding:0.6rem;background:linear-gradient(135deg,#3b82f6,#6366f1);border:none;border-radius:10px;color:white;font-size:0.88rem;font-weight:700;cursor:pointer;">
             Save &amp; Reconnect
           </button>
+        </div>
+
+        <!-- Shell Replacement Section -->
+        <div style="margin-top:0.5rem;padding:0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;">
+          <div style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;margin-bottom:0.5rem;">🔧 Shell Replacement</div>
+          <div id="shellStatusText" style="font-size:0.72rem;color:#475569;">Checking shell status...</div>
+          <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+            <button id="shellInstallBtn"
+              style="flex:1;padding:0.5rem 0.4rem;background:linear-gradient(135deg,#3b82f6,#6366f1);border:none;border-radius:8px;color:white;font-size:0.78rem;font-weight:600;cursor:pointer;">
+              Install as Shell
+            </button>
+            <button id="shellRestoreBtn"
+              style="flex:1;padding:0.5rem 0.4rem;background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;color:#fca5a5;font-size:0.78rem;font-weight:600;cursor:pointer;">
+              Restore Explorer
+            </button>
+          </div>
+          <div id="shellOpStatus" style="margin-top:0.4rem;font-size:0.72rem;display:none;"></div>
         </div>
       </div>
     </div>
@@ -487,6 +518,10 @@ function createLockWindow() {
       const cfgSaveBtn = document.getElementById('cfgSaveBtn');
       const cfgCancelBtn = document.getElementById('cfgCancelBtn');
       const cfgStatus = document.getElementById('cfgStatus');
+      const shellInstallBtn = document.getElementById('shellInstallBtn');
+      const shellRestoreBtn = document.getElementById('shellRestoreBtn');
+      const shellStatusText = document.getElementById('shellStatusText');
+      const shellOpStatus = document.getElementById('shellOpStatus');
 
       const VALID_PINS = ['admin', '9999'];
 
@@ -505,13 +540,22 @@ function createLockWindow() {
         settingsModal.classList.remove('active');
       }
 
-      function showConfigForm() {
+      async function showConfigForm() {
         pinGate.style.display = 'none';
         configForm.style.display = 'block';
         // Pre-fill current values from the info panel
-        cfgServerUrl.value = document.getElementById('infoServerUrl').textContent || '${serverUrl}';
+        cfgServerUrl.value = (document.getElementById('infoServerUrl').textContent || 'tcp://${serverHost}:${serverPort}').replace('tcp://', '');
         cfgMachineId.value = '${machineId}';
         setTimeout(() => cfgServerUrl.focus(), 100);
+        // Load shell status
+        try {
+          const status = await ipcRenderer.invoke('get-shell-status');
+          shellStatusText.textContent = status.isShell
+            ? '\u2705 This app is currently the shell'
+            : '\u26a0\ufe0f Shell is: ' + (status.current || 'explorer.exe');
+        } catch {
+          shellStatusText.textContent = 'Unable to check shell status.';
+        }
       }
 
       settingsTrigger.addEventListener('click', openSettings);
@@ -548,7 +592,7 @@ function createLockWindow() {
         try {
           const result = await ipcRenderer.invoke('save-agent-config', newUrl, newId);
           if (result.success) {
-            cfgStatus.textContent = '✅ Configuration saved! Reconnecting...';
+            cfgStatus.textContent = '\u2705 Configuration saved! Reconnecting...';
             cfgStatus.style.background = 'rgba(16,185,129,0.12)';
             cfgStatus.style.color = '#6ee7b7';
             cfgStatus.style.border = '1px solid rgba(16,185,129,0.2)';
@@ -569,6 +613,39 @@ function createLockWindow() {
           cfgSaveBtn.textContent = 'Save & Reconnect';
         }
       });
+
+      // ── Shell replacement buttons ─────────────────────────────────────────────
+      async function doShellOp(channel, successMsg) {
+        shellInstallBtn.disabled = true;
+        shellRestoreBtn.disabled = true;
+        shellOpStatus.textContent = 'Working...';
+        shellOpStatus.style.color = '#60a5fa';
+        shellOpStatus.style.display = 'block';
+        try {
+          const result = await ipcRenderer.invoke(channel);
+          if (result.success) {
+            shellOpStatus.textContent = successMsg;
+            shellOpStatus.style.color = '#6ee7b7';
+            // Refresh status
+            const status = await ipcRenderer.invoke('get-shell-status');
+            shellStatusText.textContent = status.isShell
+              ? '\u2705 This app is currently the shell'
+              : '\u26a0\ufe0f Shell is: ' + (status.current || 'explorer.exe');
+          } else {
+            shellOpStatus.textContent = 'Failed: ' + (result.error || 'Unknown error');
+            shellOpStatus.style.color = '#fca5a5';
+          }
+        } catch (e) {
+          shellOpStatus.textContent = 'Operation failed.';
+          shellOpStatus.style.color = '#fca5a5';
+        } finally {
+          shellInstallBtn.disabled = false;
+          shellRestoreBtn.disabled = false;
+        }
+      }
+
+      shellInstallBtn.addEventListener('click', () => doShellOp('install-as-shell', '\u2705 Installed as shell. Restart to take effect.'));
+      shellRestoreBtn.addEventListener('click', () => doShellOp('restore-shell', '\u2705 Shell restored to explorer.exe. Restart to take effect.'));
     })();
   </script>
 </body>
@@ -597,10 +674,97 @@ function createLockWindow() {
   startLockEnforcement();
 }
 
+// ─── TCP send helper ───────────────────────────────────────────────────────────
+function sendToServer(data: any) {
+  if (tcpSocket && !tcpSocket.destroyed) {
+    tcpSocket.write(JSON.stringify(data) + '\n');
+  }
+}
+
+// ─── Server message handler ────────────────────────────────────────────────────
+async function handleServerMessage(msg: any) {
+  try {
+    if (msg.command === 'login-success') {
+      // User successfully authenticated via lock screen form
+      if (pendingLoginResolve) {
+        pendingLoginResolve({ success: true });
+      }
+      currentUser = msg.user;
+      isLocked = false;
+      stopLockEnforcement();
+      if (lockWindow) {
+        lockWindow.destroy();
+        lockWindow = null;
+      }
+    } else if (msg.command === 'login-fail') {
+      // User authentication failed
+      if (pendingLoginResolve) {
+        pendingLoginResolve({ success: false, message: msg.message || 'Invalid credentials.' });
+      }
+    } else if (msg.command === 'unlock') {
+      isLocked = false;
+      currentUser = msg.user || null;
+      stopLockEnforcement();
+      if (lockWindow) {
+        lockWindow.destroy();
+        lockWindow = null;
+      }
+    } else if (msg.command === 'lock') {
+      isLocked = true;
+      currentUser = null;
+      if (!lockWindow) {
+        createLockWindow();
+      } else {
+        startLockEnforcement();
+      }
+    } else if (msg.command === 'message') {
+      if (!isLocked) {
+        dialog.showMessageBox({
+          type: 'info',
+          title: 'Message from Operator',
+          message: msg.payload || ''
+        });
+      }
+    } else if (msg.command === 'poweroff') {
+      if (process.platform === 'win32') {
+        exec('shutdown /s /f /t 0');
+      } else {
+        exec('shutdown -h now');
+      }
+    } else if (msg.command === 'restart') {
+      if (process.platform === 'win32') {
+        exec('shutdown /r /f /t 0');
+      } else {
+        exec('reboot');
+      }
+    } else if (msg.command === 'limit-bandwidth') {
+      const rate = msg.payload?.rate || '2mbit';
+      await applyBandwidthLimit(rate);
+    } else if (msg.command === 'remove-bandwidth') {
+      await removeBandwidthLimit();
+    } else if (msg.command === 'capture-screenshot') {
+      try {
+        const base64 = await captureScreen();
+        sendToServer({ type: 'screenshot-response', payload: base64 });
+      } catch (err: any) {
+        console.error(err);
+      }
+    } else if (msg.command === 'update-blockrules') {
+      activeBlockRules = msg.rules || [];
+
+      // Enforce website blocking immediately
+      const domains = activeBlockRules.filter(r => r.type === 'domain').map(r => r.value);
+      applyHostBlocking(domains);
+    }
+  } catch (e) {
+    console.error('handleServerMessage error:', e);
+  }
+}
+
 // ─── IPC: User login bridge ────────────────────────────────────────────────────
 ipcMain.handle('agent-user-login', (_event, username: string, password: string): Promise<{ success: boolean; message?: string }> => {
   return new Promise((resolve) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
+    if (!tcpSocket || tcpSocket.destroyed) {
       resolve({ success: false, message: 'Not connected to server. Please try again.' });
       return;
     }
@@ -613,7 +777,7 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
         resolve({ success: false, message: 'Server did not respond. Please try again.' });
       }
     }, 8000);
-    ws.send(JSON.stringify({ type: 'user-login', payload: { username, password } }));
+    sendToServer({ type: 'user-login', payload: { username, password } });
     // Clear timeout if resolved early
     const origResolve = resolve;
     pendingLoginResolve = (result) => {
@@ -626,34 +790,20 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
 
 ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId: string) => {
   try {
-    let normalizedUrl = newServerUrl.trim();
-    if (!normalizedUrl.startsWith('ws://') && !normalizedUrl.startsWith('wss://')) {
-      normalizedUrl = 'ws://' + normalizedUrl;
-    }
-    
-    // Auto-append port :9000 if not specified
-    try {
-      const parsed = new URL(normalizedUrl);
-      if (!parsed.port) {
-        normalizedUrl = `${parsed.protocol}//${parsed.hostname}:9000${parsed.pathname}${parsed.search}${parsed.hash}`.replace(/\/$/, '');
-      }
-    } catch (e) {
-      if (!/:[0-9]+$/.test(normalizedUrl)) {
-        normalizedUrl = normalizedUrl + ':9000';
-      }
-    }
-
-    serverUrl = normalizedUrl;
+    const { host, port } = parseServerAddress(newServerUrl.trim());
+    serverHost = host;
+    serverPort = port;
+    serverUrl = `${serverHost}:${serverPort}`;
     machineId = newMachineId;
-    fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
-    
+    fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
+
     // Close existing socket and reconnect immediately
-    if (ws) {
+    if (tcpSocket) {
       try {
-        ws.removeAllListeners('close');
-        ws.close();
+        tcpSocket.removeAllListeners('close');
+        tcpSocket.destroy();
       } catch {}
-      ws = null;
+      tcpSocket = null;
     }
     connectToServer();
 
@@ -668,6 +818,48 @@ ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId:
     return { success: false, error: e.message };
   }
 });
+
+// ─── Shell replacement IPC handlers ───────────────────────────────────────────
+ipcMain.handle('install-as-shell', () => {
+  installAsShell();
+  return { success: true };
+});
+
+ipcMain.handle('restore-shell', () => {
+  restoreShell();
+  return { success: true };
+});
+
+ipcMain.handle('get-shell-status', () => {
+  try {
+    const current = execSync('reg query "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell 2>nul').toString();
+    const isShell = current.includes(process.execPath);
+    return { isShell, current };
+  } catch {
+    return { isShell: false, current: 'explorer.exe' };
+  }
+});
+
+// ─── Shell replacement functions ───────────────────────────────────────────────
+function installAsShell() {
+  try {
+    const exePath = process.execPath;
+    // Set shell for current user
+    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "${exePath}" /f`);
+    console.log('Shell replacement installed for current user');
+  } catch (e) {
+    console.error('Failed to install as shell:', e);
+  }
+}
+
+function restoreShell() {
+  try {
+    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "explorer.exe" /f`);
+    console.log('Shell restored to explorer.exe');
+  } catch (e) {
+    console.error('Failed to restore shell:', e);
+  }
+}
 
 // ─── OS metrics Helpers ────────────────────────────────────────────────────────
 function cpuAverage() {
@@ -820,114 +1012,40 @@ function removeBandwidthLimit(): Promise<void> {
   });
 }
 
+// ─── TCP Connection ────────────────────────────────────────────────────────────
 function connectToServer() {
-  let socket: WebSocket;
-  try {
-    socket = new WebSocket(serverUrl);
-    ws = socket;
-  } catch (err) {
-    console.error('WebSocket connection failed synchronously:', err);
-    setTimeout(connectToServer, 5000);
-    return;
-  }
+  const socket = new net.Socket();
+  tcpSocket = socket;
+  let buffer = '';
 
-  socket.on('open', () => {
-    console.log('Connected to server');
-    socket.send(JSON.stringify({
-      type: 'register',
-      payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() }
-    }));
+  socket.connect(serverPort, serverHost, () => {
+    console.log(`Connected to server TCP ${serverHost}:${serverPort}`);
+    sendToServer({ type: 'register', payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() } });
   });
 
-  socket.on('message', async (data) => {
-    try {
-      const msg = JSON.parse(data.toString());
-      if (msg.command === 'login-success') {
-        // User successfully authenticated via lock screen form
-        if (pendingLoginResolve) {
-          pendingLoginResolve({ success: true });
-        }
-        currentUser = msg.user;
-        isLocked = false;
-        stopLockEnforcement();
-        if (lockWindow) {
-          lockWindow.destroy();
-          lockWindow = null;
-        }
-      } else if (msg.command === 'login-fail') {
-        // User authentication failed
-        if (pendingLoginResolve) {
-          pendingLoginResolve({ success: false, message: msg.message || 'Invalid credentials.' });
-        }
-      } else if (msg.command === 'unlock') {
-        isLocked = false;
-        currentUser = msg.user || null;
-        stopLockEnforcement();
-        if (lockWindow) {
-          lockWindow.destroy();
-          lockWindow = null;
-        }
-      } else if (msg.command === 'lock') {
-        isLocked = true;
-        currentUser = null;
-        if (!lockWindow) {
-          createLockWindow();
-        } else {
-          startLockEnforcement();
-        }
-      } else if (msg.command === 'message') {
-        if (!isLocked) {
-          dialog.showMessageBox({
-            type: 'info',
-            title: 'Message from Operator',
-            message: msg.payload || ''
-          });
-        }
-      } else if (msg.command === 'poweroff') {
-        if (process.platform === 'win32') {
-          exec('shutdown /s /f /t 0');
-        } else {
-          exec('shutdown -h now');
-        }
-      } else if (msg.command === 'restart') {
-        if (process.platform === 'win32') {
-          exec('shutdown /r /f /t 0');
-        } else {
-          exec('reboot');
-        }
-      } else if (msg.command === 'limit-bandwidth') {
-        const rate = msg.payload?.rate || '2mbit';
-        await applyBandwidthLimit(rate);
-      } else if (msg.command === 'remove-bandwidth') {
-        await removeBandwidthLimit();
-      } else if (msg.command === 'capture-screenshot') {
-        try {
-          const base64 = await captureScreen();
-          socket.send(JSON.stringify({
-            type: 'screenshot-response',
-            payload: base64
-          }));
-        } catch (err: any) {
-          console.error(err);
-        }
-      } else if (msg.command === 'update-blockrules') {
-        activeBlockRules = msg.rules || [];
-        
-        // Enforce website blocking immediately
-        const domains = activeBlockRules.filter(r => r.type === 'domain').map(r => r.value);
-        applyHostBlocking(domains);
-      }
-    } catch (e) {
-      console.error(e);
+  socket.setEncoding('utf8');
+  socket.on('data', (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        handleServerMessage(JSON.parse(line));
+      } catch (e) { console.error('TCP parse error:', e); }
     }
   });
 
   socket.on('close', () => {
     console.log('Disconnected, retrying in 5s');
+    tcpSocket = null;
     setTimeout(connectToServer, 5000);
   });
-  
-  socket.on('error', () => {});
+
+  socket.on('error', (err) => {
+    console.error('TCP error:', err.message);
+    // close event will handle reconnect
+  });
 }
 
 function getIPAddress() {
@@ -947,22 +1065,23 @@ let updateReady = false;
 function startUdpDiscovery() {
   if (udpListener) return;
   const socket = dgram.createSocket('udp4');
-  
+
   socket.on('message', (msg, rinfo) => {
     // If we're already connected to the server, ignore UDP broadcasts
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      return;
-    }
-    
+    if (tcpSocket && !tcpSocket.destroyed) return;
+
     try {
       const data = JSON.parse(msg.toString());
       if (data.service === 'netcafe-server' && data.wsUrl) {
-        if (serverUrl !== data.wsUrl) {
-          console.log(`Auto-discovered new NetCafe Server at ${data.wsUrl}. Updating configuration.`);
-          serverUrl = data.wsUrl;
+        const { host, port } = parseServerAddress(data.wsUrl);
+        if (host !== serverHost || port !== serverPort) {
+          console.log(`Auto-discovered new NetCafe Server at ${host}:${port}. Updating configuration.`);
+          serverHost = host;
+          serverPort = port;
+          serverUrl = `${host}:${port}`;
           try {
-            fs.writeFileSync(configPath, JSON.stringify({ serverUrl, machineId }, null, 2), 'utf8');
-            
+            fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
+
             // Re-create the lock screen to update variables in the template literal
             if (lockWindow && !lockWindow.isDestroyed()) {
               lockWindow.destroy();
@@ -972,12 +1091,11 @@ function startUdpDiscovery() {
           } catch (e) {
             console.error('Failed to save discovered config:', e);
           }
-          
-          if (ws) {
-            ws.close();
-          } else {
-            connectToServer();
+
+          if (tcpSocket) {
+            try { tcpSocket.removeAllListeners('close'); tcpSocket.destroy(); tcpSocket = null; } catch {}
           }
+          connectToServer();
         }
       }
     } catch (e) {
@@ -1024,7 +1142,7 @@ app.whenReady().then(() => {
 
   // Auto Updater logic for Agent
   autoUpdater.autoDownload = true;
-  autoUpdater.checkForUpdates().catch(err => console.error("Agent update check failed:", err));
+  autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err));
 
   autoUpdater.on('update-downloaded', () => {
     updateReady = true;
@@ -1077,15 +1195,14 @@ app.whenReady().then(() => {
 
   // ─── Metrics interval (10 seconds) ────────────────────────────────────────
   metricsInterval = setInterval(async () => {
-    const currentWs = ws;
-    if (currentWs && currentWs.readyState === WebSocket.OPEN) {
+    if (tcpSocket && !tcpSocket.destroyed) {
       const cpu = await getCPUUsage();
       const totalMemory = os.totalmem();
       const freeMemory = os.freemem();
       const ram = Math.round(((totalMemory - freeMemory) / totalMemory) * 100);
       const activeWindow = await getActiveWindowTitle();
-      
-      currentWs.send(JSON.stringify({
+
+      sendToServer({
         type: 'metrics',
         payload: {
           cpu,
@@ -1095,7 +1212,7 @@ app.whenReady().then(() => {
           uptime: os.uptime(),
           ip: getIPAddress()
         }
-      }));
+      });
     }
   }, 10000);
 

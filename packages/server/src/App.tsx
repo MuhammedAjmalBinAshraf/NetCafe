@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, useRef, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
@@ -111,6 +111,9 @@ export default function App() {
   const [topUpUser, setTopUpUser] = useState<User | null>(null)
   const [topUpMinutes, setTopUpMinutes] = useState('60')
 
+  // IPC listener registration guard
+  const ipcBound = useRef(false)
+
   // Time remaining auto-ticker
   useEffect(() => {
     const timer = setInterval(() => {
@@ -126,32 +129,41 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
-  // Sync IPC Handlers
+  // Sync IPC Handlers — bind ONCE on mount, clean up on unmount
   useEffect(() => {
-    if (window.ipcRenderer) {
-      // Load initial lists
+    if (window.ipcRenderer && !ipcBound.current) {
+      ipcBound.current = true
+
+      // Load initial data
       window.ipcRenderer.invoke('get-machines').then(setMachines)
       window.ipcRenderer.invoke('get-plans').then(setPlans)
       window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       window.ipcRenderer.invoke('get-settings').then(setSettings)
       window.ipcRenderer.invoke('get-users').then(setUsers)
 
-      // Listen for machines update broadcasts
-      window.ipcRenderer.on('machines-updated', (_, data) => {
+      // Named listener so it can be removed on cleanup
+      const machineListener = (_: any, data: any) => {
         setMachines(data)
-        // Keep selected drawer details updated
-        if (selectedDrawerMachine) {
-          const updated = data.find((m: any) => m.id === selectedDrawerMachine.id)
-          if (updated) setSelectedDrawerMachine(updated)
-        }
-      })
+        setSelectedDrawerMachine((prev: any) => {
+          if (!prev) return prev
+          const updated = data.find((m: any) => m.id === prev.id)
+          return updated || prev
+        })
+      }
+      window.ipcRenderer.on('machines-updated', machineListener)
 
-      // Listen for auto-updater status events
-      window.ipcRenderer.on('update-status', (_, payload) => {
+      const updateListener = (_: any, payload: any) => {
         setUpdateStatus(payload)
-      })
+      }
+      window.ipcRenderer.on('update-status', updateListener)
+
+      return () => {
+        window.ipcRenderer?.off('machines-updated', machineListener)
+        window.ipcRenderer?.off('update-status', updateListener)
+        ipcBound.current = false
+      }
     }
-  }, [selectedDrawerMachine])
+  }, [])
 
   // Load plans, rules, settings, reports on tab switches
   useEffect(() => {
@@ -788,7 +800,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.13</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.15</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
