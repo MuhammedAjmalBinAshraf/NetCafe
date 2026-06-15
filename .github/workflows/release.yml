@@ -21,6 +21,7 @@ jobs:
         shell: bash
     env:
       ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+      electron_config_cache: ${{ github.workspace }}/.cache/electron
       ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 
     steps:
@@ -40,6 +41,8 @@ jobs:
 
       - name: Install root deps
         run: npm install --prefer-offline
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
 
 
       - name: Build server (Windows)
