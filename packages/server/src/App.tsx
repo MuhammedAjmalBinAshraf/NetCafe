@@ -221,8 +221,16 @@ export default function App() {
   }, [systemLogs, isLogsOpen])
 
   useEffect(() => {
-    if (isRemoteFullscreen && fullscreenContainerRef.current) {
-      fullscreenContainerRef.current.focus()
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('set-fullscreen', isRemoteFullscreen)
+    }
+    if (isRemoteFullscreen) {
+      document.body.style.overflow = 'hidden'
+      if (fullscreenContainerRef.current) {
+        fullscreenContainerRef.current.focus()
+      }
+    } else {
+      document.body.style.overflow = 'unset'
     }
   }, [isRemoteFullscreen])
 
@@ -1021,7 +1029,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.24</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.25</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
@@ -2427,7 +2435,7 @@ export default function App() {
                     : `data:image/png;base64,${screenshotBase64}`
                   } 
                   alt="Client Remote Mirror Fullscreen" 
-                  className="max-w-full max-h-full object-contain pointer-events-auto shadow-2xl"
+                  className="w-full h-full object-contain pointer-events-auto shadow-2xl"
                   onMouseDown={(e) => handleMouseDown(e, selectedDrawerMachine.id)}
                   onMouseMove={(e) => handleMouseMove(e, selectedDrawerMachine.id)}
                   onMouseUp={(e) => handleMouseUp(e, selectedDrawerMachine.id)}
@@ -2449,16 +2457,16 @@ export default function App() {
           </div>
 
           {/* Right: Remote operations & Console panel */}
-          <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col h-full overflow-y-auto p-4 space-y-5">
-            <div className="pb-3 border-b border-slate-800">
+          <div className="w-80 bg-slate-900 border-l border-slate-800 flex flex-col h-full overflow-y-auto p-3.5 space-y-3.5">
+            <div className="pb-2.5 border-b border-slate-800">
               <h4 className="font-bold text-white text-sm">Remote Control Panel</h4>
-              <p className="text-[10px] text-slate-400 mt-0.5">Control tools for the current session.</p>
+              <p className="text-[10px] text-slate-450 mt-0.5">Control tools for the current session.</p>
             </div>
 
             {/* Sys stats */}
-            <div className="space-y-2.5">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">System Meters</div>
-              <div className="space-y-2 bg-slate-950/50 rounded-lg p-3 border border-slate-800/40 text-xs">
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-450">System Meters</div>
+              <div className="space-y-2 bg-slate-950/50 rounded-lg p-2.5 border border-slate-800/40 text-xs">
                 <div>
                   <div className="flex justify-between text-[11px] font-mono mb-1 text-slate-350">
                     <span>CPU Load</span>
@@ -2488,24 +2496,24 @@ export default function App() {
 
             {/* Active Window */}
             {selectedDrawerMachine.status === 'in_use' && (
-              <div className="space-y-1.5">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Active Window</div>
-                <div className="bg-slate-950/60 p-2.5 rounded border border-slate-800 text-[11px] font-mono text-slate-300 truncate" title={selectedDrawerMachine.metrics?.activeWindow}>
+              <div className="space-y-1">
+                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-450">Active Window</div>
+                <div className="bg-slate-950/60 p-2 rounded border border-slate-800 text-[11px] font-mono text-slate-300 truncate" title={selectedDrawerMachine.metrics?.activeWindow}>
                   {selectedDrawerMachine.metrics?.activeWindow || 'No active window reported'}
                 </div>
               </div>
             )}
 
             {/* Terminal Panel */}
-            <div className="space-y-2">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+            <div className="space-y-1.5">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-455 flex items-center gap-1">
                 <Terminal size={12} className="text-blue-400" /> Remote Console CMD
               </div>
-              <div className="bg-slate-950 p-2.5 rounded-lg border border-slate-900 text-[10px] font-mono text-slate-300 h-44 overflow-y-auto space-y-1">
+              <div className="bg-slate-950 p-2 rounded-lg border border-slate-900 text-[10px] font-mono text-slate-300 h-28 overflow-y-auto space-y-1">
                 {commandOutput ? (
                   <pre className="whitespace-pre-wrap select-text">{commandOutput}</pre>
                 ) : (
-                  <span className="text-slate-600">Ready to execute console commands on client...</span>
+                  <span className="text-slate-650">Ready to execute console commands on client...</span>
                 )}
               </div>
               <form 
@@ -2515,7 +2523,7 @@ export default function App() {
                 <input
                   type="text"
                   placeholder="cmd.exe command..."
-                  className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-2.5 py-1 text-xs text-white outline-none transition-colors font-mono"
+                  className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-2 py-1 text-xs text-white outline-none transition-colors font-mono"
                   value={commandLine}
                   onChange={(e) => setCommandLine(e.target.value)}
                   disabled={isExecutingCommand}
@@ -2523,7 +2531,7 @@ export default function App() {
                 <button
                   type="submit"
                   disabled={isExecutingCommand || !commandLine.trim()}
-                  className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-bold transition-all"
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-500 text-white rounded text-xs font-bold transition-all"
                 >
                   {isExecutingCommand ? '...' : 'Run'}
                 </button>
@@ -2531,24 +2539,24 @@ export default function App() {
             </div>
 
             {/* Actions */}
-            <div className="space-y-2 pt-2 border-t border-slate-805">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Control Actions</div>
-              <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5 pt-1.5 border-t border-slate-850">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-450">Control Actions</div>
+              <div className="grid grid-cols-2 gap-1.5">
                 <button
                   onClick={() => handleRestart(selectedDrawerMachine.id)}
-                  className="py-1.5 px-2 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"
+                  className="py-1 px-1.5 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"
                 >
                   Restart
                 </button>
                 <button
                   onClick={() => handlePower(selectedDrawerMachine.id)}
-                  className="py-1.5 px-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 text-red-400 hover:text-red-350 rounded text-xs font-bold transition-all"
+                  className="py-1 px-1.5 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 text-red-400 hover:text-red-350 rounded text-xs font-bold transition-all"
                 >
                   Shutdown
                 </button>
                 <button
                   onClick={() => handleMsgClick(selectedDrawerMachine.id)}
-                  className="col-span-2 py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
+                  className="col-span-2 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
                 >
                   Send Operator Message
                 </button>
@@ -2558,7 +2566,7 @@ export default function App() {
             {/* Exit button */}
             <button
               onClick={() => setIsRemoteFullscreen(false)}
-              className="w-full mt-auto py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-white font-bold rounded text-xs transition-colors"
+              className="w-full mt-auto py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-white font-bold rounded text-xs transition-colors"
             >
               Minimize Viewport
             </button>

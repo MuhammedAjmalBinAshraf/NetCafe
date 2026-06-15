@@ -1012,3 +1012,10 @@ ipcMain.handle('download-update', () => {
 ipcMain.handle('quit-and-install', () => {
   autoUpdater.quitAndInstall()
 })
+
+ipcMain.handle('set-fullscreen', (_, flag: boolean) => {
+  if (mainWindow) {
+    mainWindow.setFullScreen(flag)
+    mainWindow.setMenuBarVisibility(!flag)
+  }
+})
