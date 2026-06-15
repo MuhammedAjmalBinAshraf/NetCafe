@@ -38,11 +38,20 @@ interface User {
 
 export default function App() {
   // Authentication State
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem('netcafe_auth') === 'true';
+  })
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [authError, setAuthError] = useState('')
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [currentUser, setCurrentUser] = useState<any>(() => {
+    const saved = localStorage.getItem('netcafe_user');
+    try {
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  })
 
   // Navigation & Data
   const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users'>('dashboard')
@@ -188,7 +197,10 @@ export default function App() {
 
   // Mobile remote control states
   const [serverIp, setServerIp] = useState('127.0.0.1')
+  const [publicUrl, setPublicUrl] = useState<string | null>(null)
   const [isQrModalOpen, setIsQrModalOpen] = useState(false)
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
+  const [qrMode, setQrMode] = useState<'lan' | 'public'>('public')
 
   // Timeline log details expanded state
   const [expandedTimelineLogs, setExpandedTimelineLogs] = useState<Record<number, boolean>>({})
@@ -214,6 +226,13 @@ export default function App() {
     return () => clearInterval(timer)
   }, [])
 
+  // Auto QR mode selector
+  useEffect(() => {
+    if (isQrModalOpen) {
+      setQrMode(publicUrl ? 'public' : 'lan')
+    }
+  }, [isQrModalOpen, publicUrl])
+
   // Sync mirror quality when managing a terminal
   useEffect(() => {
     if (window.ipcRenderer) {
@@ -237,6 +256,10 @@ export default function App() {
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
       window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
       window.ipcRenderer.invoke('get-server-ip').then((ip: string) => setServerIp(ip || '127.0.0.1')).catch(() => {})
+      window.ipcRenderer.invoke('get-public-url').then((url: string) => {
+        setPublicUrl(url || null)
+        if (url) setQrMode('public')
+      }).catch(() => {})
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -285,6 +308,12 @@ export default function App() {
       }
       window.ipcRenderer.on('filter-log', filterLogListener)
 
+      const publicUrlListener = (_: any, url: string | null) => {
+        setPublicUrl(url)
+        if (url) setQrMode('public')
+      }
+      window.ipcRenderer.on('public-url-updated', publicUrlListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
@@ -293,6 +322,7 @@ export default function App() {
         window.ipcRenderer?.off('remote-command-result', commandResultListener)
         window.ipcRenderer?.off('safety-alert-triggered', safetyAlertTriggeredListener)
         window.ipcRenderer?.off('filter-log', filterLogListener)
+        window.ipcRenderer?.off('public-url-updated', publicUrlListener)
         ipcBound.current = false
       }
     }
@@ -367,6 +397,8 @@ export default function App() {
     if (window.ipcRenderer) {
       const res = await window.ipcRenderer.invoke('login-staff', username, password)
       if (res.success) {
+        localStorage.setItem('netcafe_auth', 'true')
+        localStorage.setItem('netcafe_user', JSON.stringify(res.user))
         setIsAuthenticated(true)
         setCurrentUser(res.user)
       } else {
@@ -374,9 +406,18 @@ export default function App() {
       }
     } else {
       // Local dev fallback if not running inside Electron wrapper
+      localStorage.setItem('netcafe_auth', 'true')
+      localStorage.setItem('netcafe_user', JSON.stringify({ username: 'admin', role: 'admin' }))
       setIsAuthenticated(true)
       setCurrentUser({ username: 'admin', role: 'admin' })
     }
+  }
+
+  const handleSignOut = () => {
+    localStorage.removeItem('netcafe_auth')
+    localStorage.removeItem('netcafe_user')
+    setIsAuthenticated(false)
+    setCurrentUser(null)
   }
 
   // User Management Actions
@@ -1106,15 +1147,24 @@ export default function App() {
     <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
       {/* Top Header */}
       <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Monitor className="text-blue-500" size={32} />
-          <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">{settings.lab_name}</h1>
-            <div className="text-xs text-slate-400 flex items-center gap-2">
-              <span className="w-2 h-2 bg-emerald-500 rounded-full" />
-              <span>Operator: {currentUser?.username} ({currentUser?.role})</span>
+        <div className="flex items-center justify-between w-full md:w-auto gap-3">
+          <div className="flex items-center gap-3">
+            <Monitor className="text-blue-500" size={32} />
+            <div>
+              <h1 className="text-2xl font-bold text-white tracking-tight">{settings.lab_name}</h1>
+              <div className="text-xs text-slate-400 flex items-center gap-2">
+                <span className="w-2 h-2 bg-emerald-500 rounded-full" />
+                <span>Operator: {currentUser?.username} ({currentUser?.role})</span>
+              </div>
             </div>
           </div>
+          {/* Hamburger menu trigger */}
+          <button
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+            className="lg:hidden p-2 text-slate-400 hover:text-white bg-slate-800/55 hover:bg-slate-800 rounded-lg transition-colors border border-slate-700/20"
+          >
+            <Menu size={20} />
+          </button>
         </div>
 
         {/* Global Controls & Tabs */}
@@ -1269,6 +1319,12 @@ export default function App() {
               className="w-full flex items-center justify-center gap-1.5 px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold transition-colors"
             >
               <RefreshCcw size={11} /> Check for Updates
+            </button>
+            <button
+              onClick={handleSignOut}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 bg-red-950/40 hover:bg-red-900/20 text-red-400 rounded text-xs font-semibold border border-red-900/20 transition-colors mt-2"
+            >
+              <Power size={11} /> Sign Out
             </button>
           </div>
         </nav>
@@ -2214,29 +2270,53 @@ export default function App() {
                     <Smartphone size={18} className="text-emerald-500" /> Mobile Remote Control
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Control the cybercafe server dashboard from any phone, tablet, or secondary device connected to the same Wi-Fi/local network.
+                    Control the cybercafe server dashboard from any phone, tablet, or secondary device over the Local Network or the Internet.
                   </p>
                   
-                  <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg space-y-3">
-                    <div className="flex flex-col gap-1">
-                      <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Remote Portal URL</span>
-                      <a 
-                        href={`http://${serverIp}:9001`} 
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-sm font-mono text-emerald-400 hover:underline break-all"
-                      >
-                        http://{serverIp}:9001
-                      </a>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Local Wi-Fi Network (LAN)</span>
+                        <a 
+                          href={`http://${serverIp}:9001`} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="text-sm font-mono text-emerald-450 hover:underline break-all"
+                        >
+                          http://{serverIp}:9001
+                        </a>
+                      </div>
+                      <div className="text-[10px] text-slate-505 mt-2">Requires devices to be on the same Wi-Fi.</div>
                     </div>
-                    
-                    <button
-                      onClick={() => setIsQrModalOpen(true)}
-                      className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-550 text-white rounded text-sm font-semibold transition-all shadow-md shadow-emerald-900/10"
-                    >
-                      <QrCode size={16} /> Show QR Code
-                    </button>
+
+                    <div className="bg-slate-950 border border-slate-800 p-4 rounded-lg flex flex-col justify-between">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-[10px] uppercase font-bold text-slate-550 tracking-wider">Public Internet Tunnel</span>
+                        {publicUrl ? (
+                          <a 
+                            href={publicUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="text-sm font-mono text-blue-400 hover:underline break-all font-bold"
+                          >
+                            {publicUrl}
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-500 italic flex items-center gap-1.5 mt-1">
+                            <Loader2 size={12} className="animate-spin" /> Establishing secure public tunnel...
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] text-slate-505 mt-2">Access from anywhere on mobile data or other internet networks.</div>
+                    </div>
                   </div>
+
+                  <button
+                    onClick={() => setIsQrModalOpen(true)}
+                    className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-550 text-white rounded text-sm font-semibold transition-all shadow-md shadow-emerald-950/20"
+                  >
+                    <QrCode size={16} /> Show QR Code
+                  </button>
                 </div>
 
                 {/* DB backups */}
@@ -3199,13 +3279,123 @@ export default function App() {
         </div>
       )}
 
+      {/* Mobile Navigation Drawer */}
+      {isMobileMenuOpen && (
+        <div className="fixed inset-0 z-50 flex lg:hidden">
+          {/* Backdrop */}
+          <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+          {/* Drawer Panel */}
+          <div className="relative flex flex-col w-64 max-w-xs bg-slate-950 border-r border-slate-900 p-4 h-full">
+            <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-900">
+              <div className="flex items-center gap-2">
+                <Monitor className="text-blue-500" size={20} />
+                <span className="font-bold text-white text-sm">Navigation</span>
+              </div>
+              <button
+                onClick={() => setIsMobileMenuOpen(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            
+            <div className="flex-1 space-y-1 overflow-y-auto">
+              <button
+                onClick={() => { setActiveTab('dashboard'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'dashboard' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <LayoutDashboard size={18} /> Dashboard
+              </button>
+              <button
+                onClick={() => { setActiveTab('sessions'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'sessions' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <History size={18} /> Sessions History
+              </button>
+              <button
+                onClick={() => { setActiveTab('plans'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'plans' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <Plus size={18} /> Pricing Plans
+              </button>
+              <button
+                onClick={() => { setActiveTab('blocking'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'blocking' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <ShieldX size={18} /> Website & Apps
+              </button>
+              <button
+                onClick={() => { setActiveTab('safety'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'safety' ? 'bg-red-700 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <ShieldAlert size={18} /> AI Safety
+                {safetyAlerts.length > 0 && (
+                  <span className="ml-auto bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                    {safetyAlerts.length > 99 ? '99+' : safetyAlerts.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => { setActiveTab('reports'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'reports' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <BarChart3 size={18} /> Reports
+              </button>
+              <button
+                onClick={() => { setActiveTab('users'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'users' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <UserCircle2 size={18} /> Users
+              </button>
+              <button
+                onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <SettingsIcon size={18} /> Settings
+              </button>
+            </div>
+            
+            <div className="pt-4 border-t border-slate-900 space-y-2">
+              <div className="text-[10px] text-slate-500">
+                Operator: <span className="text-slate-300 font-semibold">{currentUser?.username}</span>
+              </div>
+              <button
+                onClick={() => { handleSignOut(); setIsMobileMenuOpen(false) }}
+                className="w-full flex items-center justify-center gap-1.5 px-3 py-2 bg-red-950/40 hover:bg-red-900/20 text-red-400 rounded-lg text-xs font-semibold border border-red-900/20 transition-colors"
+              >
+                <Power size={12} /> Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Remote Control QR Code Modal */}
       {isQrModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
           <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-xs overflow-hidden shadow-2xl flex flex-col">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
               <div className="flex items-center gap-2">
-                <Smartphone className="text-emerald-500 animate-pulse" size={18} />
+                <Smartphone className="text-emerald-500" size={18} />
                 <h3 className="text-sm font-bold text-white">Mobile Remote Control</h3>
               </div>
               <button 
@@ -3216,11 +3406,40 @@ export default function App() {
                 <X size={18} />
               </button>
             </div>
+
+            {/* Toggle tabs for Local vs Public URL */}
+            <div className="flex border-b border-slate-800 bg-slate-950/30">
+              <button
+                type="button"
+                onClick={() => setQrMode('public')}
+                disabled={!publicUrl}
+                className={`flex-1 py-2 text-xs font-bold transition-colors ${
+                  qrMode === 'public'
+                    ? 'border-b-2 border-emerald-500 text-emerald-450'
+                    : 'text-slate-400 hover:text-slate-200 disabled:opacity-40 disabled:hover:text-slate-400'
+                }`}
+              >
+                Public Internet
+              </button>
+              <button
+                type="button"
+                onClick={() => setQrMode('lan')}
+                className={`flex-1 py-2 text-xs font-bold transition-colors ${
+                  qrMode === 'lan'
+                    ? 'border-b-2 border-emerald-500 text-emerald-450'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                Local Wi-Fi
+              </button>
+            </div>
             
             <div className="p-5 flex flex-col items-center text-center space-y-4">
               <div className="bg-white p-3 rounded-lg shadow-inner">
                 <img 
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`http://${serverIp}:9001`)}`}
+                  src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(
+                    qrMode === 'public' && publicUrl ? publicUrl : `http://${serverIp}:9001`
+                  )}`}
                   alt="QR Code"
                   className="w-[200px] h-[200px] block"
                 />
@@ -3228,13 +3447,16 @@ export default function App() {
               
               <div className="space-y-1.5 w-full">
                 <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider block">Scan QR Code or Open URL</span>
-                <div className="bg-slate-950 border border-slate-850 px-3 py-1.5 rounded font-mono text-xs text-emerald-400 break-all select-all">
-                  http://{serverIp}:9001
+                <div className="bg-slate-950 border border-slate-850 px-3 py-1.5 rounded font-mono text-xs text-emerald-450 break-all select-all">
+                  {qrMode === 'public' && publicUrl ? publicUrl : `http://${serverIp}:9001`}
                 </div>
               </div>
               
               <p className="text-[11px] text-slate-450 leading-relaxed">
-                Connect your mobile phone or tablet to the same local network (Wi-Fi) to control the cybercafe from anywhere in the room.
+                {qrMode === 'public'
+                  ? 'Access the control panel from anywhere in the world using your mobile internet or external networks.'
+                  : 'Connect your mobile phone or tablet to the same local network (Wi-Fi) to control from inside the room.'
+                }
               </p>
             </div>
 

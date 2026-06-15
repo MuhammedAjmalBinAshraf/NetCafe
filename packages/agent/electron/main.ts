@@ -424,25 +424,7 @@ function createLockWindow() {
       <div class="status-msg" id="statusMsg">⏳ Verifying credentials...</div>
     </div>
 
-    <div class="divider">— or —</div>
-    <div class="walk-in-hint">Visit the front desk to start a walk-in session.</div>
 
-    <div class="info-panel">
-      <div class="info-line"><span class="info-label">Server</span><span class="info-value" id="infoServerUrl">tcp://${serverHost}:${serverPort}</span></div>
-      <div class="info-line"><span class="info-label">Terminal</span><span class="info-value">${machineId}</span></div>
-      <div class="info-line"><span class="info-label">Version</span><span class="info-value" id="infoVersion">v${app.getVersion()}</span></div>
-      <div class="info-line"><span class="info-label">Config</span><span class="info-value">${configPath}</span></div>
-    </div>
-
-    <!-- Console Log Panel -->
-    <div style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem; text-align: left; width: 100%;">
-      <div id="logToggle" style="font-size:0.7rem; font-weight:700; color:#64748b; cursor:pointer; display:flex; justify-content:space-between; align-items:center; user-select:none; letter-spacing:0.05em;">
-        <span>🔍 DEV SYSTEM LOGS</span>
-        <span id="logArrow">▼</span>
-      </div>
-      <div id="logConsole" style="display:none; margin-top:0.5rem; max-height:90px; overflow-y:auto; background:rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.5rem; font-family:monospace; font-size:0.65rem; color:#94a3b8; line-height:1.4;">
-      </div>
-    </div>
 
     <div class="footer">Do not power off this terminal.</div>
   </div>
@@ -625,8 +607,8 @@ function createLockWindow() {
       async function showConfigForm() {
         pinGate.style.display = 'none';
         configForm.style.display = 'block';
-        // Pre-fill current values from the info panel
-        cfgServerUrl.value = (document.getElementById('infoServerUrl').textContent || 'tcp://${serverHost}:${serverPort}').replace('tcp://', '');
+        // Pre-fill current values
+        cfgServerUrl.value = '${serverHost}:${serverPort}';
         cfgMachineId.value = '${machineId}';
         setTimeout(() => cfgServerUrl.focus(), 100);
         // Load shell status
@@ -789,16 +771,19 @@ function createLockWindow() {
       const logArrow = document.getElementById('logArrow');
       let logsExpanded = false;
 
-      logToggle.addEventListener('click', () => {
-        logsExpanded = !logsExpanded;
-        logConsole.style.display = logsExpanded ? 'block' : 'none';
-        logArrow.textContent = logsExpanded ? '▲' : '▼';
-        if (logsExpanded) {
-          logConsole.scrollTop = logConsole.scrollHeight;
-        }
-      });
+      if (logToggle && logConsole && logArrow) {
+        logToggle.addEventListener('click', () => {
+          logsExpanded = !logsExpanded;
+          logConsole.style.display = logsExpanded ? 'block' : 'none';
+          logArrow.textContent = logsExpanded ? '▲' : '▼';
+          if (logsExpanded) {
+            logConsole.scrollTop = logConsole.scrollHeight;
+          }
+        });
+      }
 
       function appendLog(log) {
+        if (!logConsole) return;
         const div = document.createElement('div');
         div.style.marginBottom = '0.2rem';
         div.innerHTML = '<span style="color:#64748b;">[' + log.timestamp + ']</span> <span style="color:#cbd5e1;">' + log.message + '</span>';
@@ -810,7 +795,7 @@ function createLockWindow() {
       }
 
       ipcRenderer.invoke('get-agent-logs').then((logs) => {
-        if (logs && Array.isArray(logs)) {
+        if (logs && Array.isArray(logs) && logConsole) {
           logs.forEach(appendLog);
         }
       });

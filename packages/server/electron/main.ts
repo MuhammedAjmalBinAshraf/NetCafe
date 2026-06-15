@@ -7,7 +7,7 @@ import fs from 'fs'
 import Database from 'better-sqlite3'
 import os from 'os'
 import dgram from 'dgram'
-import { exec } from 'child_process'
+import { exec, spawn } from 'child_process'
 import * as XLSX from 'xlsx'
 import express from 'express'
 
@@ -929,6 +929,54 @@ function startUdpBroadcast() {
   udpServer = socket;
 }
 
+let publicUrl: string | null = null;
+let sshProcess: any = null;
+
+function broadcastPublicUrl() {
+  if (mainWindow) {
+    mainWindow.webContents.send('public-url-updated', publicUrl);
+  }
+}
+
+function startPublicTunnel() {
+  if (sshProcess) return;
+
+  logToUI('Starting public reverse tunnel via localhost.run...');
+  const sshCmd = process.platform === 'win32' ? 'C:\\Windows\\System32\\OpenSSH\\ssh.exe' : 'ssh';
+  
+  sshProcess = spawn(sshCmd, [
+    '-o', 'StrictHostKeyChecking=no',
+    '-o', 'ServerAliveInterval=30',
+    '-R', '80:localhost:9001',
+    'nokey@localhost.run'
+  ]);
+
+  sshProcess.stdout.on('data', (data: Buffer) => {
+    const output = data.toString('utf8');
+    logToUI(`[Tunnel] ${output.trim()}`);
+    
+    // Parse URL (e.g. "https://xxxx.lhr.life")
+    const match = output.match(/https:\/\/[a-zA-Z0-9.-]+\.lhr\.life/);
+    if (match) {
+      publicUrl = match[0];
+      logToUI(`[Tunnel] Public URL resolved: ${publicUrl}`);
+      broadcastPublicUrl();
+    }
+  });
+
+  sshProcess.stderr.on('data', (data: Buffer) => {
+    logToUI(`[Tunnel Stderr] ${data.toString('utf8').trim()}`);
+  });
+
+  sshProcess.on('close', (code: number) => {
+    logToUI(`[Tunnel] Process exited with code ${code}. Reconnecting in 5s...`);
+    publicUrl = null;
+    sshProcess = null;
+    broadcastPublicUrl();
+    setTimeout(startPublicTunnel, 5000);
+  });
+}
+
 app.whenReady().then(async () => {
   setupDatabase()
   
@@ -937,9 +985,15 @@ app.whenReady().then(async () => {
     return getLanIPAddress();
   });
 
+  // Register get-public-url handler
+  ipcMain.handle('get-public-url', () => {
+    return publicUrl;
+  });
+
   createWindow()
   startUdpBroadcast()
   startWebServer()
+  startPublicTunnel()
 
   // Auto Updater logic for Server
   autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
