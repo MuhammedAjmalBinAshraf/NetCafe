@@ -17,6 +17,22 @@ let lockEnforceInterval: NodeJS.Timeout | null = null;
 let pendingLoginResolve: ((result: { success: boolean; message?: string }) => void) | null = null;
 let currentUser: string | null = null;
 
+const agentLogsCache: { timestamp: string, message: string }[] = [];
+
+function logToUI(msg: string) {
+  const logEntry = {
+    timestamp: new Date().toISOString().substring(11, 19),
+    message: msg
+  };
+  console.log(`[AGENT LOG] ${msg}`);
+  agentLogsCache.push(logEntry);
+  if (agentLogsCache.length > 50) agentLogsCache.shift();
+  
+  if (lockWindow && !lockWindow.isDestroyed()) {
+    lockWindow.webContents.send('agent-log-updated', logEntry);
+  }
+}
+
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let serverUrl = '127.0.0.1:9000';   // display string (host:port)
 let serverHost = '127.0.0.1';
@@ -48,8 +64,10 @@ function loadConfig() {
     } else {
       fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
     }
-  } catch (e) {
+    logToUI(`Loaded config: serverUrl=tcp://${serverHost}:${serverPort}, machineId=${machineId}`);
+  } catch (e: any) {
     console.error('Failed to load/write config:', e);
+    logToUI(`Failed to load/write config: ${e.message}`);
   }
 }
 
@@ -382,6 +400,17 @@ function createLockWindow() {
       <div class="info-line"><span class="info-label">Version</span><span class="info-value" id="infoVersion">v${app.getVersion()}</span></div>
       <div class="info-line"><span class="info-label">Config</span><span class="info-value">${configPath}</span></div>
     </div>
+
+    <!-- Console Log Panel -->
+    <div style="margin-top: 1rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.75rem; text-align: left; width: 100%;">
+      <div id="logToggle" style="font-size:0.7rem; font-weight:700; color:#64748b; cursor:pointer; display:flex; justify-content:space-between; align-items:center; user-select:none; letter-spacing:0.05em;">
+        <span>🔍 DEV SYSTEM LOGS</span>
+        <span id="logArrow">▼</span>
+      </div>
+      <div id="logConsole" style="display:none; margin-top:0.5rem; max-height:90px; overflow-y:auto; background:rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.05); border-radius:6px; padding:0.5rem; font-family:monospace; font-size:0.65rem; color:#94a3b8; line-height:1.4;">
+      </div>
+    </div>
+
     <div class="footer">Do not power off this terminal.</div>
   </div>
 
@@ -718,6 +747,42 @@ function createLockWindow() {
           updateStatusText.textContent = '\u274c Error: ' + (payload.message || 'unknown');
         }
       });
+
+      // Dev System Log Console logic
+      const logToggle = document.getElementById('logToggle');
+      const logConsole = document.getElementById('logConsole');
+      const logArrow = document.getElementById('logArrow');
+      let logsExpanded = false;
+
+      logToggle.addEventListener('click', () => {
+        logsExpanded = !logsExpanded;
+        logConsole.style.display = logsExpanded ? 'block' : 'none';
+        logArrow.textContent = logsExpanded ? '▲' : '▼';
+        if (logsExpanded) {
+          logConsole.scrollTop = logConsole.scrollHeight;
+        }
+      });
+
+      function appendLog(log) {
+        const div = document.createElement('div');
+        div.style.marginBottom = '0.2rem';
+        div.innerHTML = '<span style="color:#64748b;">[' + log.timestamp + ']</span> <span style="color:#cbd5e1;">' + log.message + '</span>';
+        logConsole.appendChild(div);
+        if (logConsole.children.length > 50) {
+          logConsole.removeChild(logConsole.firstChild);
+        }
+        logConsole.scrollTop = logConsole.scrollHeight;
+      }
+
+      ipcRenderer.invoke('get-agent-logs').then((logs) => {
+        if (logs && Array.isArray(logs)) {
+          logs.forEach(appendLog);
+        }
+      });
+
+      ipcRenderer.on('agent-log-updated', (_, log) => {
+        appendLog(log);
+      });
     })();
   </script>
 </body>
@@ -756,37 +821,50 @@ function sendToServer(data: any) {
 // ─── Server message handler ────────────────────────────────────────────────────
 async function handleServerMessage(msg: any) {
   try {
+    logToUI(`Received server command: ${msg.command || 'unknown'}`);
     if (msg.command === 'login-success') {
-      // User successfully authenticated via lock screen form
+      logToUI(`Server approved member login. Unlocking terminal.`);
       if (pendingLoginResolve) {
         pendingLoginResolve({ success: true });
+        pendingLoginResolve = null;
       }
       currentUser = msg.user;
       isLocked = false;
       stopLockEnforcement();
       if (lockWindow) {
+        logToUI(`Destroying lock screen window.`);
         lockWindow.destroy();
         lockWindow = null;
+      } else {
+        logToUI(`Lock screen window not present or already destroyed.`);
       }
     } else if (msg.command === 'login-fail') {
-      // User authentication failed
+      logToUI(`Server rejected member login: ${msg.message || 'Invalid credentials'}`);
       if (pendingLoginResolve) {
         pendingLoginResolve({ success: false, message: msg.message || 'Invalid credentials.' });
+        pendingLoginResolve = null;
       }
     } else if (msg.command === 'unlock') {
+      logToUI(`Server requested unlock. Setting isLocked = false, currentUser = ${msg.user || 'Guest'}.`);
       isLocked = false;
       currentUser = msg.user || null;
       stopLockEnforcement();
       if (lockWindow) {
+        logToUI(`Destroying lock screen window.`);
         lockWindow.destroy();
         lockWindow = null;
+      } else {
+        logToUI(`Lock screen window not present or already destroyed.`);
       }
     } else if (msg.command === 'lock') {
+      logToUI(`Server requested lock. Setting isLocked = true.`);
       isLocked = true;
       currentUser = null;
       if (!lockWindow) {
+        logToUI(`Creating new lock screen window.`);
         createLockWindow();
       } else {
+        logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
         startLockEnforcement();
       }
     } else if (msg.command === 'message') {
@@ -1131,8 +1209,9 @@ function connectToServer() {
   tcpSocket = socket;
   let buffer = '';
 
+  logToUI(`Attempting to connect to server at tcp://${serverHost}:${serverPort}...`);
   socket.connect(serverPort, serverHost, () => {
-    console.log(`Connected to server TCP ${serverHost}:${serverPort}`);
+    logToUI(`Connected to server successfully!`);
     sendToServer({ type: 'register', payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() } });
     startScreenMirroring();
   });
@@ -1146,18 +1225,22 @@ function connectToServer() {
       if (!line.trim()) continue;
       try {
         handleServerMessage(JSON.parse(line));
-      } catch (e) { console.error('TCP parse error:', e); }
+      } catch (e: any) { 
+        logToUI(`TCP parse error: ${e.message}`);
+        console.error('TCP parse error:', e); 
+      }
     }
   });
 
   socket.on('close', () => {
-    console.log('Disconnected, retrying in 5s');
+    logToUI('Disconnected from server. Retrying in 5 seconds...');
     tcpSocket = null;
     stopScreenMirroring();
     setTimeout(connectToServer, 5000);
   });
 
   socket.on('error', (err) => {
+    logToUI(`TCP connection error: ${err.message}`);
     console.error('TCP error:', err.message);
     // close event will handle reconnect
   });
@@ -1179,6 +1262,7 @@ let udpListener: dgram.Socket | null = null;
 let updateReady = false;
 function startUdpDiscovery() {
   if (udpListener) return;
+  logToUI('Starting UDP Discovery Listener on port 9090...');
   const socket = dgram.createSocket('udp4');
 
   socket.on('message', (msg, rinfo) => {
@@ -1187,10 +1271,11 @@ function startUdpDiscovery() {
 
     try {
       const data = JSON.parse(msg.toString());
+      logToUI(`UDP Discovery: Received broadcast from ${rinfo.address}:${rinfo.port} (service: ${data.service})`);
       if (data.service === 'netcafe-server' && data.wsUrl) {
         const { host, port } = parseServerAddress(data.wsUrl);
         if (host !== serverHost || port !== serverPort) {
-          console.log(`Auto-discovered new NetCafe Server at ${host}:${port}. Updating configuration.`);
+          logToUI(`UDP Discovery: New NetCafe Server discovered at tcp://${host}:${port}. Updating configuration.`);
           serverHost = host;
           serverPort = port;
           serverUrl = `${host}:${port}`;
@@ -1199,26 +1284,34 @@ function startUdpDiscovery() {
 
             // Re-create the lock screen to update variables in the template literal
             if (lockWindow && !lockWindow.isDestroyed()) {
+              logToUI('UDP Discovery: Re-creating lock screen window to apply updated server IP.');
               lockWindow.destroy();
               lockWindow = null;
               createLockWindow();
             }
-          } catch (e) {
+          } catch (e: any) {
+            logToUI(`UDP Discovery: Failed to save config: ${e.message}`);
             console.error('Failed to save discovered config:', e);
           }
 
           if (tcpSocket) {
-            try { tcpSocket.removeAllListeners('close'); tcpSocket.destroy(); tcpSocket = null; } catch {}
+            try { 
+              logToUI('UDP Discovery: Disconnecting existing TCP socket for new connection.');
+              tcpSocket.removeAllListeners('close'); 
+              tcpSocket.destroy(); 
+              tcpSocket = null; 
+            } catch {}
           }
           connectToServer();
         }
       }
-    } catch (e) {
-      // Ignore invalid JSON or malformed packets
+    } catch (e: any) {
+      logToUI(`UDP Discovery: Failed to parse broadcast packet: ${e.message}`);
     }
   });
 
   socket.on('error', (err) => {
+    logToUI(`UDP Discovery Listener error: ${err.message}`);
     console.error('UDP Listener error:', err);
     try {
       socket.close();
@@ -1229,10 +1322,11 @@ function startUdpDiscovery() {
 
   try {
     socket.bind(9090, () => {
-      console.log('UDP Discovery Listener bound on port 9090');
+      logToUI('UDP Discovery Listener bound successfully on port 9090.');
     });
     udpListener = socket;
-  } catch (err) {
+  } catch (err: any) {
+    logToUI(`Failed to bind UDP Discovery Listener on port 9090: ${err.message}`);
     console.error('Failed to bind UDP Listener:', err);
     udpListener = null;
   }
@@ -1347,6 +1441,9 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('manual-download-update', () => {
     autoUpdater.downloadUpdate().catch((err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
+  });
+  ipcMain.handle('get-agent-logs', () => {
+    return agentLogsCache;
   });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────

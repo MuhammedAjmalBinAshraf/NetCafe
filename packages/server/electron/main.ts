@@ -68,6 +68,21 @@ const clients = new Map<net.Socket, number>() // socket -> machine.id
 const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number }>()
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
 const latestScreenFrames = new Map<number, string>()
+const serverLogsCache: { timestamp: string, message: string }[] = []
+
+function logToUI(msg: string) {
+  const logEntry = {
+    timestamp: new Date().toISOString().substring(11, 19),
+    message: msg
+  }
+  console.log(`[SYS LOG] ${msg}`)
+  serverLogsCache.push(logEntry)
+  if (serverLogsCache.length > 100) serverLogsCache.shift()
+  
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('server-log', logEntry)
+  }
+}
 
 function broadcastBlockRulesToClients() {
   if (!db) return
@@ -88,20 +103,24 @@ function handleClientMessage(socket: net.Socket, data: any) {
       const stmt = db.prepare("INSERT INTO machines (name, mac_address, ip_address, status) VALUES (?, ?, ?, ?)")
       const info = stmt.run(payload.name || 'New PC', payload.mac_address, payload.ip_address, 'available')
       machine = { id: info.lastInsertRowid }
+      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, IP=${payload.ip_address}`)
     } else {
       db.prepare("UPDATE machines SET ip_address = ?, status = ? WHERE id = ?").run(payload.ip_address, 'available', machine.id)
+      logToUI(`Client reconnected: ID=${machine.id}, Name=${machine.name}, IP=${payload.ip_address}`)
     }
 
     // Clean up stale sockets for this machine ID
     const targetId = Number(machine.id)
     for (const [s, mId] of clients.entries()) {
       if (Number(mId) === targetId && s !== socket) {
+        logToUI(`Closing stale TCP socket for machine ID ${targetId}`)
         clients.delete(s)
         try { s.destroy() } catch {}
       }
     }
 
     clients.set(socket, machine.id)
+    logToUI(`Mapped client socket to machine ID ${machine.id}`)
 
     // Send current active block rules to this client
     const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
@@ -172,6 +191,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
 }
 
 tcpServer.on('connection', (socket) => {
+  logToUI(`New incoming TCP connection from ${socket.remoteAddress}:${socket.remotePort}`)
   let buffer = ''
   socket.setEncoding('utf8')
   socket.on('data', (chunk) => {
@@ -183,13 +203,14 @@ tcpServer.on('connection', (socket) => {
       try {
         const data = JSON.parse(line)
         handleClientMessage(socket, data)
-      } catch (e) {
-        console.error('TCP parse error:', e)
+      } catch (e: any) {
+        logToUI(`TCP parse error from ${socket.remoteAddress}: ${e.message}`)
       }
     }
   })
   socket.on('close', () => {
     const machineId = clients.get(socket)
+    logToUI(`TCP connection closed for machine ID ${machineId || 'unregistered'}`)
     if (machineId) {
       db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machineId)
       clients.delete(socket)
@@ -198,9 +219,12 @@ tcpServer.on('connection', (socket) => {
       broadcastMachines()
     }
   })
-  socket.on('error', () => { try { socket.destroy() } catch {} })
+  socket.on('error', (err) => { 
+    logToUI(`TCP socket error: ${err.message}`)
+    try { socket.destroy() } catch {} 
+  })
 })
-tcpServer.listen(9000, '0.0.0.0', () => { console.log('TCP server listening on port 9000') })
+tcpServer.listen(9000, '0.0.0.0', () => { logToUI('TCP server listening on port 9000') })
 
 function getMachinesData() {
   if (!db) return []
@@ -238,17 +262,26 @@ function broadcastMachines() {
 
 function sendCommandToMachine(machineId: number | string, cmd: any) {
   const targetId = Number(machineId)
+  let found = false
   for (const [socket, mId] of clients.entries()) {
     if (Number(mId) === targetId) {
+      found = true
       if (socket.writable && !socket.destroyed) {
         try {
           socket.write(JSON.stringify(cmd) + '\n')
-        } catch (e) {
+          logToUI(`Successfully sent command '${cmd.command}' to machine ID ${machineId} (${socket.remoteAddress || 'unknown'}:${socket.remotePort || 'unknown'})`)
+        } catch (e: any) {
+          logToUI(`Error sending command '${cmd.command}' to machine ID ${machineId}: ${e.message}`)
           console.error(`Failed to send command to machine ${machineId}:`, e)
         }
-        break
+      } else {
+        logToUI(`Found TCP socket for machine ID ${machineId}, but it is not writable or is destroyed.`)
       }
+      break
     }
+  }
+  if (!found) {
+    logToUI(`Failed to send command '${cmd.command}' to machine ID ${machineId}: client PC is not connected (no TCP socket found).`)
   }
 }
 
@@ -292,11 +325,14 @@ function getLanIPAddress() {
 
 let udpServer: dgram.Socket | null = null;
 function startUdpBroadcast() {
+  logToUI('Starting UDP broadcast on port 9090 (interval: 3s)...');
   const socket = dgram.createSocket('udp4');
   socket.bind(() => {
     socket.setBroadcast(true);
+    logToUI('UDP broadcast socket bound and set to broadcast mode.');
   });
   
+  let broadcastCount = 0;
   setInterval(() => {
     try {
       const serverIP = getLanIPAddress();
@@ -305,7 +341,12 @@ function startUdpBroadcast() {
         wsUrl: `tcp://${serverIP}:9000`
       });
       socket.send(payload, 0, payload.length, 9090, '255.255.255.255');
-    } catch (err) {
+      broadcastCount++;
+      if (broadcastCount % 20 === 1) { // Log once every 60s to avoid console clutter
+        logToUI(`UDP Broadcast: active. Broadcasting service info: ${payload}`);
+      }
+    } catch (err: any) {
+      logToUI(`UDP Broadcast error: ${err.message}`);
       console.error('UDP Broadcast error:', err);
     }
   }, 3000);
@@ -397,12 +438,19 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
     }
   }
   
+  // Close any existing active sessions to prevent duplicate cards
+  const closeResult = db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
+  if (closeResult.changes > 0) {
+    logToUI(`Cleaned up ${closeResult.changes} stale active sessions for machine ID ${machineId}`)
+  }
+  
   db.prepare(`
     INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration) 
     VALUES (?, ?, ?, datetime('now'), ?, 'active', ?)
   `).run(machineId, customerName || 'Walk-in', planId || null, mode || 'postpaid', duration)
 
   db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
+  logToUI(`Opening session on machine ID ${machineId} for user ${customerName || 'Walk-in'}`)
   sendCommandToMachine(machineId, { command: 'unlock', user: customerName || 'Guest' })
   broadcastMachines()
 })
@@ -753,6 +801,10 @@ ipcMain.handle('get-latest-screen-frames', () => {
 
 ipcMain.handle('send-remote-input', (_, machineId, inputEvent) => {
   sendCommandToMachine(machineId, { command: 'remote-input', payload: inputEvent })
+})
+
+ipcMain.handle('get-server-logs', () => {
+  return serverLogsCache
 })
 
 // ─── Auto Updater IPC ──────────────────────────────────────────────────────────

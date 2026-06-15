@@ -68,6 +68,9 @@ export default function App() {
   const [screenshotLoading, setScreenshotLoading] = useState(false)
   const [screenshotError, setScreenshotError] = useState('')
   const [screenFrames, setScreenFrames] = useState<Record<number, string>>({})
+  const [systemLogs, setSystemLogs] = useState<any[]>([])
+  const [isLogsOpen, setIsLogsOpen] = useState(true)
+  const logsEndRef = useRef<HTMLDivElement>(null)
 
   // Pricing plans CRUD states
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
@@ -142,6 +145,7 @@ export default function App() {
       window.ipcRenderer.invoke('get-settings').then(setSettings)
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
+      window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -164,14 +168,31 @@ export default function App() {
       }
       window.ipcRenderer.on('screen-frame-updated', frameListener)
 
+      const serverLogListener = (_: any, log: any) => {
+        setSystemLogs((prev) => {
+          const updated = [...prev, log]
+          if (updated.length > 100) updated.shift()
+          return updated
+        })
+      }
+      window.ipcRenderer.on('server-log', serverLogListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
         window.ipcRenderer?.off('screen-frame-updated', frameListener)
+        window.ipcRenderer?.off('server-log', serverLogListener)
         ipcBound.current = false
       }
     }
   }, [])
+
+  // Scroll developer console logs to bottom
+  useEffect(() => {
+    if (isLogsOpen && logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [systemLogs, isLogsOpen])
 
   // Load plans, rules, settings, reports on tab switches
   useEffect(() => {
@@ -1104,6 +1125,35 @@ export default function App() {
                   ))}
                 </div>
               )}
+
+              {/* Developer Logs Console */}
+              <div className="mt-8 bg-slate-900/40 border border-slate-800/80 rounded-xl overflow-hidden shadow-lg">
+                <div 
+                  onClick={() => setIsLogsOpen(!isLogsOpen)}
+                  className="p-4 bg-slate-950/20 border-b border-slate-850 flex justify-between items-center cursor-pointer hover:bg-slate-900/30 select-none"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                    <h3 className="text-xs font-bold text-white uppercase tracking-wider">Developer System Log Console</h3>
+                  </div>
+                  <span className="text-slate-400 text-[10px] uppercase font-bold">{isLogsOpen ? 'Hide ▲' : 'Show ▼'}</span>
+                </div>
+                {isLogsOpen && (
+                  <div className="p-4 bg-slate-950/80 font-mono text-[11px] text-slate-300 max-h-[160px] overflow-y-auto space-y-1">
+                    {systemLogs.length === 0 ? (
+                      <div className="text-slate-500 italic">No logs recorded yet.</div>
+                    ) : (
+                      systemLogs.map((log, index) => (
+                        <div key={index} className="flex gap-2.5">
+                          <span className="text-slate-500">[{log.timestamp}]</span>
+                          <span className="text-slate-200">{log.message}</span>
+                        </div>
+                      ))
+                    )}
+                    <div ref={logsEndRef} />
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
