@@ -64,6 +64,8 @@ export default function App() {
   const [filterViolence, setFilterViolence] = useState(true)
   const [filterSelfHarm, setFilterSelfHarm] = useState(true)
   const [filterIllegal, setFilterIllegal] = useState(true)
+  const [customFilterTerms, setCustomFilterTerms] = useState<string[]>([])
+  const [newCustomTerm, setNewCustomTerm] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
 
@@ -859,6 +861,9 @@ export default function App() {
       setFilterViolence(settings.filter_violence !== 'false')
       setFilterSelfHarm(settings.filter_self_harm !== 'false')
       setFilterIllegal(settings.filter_illegal !== 'false')
+      try {
+        setCustomFilterTerms(JSON.parse(settings.custom_filter_terms || '[]'))
+      } catch { setCustomFilterTerms([]) }
     }
   }, [settings])
 
@@ -872,7 +877,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'filter_violence', filterViolence ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_self_harm', filterSelfHarm ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
-        
+        await window.ipcRenderer.invoke('update-settings', 'custom_filter_terms', JSON.stringify(customFilterTerms))
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
         setSaveStatus('Settings saved successfully!')
@@ -883,6 +888,18 @@ export default function App() {
         setIsSavingSettings(false)
       }
     }
+  }
+
+  const handleAddCustomTerm = () => {
+    const term = newCustomTerm.trim()
+    if (term && !customFilterTerms.includes(term)) {
+      setCustomFilterTerms(prev => [...prev, term])
+      setNewCustomTerm('')
+    }
+  }
+
+  const handleRemoveCustomTerm = (term: string) => {
+    setCustomFilterTerms(prev => prev.filter(t => t !== term))
   }
 
   const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
@@ -1773,6 +1790,40 @@ export default function App() {
                         Illegal Acts, Weapons & Hacking
                       </label>
                     </div>
+                  </div>
+
+                  {/* Custom Blocked Terms */}
+                  <div className="space-y-2.5 pt-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Custom Blocked Terms</label>
+                    <p className="text-[10px] text-slate-500">Queries containing any of these words/phrases will instantly lock the terminal — no API key required.</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. gambling, proxy, vpn..."
+                        className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={newCustomTerm}
+                        onChange={(e) => setNewCustomTerm(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCustomTerm() } }}
+                      />
+                      <button
+                        onClick={handleAddCustomTerm}
+                        className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-bold transition-all flex items-center gap-1.5"
+                      >
+                        <Plus size={14} /> Add
+                      </button>
+                    </div>
+                    {customFilterTerms.length > 0 && (
+                      <div className="flex flex-wrap gap-2 pt-1">
+                        {customFilterTerms.map((term) => (
+                          <span key={term} className="flex items-center gap-1.5 px-2.5 py-1 bg-red-950/60 border border-red-800/50 text-red-300 rounded-full text-xs font-semibold">
+                            {term}
+                            <button onClick={() => handleRemoveCustomTerm(term)} className="text-red-400 hover:text-white transition-colors ml-0.5">
+                              <X size={11} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Submit buttons */}

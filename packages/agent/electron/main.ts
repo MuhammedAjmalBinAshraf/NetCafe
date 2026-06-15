@@ -1566,6 +1566,19 @@ app.whenReady().then(() => {
   }
 
   loadConfig();
+
+  // Register the agent to auto-start with Windows so it survives reboots.
+  // setLoginItemSettings writes to HKCU\...\Run in the Windows registry.
+  if (process.platform === 'win32' && app.isPackaged) {
+    app.setLoginItemSettings({
+      openAtLogin: true,
+      openAsHidden: false,
+      name: 'NetCafe Agent',
+      path: process.execPath,
+    });
+    logToUI('Auto-start on Windows login: registered.');
+  }
+
   setupWindowsFirewall();
   startUdpDiscovery();
   createLockWindow();

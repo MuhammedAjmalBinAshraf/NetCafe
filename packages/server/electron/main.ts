@@ -66,8 +66,14 @@ function setupDatabase() {
     db.exec("ALTER TABLE machines ADD COLUMN hardware_locked INTEGER DEFAULT 0;")
   } catch {}
   try {
-    db.exec("ALTER TABLE machines ADD COLUMN uuid TEXT UNIQUE;")
+    // SQLite does NOT support UNIQUE on ALTER TABLE ADD COLUMN — add column without it
+    db.exec("ALTER TABLE machines ADD COLUMN uuid TEXT;")
   } catch {}
+  // Create partial unique index separately (WHERE uuid IS NOT NULL allows multiple NULLs)
+  try {
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_uuid ON machines(uuid) WHERE uuid IS NOT NULL;")
+  } catch {}
+
 
   // Session app logs table
   db.exec(`
@@ -100,6 +106,8 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_violence', 'true');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_self_harm', 'true');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_illegal', 'true');")
+  // Custom keyword/phrase terms that always trigger a block (stored as JSON array string)
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('custom_filter_terms', '[]');")
 }
 
 // TCP Server & Metrics Maps
@@ -278,6 +286,22 @@ function handleClientMessage(socket: net.Socket, data: any) {
             const lastQuery = lastCheckedQueries.get(Number(machineId))
             if (lastQuery !== query) {
               lastCheckedQueries.set(Number(machineId), query)
+
+              // Synchronous custom-term check (no API call needed)
+              let customTermsRaw = db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get()?.value || '[]'
+              let customTerms: string[] = []
+              try { customTerms = JSON.parse(customTermsRaw) } catch {}
+              const lowerQuery = query.toLowerCase()
+              const matchedTerm = customTerms.find((t: string) => t && lowerQuery.includes(t.toLowerCase()))
+              if (matchedTerm) {
+                logToUI(`Safety Guard CUSTOM TERM MATCH on machine ID ${Number(machineId)}: "${query}" matched term "${matchedTerm}"`)
+                db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`)
+                sendCommandToMachine(Number(machineId), { command: 'lock' })
+                sendCommandToMachine(Number(machineId), { command: 'message', payload: `Your terminal has been locked: blocked search term detected ("${matchedTerm}").` })
+                if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"` })
+                broadcastMachines()
+              }
+
               const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
               const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false'
               const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false'
@@ -286,7 +310,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
                 porn: filterPorn,
                 violence: filterViolence,
                 selfHarm: filterSelfHarm,
-                illegal: filterIllegal
+                illegal: filterIllegal,
+                customTerms
               })
             }
           }
@@ -1030,14 +1055,14 @@ const lastCheckedQueries = new Map<number, string>()
 const lastActiveAppMap = new Map<number, string>()
 
 async function checkQuerySafety(
-  machineId: number, 
-  query: string, 
+  machineId: number,
+  query: string,
   apiKey: string,
-  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean }
+  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean; customTerms?: string[] }
 ) {
   logToUI(`Safety Guard: Evaluating search query on machine ID ${machineId}: "${query}"`)
   try {
-    const result = await evaluateQuerySafety(query, apiKey, filters)
+    const result = await evaluateQuerySafety(query, apiKey, filters, filters.customTerms || [])
     if (result.isUnsafe) {
       logToUI(`Safety Guard VIOLATION: Machine ID ${machineId} searched for prohibited content: "${query}". Category: ${result.category}`)
       
@@ -1075,9 +1100,10 @@ async function checkQuerySafety(
 }
 
 async function evaluateQuerySafety(
-  query: string, 
+  query: string,
   apiKey: string,
-  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean }
+  filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean },
+  customTerms: string[] = []
 ): Promise<{ isUnsafe: boolean, category: string }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   
@@ -1086,6 +1112,7 @@ async function evaluateQuerySafety(
   if (filters.violence) topics.push("severe violence/gore/terrorist activities");
   if (filters.selfHarm) topics.push("self-harm/suicide instructions");
   if (filters.illegal) topics.push("illegal acts/weapons/hacking guides");
+  if (customTerms.length > 0) topics.push(`any of these specific blocked terms/topics: ${customTerms.join(', ')}`);
 
   if (topics.length === 0) {
     return { isUnsafe: false, category: "" };
