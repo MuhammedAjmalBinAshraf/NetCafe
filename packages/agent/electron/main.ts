@@ -8,10 +8,18 @@ import { exec, execSync, spawn } from 'child_process';
 import dgram from 'dgram';
 import { MitmProxy } from './mitm-proxy';
 
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.log('Another instance of NetCafe Agent is already running. Exiting.');
+  app.quit();
+  process.exit(0);
+}
+
 let mitmProxy: MitmProxy | null = null;
 
 let lockWindow: BrowserWindow | null = null;
 let tcpSocket: net.Socket | null = null;
+let isConnecting = false;
 let isLocked = true;
 let isAppQuitting = false;
 let activeBlockRules: any[] = [];
@@ -1079,6 +1087,7 @@ ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId:
       } catch {}
       tcpSocket = null;
     }
+    isConnecting = false;
     connectToServer();
 
     // Destroy and recreate lock screen window to reflect new config
@@ -1376,12 +1385,23 @@ function updateMirrorSettings(highRes: boolean, ultraRes: boolean = false) {
 
 // ─── TCP Connection ────────────────────────────────────────────────────────────
 function connectToServer() {
+  if (isConnecting) {
+    logToUI('Connection attempt already in progress, skipping connectToServer.');
+    return;
+  }
+  if (tcpSocket && !tcpSocket.destroyed) {
+    logToUI('Already connected to server, skipping connectToServer.');
+    return;
+  }
+
+  isConnecting = true;
   const socket = new net.Socket();
   tcpSocket = socket;
   let buffer = '';
 
   logToUI(`Attempting to connect to server at tcp://${serverHost}:${serverPort}...`);
   socket.connect(serverPort, serverHost, () => {
+    isConnecting = false;
     logToUI(`Connected to server successfully!`);
     const mac = getMACAddress() || machineId;
     sendToServer({ 
@@ -1415,6 +1435,7 @@ function connectToServer() {
   socket.on('close', () => {
     logToUI('Disconnected from server. Retrying in 5 seconds...');
     tcpSocket = null;
+    isConnecting = false;
     stopScreenMirroring();
     
     // Resolve all pending query checks to true
@@ -1447,6 +1468,7 @@ function connectToServer() {
   });
 
   socket.on('error', (err: any) => {
+    isConnecting = false;
     let explanation = '';
     if (err.code === 'ETIMEDOUT') {
       explanation = ' (Connection timed out. Check Windows Firewall on the Server PC and verify port 9000 TCP is allowed/open.)';
@@ -1552,6 +1574,7 @@ function startUdpDiscovery() {
               tcpSocket = null; 
             } catch {}
           }
+          isConnecting = false;
           connectToServer();
         }
       }
