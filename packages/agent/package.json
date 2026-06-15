@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.26",
+  "version": "1.0.27",
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
   "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
@@ -42,7 +42,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

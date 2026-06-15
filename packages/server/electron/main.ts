@@ -139,22 +139,50 @@ function broadcastBlockRulesToClients() {
 function handleClientMessage(socket: net.Socket, data: any) {
   if (data.type === 'register') {
     const payload = data.payload
-    let machine = null
+    let machine: any = null
+    const incomingIp = payload.ip_address || socket.remoteAddress || ''
+
     if (payload.uuid) {
       machine = db.prepare("SELECT * FROM machines WHERE uuid = ?").get(payload.uuid)
     }
     if (!machine && payload.mac_address) {
       machine = db.prepare("SELECT * FROM machines WHERE mac_address = ?").get(payload.mac_address)
     }
-    
+
+    // If we found a match by UUID/MAC but that slot is ALREADY occupied by an active
+    // socket from a DIFFERENT IP, treat this as a distinct machine (cloned VM scenario).
+    if (machine) {
+      const existingMachineId = Number(machine.id)
+      let alreadyConnectedFromDifferentIp = false
+      for (const [s, mId] of clients.entries()) {
+        if (Number(mId) === existingMachineId && s !== socket) {
+          const existingIp = (s as any).remoteAddress || ''
+          if (existingIp && incomingIp && existingIp !== incomingIp) {
+            alreadyConnectedFromDifferentIp = true
+            break
+          }
+        }
+      }
+      if (alreadyConnectedFromDifferentIp) {
+        machine = null // Force creation of a new record for this different physical machine
+        logToUI(`Duplicate UUID/MAC from different IP (${incomingIp}). Creating separate machine entry.`)
+      }
+    }
+
     if (!machine) {
       const stmt = db.prepare("INSERT INTO machines (name, mac_address, uuid, ip_address, status) VALUES (?, ?, ?, ?, ?)")
-      const info = stmt.run(payload.name || 'New PC', payload.mac_address || null, payload.uuid || null, payload.ip_address, 'available')
+      // For cloned machines sharing a UUID/MAC, store null so they don't collide
+      let storeUuid: string | null = payload.uuid || null
+      let storeMac: string | null = payload.mac_address || null
+      // Check if uuid/mac already in use by another machine
+      if (storeUuid && db.prepare("SELECT id FROM machines WHERE uuid = ?").get(storeUuid)) storeUuid = null
+      if (storeMac && db.prepare("SELECT id FROM machines WHERE mac_address = ?").get(storeMac)) storeMac = null
+      const info = stmt.run(payload.name || 'New PC', storeMac, storeUuid, incomingIp, 'available')
       machine = { id: info.lastInsertRowid }
-      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${payload.ip_address}`)
+      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${incomingIp}`)
     } else {
-      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, payload.ip_address, 'available', payload.uuid || null, machine.id)
-      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, IP=${payload.ip_address}`)
+      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, incomingIp, 'available', payload.uuid || null, machine.id)
+      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, IP=${incomingIp}`)
     }
 
     // Clean up stale sockets for this machine ID
@@ -1145,5 +1173,5 @@ ipcMain.handle('toggle-hardware-lock', (_, machineId, block: boolean) => {
 
 ipcMain.handle('get-session-app-logs', (_, sessionId) => {
   if (!db) return []
-  return db.prepare("SELECT * FROM session_app_logs WHERE session_id = ? ORDER BY duration_seconds DESC").all()
+  return db.prepare("SELECT * FROM session_app_logs WHERE session_id = ? ORDER BY duration_seconds DESC").all(sessionId)
 })

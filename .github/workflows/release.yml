@@ -6,9 +6,6 @@ on:
       - 'v*'
   workflow_dispatch: {}
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 permissions:
   contents: write
 
@@ -31,19 +28,29 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 20
 
-      - name: Cache Electron
+      - name: Cache Electron binaries
         uses: actions/cache@v4
         with:
-          path: ${{ github.workspace }}/.cache/electron
-          key: electron-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
+          path: |
+            ${{ github.workspace }}/.cache/electron
+            ${{ github.workspace }}/.cache/electron-builder
+          key: electron-${{ runner.os }}-${{ hashFiles('packages/server/package.json', 'packages/agent/package.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
 
-      - name: Install root deps
-        run: npm install --prefer-offline
+      - name: Install root workspace deps
+        run: npm install
         env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+          ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
+          ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
 
+      - name: Rebuild better-sqlite3 for Electron (server)
+        working-directory: packages/server
+        run: npx electron-rebuild -f -w better-sqlite3
+        env:
+          ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
 
       - name: Build server (Windows)
         working-directory: packages/server
@@ -53,7 +60,6 @@ jobs:
           USE_HARD_LINKS: false
           ELECTRON_CACHE: ${{ github.workspace }}/.cache/electron
           ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.cache/electron-builder
-
 
       - name: Build agent (Windows)
         working-directory: packages/agent
@@ -77,58 +83,6 @@ jobs:
           path: |
             packages/server/release/*.exe
             packages/agent/release/*.exe
-
-  build-linux:
-    name: Build on Linux
-    runs-on: ubuntu-latest
-    if: false
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y rpm libarchive-tools python3 make g++
-
-      - name: Install root deps
-        run: npm install
-
-
-      - name: Build server (Linux)
-        working-directory: packages/server
-        run: npm run build:linux:ci
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-      - name: Build agent (Linux)
-        working-directory: packages/agent
-        run: npm run build:linux:ci
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: List release files
-        run: |
-          ls -la packages/server/release/ || echo "No server release files"
-          ls -la packages/agent/release/ || echo "No agent release files"
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-builds
-          if-no-files-found: warn
-          path: |
-            packages/server/release/*.deb
-            packages/server/release/*.AppImage
-            packages/agent/release/*.deb
-            packages/agent/release/*.AppImage
 
   release:
     name: Create GitHub Release
