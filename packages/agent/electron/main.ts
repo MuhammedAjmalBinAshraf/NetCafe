@@ -6,6 +6,9 @@ import os from 'os';
 import fs from 'fs';
 import { exec, execSync, spawn } from 'child_process';
 import dgram from 'dgram';
+import { MitmProxy } from './mitm-proxy';
+
+let mitmProxy: MitmProxy | null = null;
 
 let lockWindow: BrowserWindow | null = null;
 let tcpSocket: net.Socket | null = null;
@@ -1620,6 +1623,23 @@ function Send-Keys($keys) {
 app.whenReady().then(() => {
   if (process.platform === 'win32') {
     initPowerShell();
+
+    // Start MITM proxy for real-time browser query interception
+    try {
+      mitmProxy = new MitmProxy(
+        app.getPath('userData'),
+        (query: string) => {
+          logToUI(`[MITM] Browser query intercepted: "${query}"`);
+          sendToServer({ type: 'browser-query', payload: { query } });
+        },
+        logToUI
+      );
+      mitmProxy.start().catch((err: Error) => {
+        logToUI(`[MITM] Proxy start warning: ${err.message}`);
+      });
+    } catch (err: any) {
+      logToUI(`[MITM] Init error: ${err.message}`);
+    }
   }
   if (process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() !== 0) {
     const args = [process.execPath, ...process.argv.slice(1)];
@@ -1787,4 +1807,9 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   isAppQuitting = true;
+  // Restore system proxy settings before exit
+  if (mitmProxy) {
+    try { mitmProxy.stop(); } catch {}
+    mitmProxy = null;
+  }
 });

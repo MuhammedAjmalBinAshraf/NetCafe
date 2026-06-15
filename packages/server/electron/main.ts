@@ -393,6 +393,57 @@ function handleClientMessage(socket: net.Socket, data: any) {
       })
     }
   }
+  else if (data.type === 'browser-query') {
+    // Real-time query intercepted by the MITM proxy running on the client
+    const machineId = clients.get(socket)
+    if (!machineId || !db) return
+    const query: string = data.payload?.query || ''
+    if (!query || query.length < 2) return
+
+    const aiEnabled = db.prepare("SELECT value FROM settings WHERE key = 'ai_safety_enabled'").get() as any
+    const apiKey    = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
+    const ts = new Date().toLocaleTimeString('en-GB', { hour12: false })
+
+    // Don't re-check the same query from the same machine repeatedly
+    const lastQ = lastCheckedQueries.get(Number(machineId))
+    if (lastQ === query) return
+    lastCheckedQueries.set(Number(machineId), query)
+
+    if (mainWindow) mainWindow.webContents.send('filter-log', {
+      timestamp: ts, level: 'info',
+      message: `[MITM] Real-time intercept — Machine ${machineId}: "${query}"`,
+      machineId: Number(machineId), query
+    })
+
+    // Layer 1: custom blocked terms (instant, no API key needed)
+    let customTerms: string[] = []
+    try { customTerms = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get() as any)?.value || '[]') } catch {}
+    const lowerQ = query.toLowerCase()
+    const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
+    if (hit) {
+      if (mainWindow) mainWindow.webContents.send('filter-log', {
+        timestamp: ts, level: 'block',
+        message: `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — locking Machine ${machineId}`,
+        machineId: Number(machineId), query
+      })
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`)
+      sendCommandToMachine(Number(machineId), { command: 'lock' })
+      sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: blocked search detected ("${hit}").` })
+      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"` })
+      broadcastMachines()
+      return
+    }
+
+    // Layer 2: Gemini AI check (only if API key configured)
+    if (!apiKey) return
+    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false'
+    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false'
+    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false'
+    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false'
+    checkQuerySafety(Number(machineId), query, apiKey, {
+      porn: filterPorn, violence: filterViolence, selfHarm: filterSelfHarm, illegal: filterIllegal, customTerms
+    })
+  }
   else if (data.type === 'user-login') {
     const machineId = clients.get(socket)
     if (machineId && db) {
