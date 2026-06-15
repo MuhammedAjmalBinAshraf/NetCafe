@@ -4,7 +4,7 @@ import {
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
-  Maximize2, Minimize2, Terminal, Activity
+  Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -69,6 +69,9 @@ export default function App() {
   const [newCustomTerm, setNewCustomTerm] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
+  const [aiCustomContext, setAiCustomContext] = useState('')
+  const [filterLogs, setFilterLogs] = useState<Array<{timestamp: string, level: string, message: string, machineId?: number, query?: string}>>([])
+  const filterLogEndRef = React.useRef<HTMLDivElement>(null)
 
   // Modals & Drawers
   const [selectedMachine, setSelectedMachine] = useState<any>(null)
@@ -163,6 +166,7 @@ export default function App() {
   // Bulk add states
   const [isBulkUserModalOpen, setIsBulkUserModalOpen] = useState(false)
   const [bulkCsvText, setBulkCsvText] = useState('')
+  const [xlsxImportStatus, setXlsxImportStatus] = useState('')
 
   // Top-Up states
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false)
@@ -264,6 +268,11 @@ export default function App() {
       }
       window.ipcRenderer.on('safety-alert-triggered', safetyAlertTriggeredListener)
 
+      const filterLogListener = (_: any, entry: any) => {
+        setFilterLogs(prev => { const next = [...prev, entry]; return next.length > 300 ? next.slice(-300) : next })
+      }
+      window.ipcRenderer.on('filter-log', filterLogListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
@@ -271,6 +280,7 @@ export default function App() {
         window.ipcRenderer?.off('server-log', serverLogListener)
         window.ipcRenderer?.off('remote-command-result', commandResultListener)
         window.ipcRenderer?.off('safety-alert-triggered', safetyAlertTriggeredListener)
+        window.ipcRenderer?.off('filter-log', filterLogListener)
         ipcBound.current = false
       }
     }
@@ -881,6 +891,7 @@ export default function App() {
   useEffect(() => {
     if (settings) {
       setApiKeyInput(settings.gemini_api_key || '')
+      setAiCustomContext(settings.ai_custom_context || '')
       setFilterPorn(settings.filter_porn !== 'false')
       setFilterViolence(settings.filter_violence !== 'false')
       setFilterSelfHarm(settings.filter_self_harm !== 'false')
@@ -902,6 +913,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'filter_self_harm', filterSelfHarm ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'custom_filter_terms', JSON.stringify(customFilterTerms))
+        await window.ipcRenderer.invoke('update-settings', 'ai_custom_context', aiCustomContext)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
         setSaveStatus('Settings saved successfully!')
@@ -929,6 +941,9 @@ export default function App() {
   const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
     if (e.key === 'Escape') {
       setIsRemoteFullscreen(false)
+      if (window.ipcRenderer && selectedDrawerMachine) {
+        window.ipcRenderer.invoke('set-fullscreen-mirror', null).catch(() => {})
+      }
       e.preventDefault()
       e.stopPropagation()
       return
@@ -1850,6 +1865,42 @@ export default function App() {
                 )}
               </div>
 
+              {/* Live Filter Log */}
+              <div className="bg-slate-950 border border-slate-900 rounded-xl overflow-hidden">
+                <div className="flex justify-between items-center px-4 py-3 border-b border-slate-900">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <span className="text-green-400 font-mono text-xs">▶</span> Live Filter Log
+                  </h3>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-slate-600">{filterLogs.length} entries</span>
+                    <button onClick={() => setFilterLogs([])} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+                  </div>
+                </div>
+                <div className="font-mono text-xs p-3 space-y-0.5 h-52 overflow-y-auto bg-slate-950">
+                  {filterLogs.length === 0 ? (
+                    <div className="text-slate-700 py-6 text-center">
+                      Waiting for activity... Filter events will stream here in real-time when clients search.
+                    </div>
+                  ) : (
+                    filterLogs.map((log, i) => (
+                      <div key={i} className={`flex gap-2 leading-relaxed ${
+                        log.level === 'block' ? 'text-red-400' :
+                        log.level === 'allow' ? 'text-emerald-400' :
+                        log.level === 'warn' ? 'text-amber-400' :
+                        'text-slate-500'
+                      }`}>
+                        <span className="text-slate-700 shrink-0">[{log.timestamp}]</span>
+                        <span className="break-all">
+                          {log.level === 'block' ? '❌' : log.level === 'allow' ? '✅' : log.level === 'warn' ? '⚠️' : '→'}{' '}
+                          {log.message}
+                        </span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={filterLogEndRef} />
+                </div>
+              </div>
+
               <div className="text-xs text-slate-500 bg-slate-900/30 border border-slate-900 rounded-lg p-3">
                 Configure Gemini API key, filter categories, and custom blocked terms in
                 <button onClick={() => setActiveTab('settings')} className="text-blue-400 hover:underline ml-1">⚙️ Settings → AI Safety Filter</button>.
@@ -2080,6 +2131,19 @@ export default function App() {
                     )}
                   </div>
 
+                  {/* Layer 2 — Custom AI Context */}
+                  <div className="space-y-2 pt-1">
+                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Layer 2 — Custom AI Context</label>
+                    <p className="text-[10px] text-slate-500">Extra instructions injected into every Gemini prompt. Example: <em className="text-slate-400 not-italic">"This is a school lab. Also block gaming sites and social media."</em></p>
+                    <textarea
+                      rows={3}
+                      placeholder="Leave empty to use default cybercafe safety context, or write your own instructions for the AI..."
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm resize-none font-mono"
+                      value={aiCustomContext}
+                      onChange={(e) => setAiCustomContext(e.target.value)}
+                    />
+                  </div>
+
                   {/* Submit buttons */}
                   <div className="flex items-center gap-3.5 pt-1">
                     <button
@@ -2303,6 +2367,74 @@ export default function App() {
                 )}
               </div>
 
+              {/* Bulk Import from Excel */}
+              <div className="bg-slate-900/40 border border-slate-900 rounded-xl p-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                      <FileSpreadsheet size={16} className="text-emerald-400" /> Bulk Import from Excel
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Upload an .xlsx file with columns: username, password, email, phone</p>
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (!window.ipcRenderer) return
+                      const b64 = await window.ipcRenderer.invoke('download-user-template')
+                      const url = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${b64}`
+                      const a = document.createElement('a'); a.href = url; a.download = 'netcafe_users_template.xlsx'; a.click()
+                    }}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold flex items-center gap-1.5 transition-all"
+                  >
+                    <Download size={13} /> Download Template
+                  </button>
+                </div>
+
+                <div className="flex gap-2 items-center">
+                  <label
+                    htmlFor="xlsxImport"
+                    className="flex-1 flex items-center justify-center gap-2 border-2 border-dashed border-slate-700 hover:border-emerald-600 rounded-lg py-3 cursor-pointer text-xs text-slate-400 hover:text-emerald-400 transition-all"
+                  >
+                    <Upload size={15} /> Click to select .xlsx file
+                    <input
+                      id="xlsxImport"
+                      type="file"
+                      accept=".xlsx,.xls"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0]
+                        if (!file || !window.ipcRenderer) return
+                        const reader = new FileReader()
+                        reader.onload = async (ev) => {
+                          const base64 = (ev.target?.result as string).split(',')[1]
+                          setXlsxImportStatus('Importing...')
+                          const result = await window.ipcRenderer.invoke('bulk-import-users', base64)
+                          if (result.ok) {
+                            setXlsxImportStatus(`✅ Imported ${result.success} users, skipped ${result.skipped} duplicates${result.errors.length > 0 ? `, ${result.errors.length} errors` : ''}`)
+                            window.ipcRenderer.invoke('get-users').then(setUsers)
+                          } else {
+                            setXlsxImportStatus(`❌ Error: ${result.error}`)
+                          }
+                        }
+                        reader.readAsDataURL(file)
+                        e.target.value = '' // reset so same file can be re-imported
+                      }}
+                    />
+                  </label>
+                </div>
+
+                {xlsxImportStatus && (
+                  <div className={`text-xs px-3 py-2 rounded border ${
+                    xlsxImportStatus.startsWith('✅')
+                      ? 'bg-emerald-950/40 border-emerald-900/50 text-emerald-300'
+                      : xlsxImportStatus === 'Importing...'
+                      ? 'bg-blue-950/40 border-blue-900/50 text-blue-300'
+                      : 'bg-red-950/40 border-red-900/50 text-red-300'
+                  }`}>
+                    {xlsxImportStatus}
+                  </div>
+                )}
+              </div>
+
               {/* Users Table */}
               <div className="bg-slate-900/20 border border-slate-900 rounded-xl overflow-hidden">
                 <div className="overflow-x-auto">
@@ -2476,7 +2608,12 @@ export default function App() {
                   </div>
 
                   <button
-                    onClick={() => setIsRemoteFullscreen(true)}
+                    onClick={() => {
+                      setIsRemoteFullscreen(true)
+                      if (window.ipcRenderer && selectedDrawerMachine) {
+                        window.ipcRenderer.invoke('set-fullscreen-mirror', selectedDrawerMachine.id).catch(() => {})
+                      }
+                    }}
                     className="w-full flex items-center justify-center gap-2 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition-all shadow-sm"
                   >
                     <Maximize2 size={12} /> Go Fullscreen Control
@@ -3208,7 +3345,12 @@ export default function App() {
                   <RefreshCw size={12} /> Refresh
                 </button>
                 <button
-                  onClick={() => setIsRemoteFullscreen(false)}
+                  onClick={() => {
+                    setIsRemoteFullscreen(false)
+                    if (window.ipcRenderer && selectedDrawerMachine) {
+                      window.ipcRenderer.invoke('set-fullscreen-mirror', null).catch(() => {})
+                    }
+                  }}
                   className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded font-bold transition-all flex items-center gap-1"
                 >
                   <Minimize2 size={12} /> Exit Fullscreen
@@ -3365,7 +3507,12 @@ export default function App() {
 
             {/* Exit button */}
             <button
-              onClick={() => setIsRemoteFullscreen(false)}
+              onClick={() => {
+                setIsRemoteFullscreen(false)
+                if (window.ipcRenderer && selectedDrawerMachine) {
+                  window.ipcRenderer.invoke('set-fullscreen-mirror', null).catch(() => {})
+                }
+              }}
               className="w-full mt-auto py-1.5 bg-slate-800 hover:bg-slate-750 border border-slate-700 text-slate-300 hover:text-white font-bold rounded text-xs transition-colors"
             >
               Minimize Viewport

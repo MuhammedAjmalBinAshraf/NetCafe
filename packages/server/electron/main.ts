@@ -8,6 +8,7 @@ import Database from 'better-sqlite3'
 import os from 'os'
 import dgram from 'dgram'
 import { exec } from 'child_process'
+import * as XLSX from 'xlsx'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -121,6 +122,8 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_illegal', 'true');")
   // Custom keyword/phrase terms that always trigger a block (stored as JSON array string)
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('custom_filter_terms', '[]');")
+  // Admin-editable extra context injected into Gemini prompt
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_custom_context', '');")
   // Operator (client-side) PIN password
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('operator_password', 'admin');")
 }
@@ -317,8 +320,12 @@ function handleClientMessage(socket: net.Socket, data: any) {
             const lastQuery = lastCheckedQueries.get(Number(machineId))
             if (lastQuery !== query) {
               lastCheckedQueries.set(Number(machineId), query)
+              const ts = new Date().toLocaleTimeString('en-GB', { hour12: false })
 
-              // Synchronous custom-term check (no API call needed)
+              // Emit live filter log: new query received
+              if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'info', message: `NEW QUERY from machine ${Number(machineId)}: "${query}"`, machineId: Number(machineId), query })
+
+              // Synchronous custom-term check (Layer 1 — no API call needed)
               let customTermsRaw = db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get()?.value || '[]'
               let customTerms: string[] = []
               try { customTerms = JSON.parse(customTermsRaw) } catch {}
@@ -326,11 +333,14 @@ function handleClientMessage(socket: net.Socket, data: any) {
               const matchedTerm = customTerms.find((t: string) => t && lowerQuery.includes(t.toLowerCase()))
               if (matchedTerm) {
                 logToUI(`Safety Guard CUSTOM TERM MATCH on machine ID ${Number(machineId)}: "${query}" matched term "${matchedTerm}"`)
+                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — Locking machine ${Number(machineId)}`, machineId: Number(machineId), query })
                 db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`)
                 sendCommandToMachine(Number(machineId), { command: 'lock' })
                 sendCommandToMachine(Number(machineId), { command: 'message', payload: `Your terminal has been locked: blocked search term detected ("${matchedTerm}").` })
                 if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"` })
                 broadcastMachines()
+              } else {
+                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 PASSED — No custom term match for "${query}"`, machineId: Number(machineId), query })
               }
 
               const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
@@ -1093,6 +1103,61 @@ ipcMain.handle('bulk-create-users', (_, users: { username: string; password: str
   return results
 })
 
+ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
+  try {
+    const buffer = Buffer.from(xlsxBase64, 'base64')
+    const workbook = XLSX.read(buffer, { type: 'buffer' })
+    const sheetName = workbook.SheetNames[0]
+    const sheet = workbook.Sheets[sheetName]
+    const rows: any[] = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+
+    const results = { success: 0, skipped: 0, errors: [] as string[] }
+
+    for (const row of rows) {
+      // Support columns: username/Username/name, password/Password, email/Email, phone/Phone
+      const username = (row.username || row.Username || row.name || row.Name || '').toString().trim()
+      const password = (row.password || row.Password || '').toString().trim()
+      const email = (row.email || row.Email || '').toString().trim()
+      const phone = (row.phone || row.Phone || row.mobile || row.Mobile || '').toString().trim()
+
+      if (!username) {
+        results.skipped++
+        continue
+      }
+
+      try {
+        const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username)
+        if (existing) {
+          results.skipped++
+          continue
+        }
+        db.prepare('INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)')
+          .run(username, password || 'changeme', email, phone)
+        results.success++
+      } catch (e: any) {
+        results.errors.push(`${username}: ${e.message}`)
+      }
+    }
+
+    return { ok: true, ...results, total: rows.length }
+  } catch (e: any) {
+    return { ok: false, error: e.message }
+  }
+})
+
+ipcMain.handle('download-user-template', () => {
+  // Return a sample xlsx as base64 for the user to download
+  const wb = XLSX.utils.book_new()
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['username', 'password', 'email', 'phone'],
+    ['john_doe', 'pass123', 'john@example.com', '9876543210'],
+    ['jane_smith', 'pass456', 'jane@example.com', '9123456789'],
+  ])
+  XLSX.utils.book_append_sheet(wb, ws, 'Users')
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+  return Buffer.from(buf).toString('base64')
+})
+
 // ─── Machine Management IPC Handlers ──────────────────────────────────────────
 ipcMain.handle('rename-machine', (_, id: number, newName: string) => {
   try {
@@ -1140,42 +1205,36 @@ async function checkQuerySafety(
   apiKey: string,
   filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean; customTerms?: string[] }
 ) {
-  logToUI(`Safety Guard: Evaluating search query on machine ID ${machineId}: "${query}"`)
+  const ts = () => new Date().toLocaleTimeString('en-GB', { hour12: false })
+  const emitLog = (level: 'info' | 'warn' | 'block' | 'allow', message: string) => {
+    logToUI(`Safety Guard: ${message}`)
+    if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts(), level, message, machineId, query })
+  }
+
+  emitLog('info', `LAYER 2: Evaluating query on machine ${machineId}: "${query}"`)
   try {
-    const result = await evaluateQuerySafety(query, apiKey, filters, filters.customTerms || [])
+    const result = await evaluateQuerySafety(query, apiKey, filters, filters.customTerms || [], emitLog)
     if (result.isUnsafe) {
-      logToUI(`Safety Guard VIOLATION: Machine ID ${machineId} searched for prohibited content: "${query}". Category: ${result.category}`)
-      
-      // 1. Log to DB
+      emitLog('block', `LAYER 2 UNSAFE — Category: "${result.category}" — Locking machine ${machineId}`)
       db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)")
         .run(machineId, query, result.category || 'Unsafe content')
-      
-      // 2. Lock the machine
       sendCommandToMachine(machineId, { command: 'lock' })
-      
-      // 3. Send operator message to client PC
       sendCommandToMachine(machineId, { 
         command: 'message', 
         payload: `Your terminal has been locked due to a safety violation. Prohibited search query detected: "${query}" (Safety Category: ${result.category || 'Inappropriate Content'}).`
       })
-      
-      // 4. Send alert update to frontend React UI via IPC
       if (mainWindow) {
         mainWindow.webContents.send('safety-alert-triggered', {
-          machineId,
-          query,
-          reason: result.category || 'Unsafe content',
-          timestamp: new Date().toISOString()
+          machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString()
         })
       }
-      
       broadcastMachines()
     } else {
-      logToUI(`Safety Guard: Query "${query}" is allowed.`)
+      emitLog('allow', `LAYER 2 ALLOWED — Query "${query}" is safe`)
     }
   } catch (err: any) {
+    emitLog('warn', `LAYER 2 ERROR: ${err.message}`)
     console.error('Safety check failed:', err)
-    logToUI(`Safety Guard Error: ${err.message}`)
   }
 }
 
@@ -1183,7 +1242,8 @@ async function evaluateQuerySafety(
   query: string,
   apiKey: string,
   filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean },
-  customTerms: string[] = []
+  customTerms: string[] = [],
+  emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   
@@ -1195,16 +1255,23 @@ async function evaluateQuerySafety(
   if (customTerms.length > 0) topics.push(`any of these specific blocked terms/topics: ${customTerms.join(', ')}`);
 
   if (topics.length === 0) {
+    emitLog?.('warn', 'LAYER 2 SKIPPED — No filter categories enabled')
     return { isUnsafe: false, category: "" };
   }
 
-  const prompt = `You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${topics.join(", ")}. 
+  // Load admin-supplied extra context
+  const customContext = db.prepare("SELECT value FROM settings WHERE key = 'ai_custom_context'").get()?.value || ''
+  const contextLine = customContext.trim() ? `\nAdditional instructions from administrator: ${customContext.trim()}` : ''
+
+  const prompt = `You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${topics.join(", ")}.${contextLine}
   Respond strictly in JSON format:
   {
     "isUnsafe": true or false,
     "category": "Reason/category if unsafe, otherwise empty string"
   }
   Query: "${query}"`;
+
+  emitLog?.('info', `LAYER 2: Sending to Gemini (${topics.length} categories active)${customContext.trim() ? ' + custom context' : ''}`)
   
   try {
     const res = await fetch(url, {
@@ -1215,6 +1282,7 @@ async function evaluateQuerySafety(
         generationConfig: { responseMimeType: "application/json" }
       })
     });
+    emitLog?.('info', `LAYER 2: Gemini responded (HTTP ${res.status})`)
     if (res.ok) {
       const data: any = await res.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -1267,6 +1335,18 @@ ipcMain.handle('set-active-mirror', (_, machineId: number | null) => {
   activeMirrorMachineId = targetId
   if (activeMirrorMachineId !== null) {
     sendCommandToMachine(activeMirrorMachineId, { command: 'set-mirror-quality', payload: { highRes: true } })
+  }
+  return { success: true }
+})
+
+ipcMain.handle('set-fullscreen-mirror', (_, machineId: number | null) => {
+  const targetId = machineId !== null ? Number(machineId) : null
+  if (targetId !== null) {
+    sendCommandToMachine(targetId, { command: 'set-mirror-quality', payload: { highRes: true, ultraRes: true } })
+    logToUI(`Ultra-res mirror activated for machine ${targetId}`)
+  } else if (activeMirrorMachineId !== null) {
+    // Exiting fullscreen — revert to highRes
+    sendCommandToMachine(activeMirrorMachineId, { command: 'set-mirror-quality', payload: { highRes: true, ultraRes: false } })
   }
   return { success: true }
 })

@@ -24,13 +24,14 @@
   "dependencies": {
     "better-sqlite3": "^11.0.0",
     "clsx": "^2.1.1",
+    "electron-updater": "^6.1.8",
     "express": "^4.21.2",
     "lucide-react": "^0.474.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "tailwind-merge": "^3.0.1",
     "ws": "^8.18.0",
-    "electron-updater": "^6.1.8"
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^8.57.0",

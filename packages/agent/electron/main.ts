@@ -957,7 +957,8 @@ async function handleServerMessage(msg: any) {
       applyHostBlocking(domains);
     } else if (msg.command === 'set-mirror-quality') {
       const highRes = !!msg.payload?.highRes;
-      updateMirrorSettings(highRes);
+      const ultraRes = !!msg.payload?.ultraRes;
+      updateMirrorSettings(highRes, ultraRes);
     } else if (msg.command === 'block-inputs') {
       const block = !!msg.payload?.block;
       if (process.platform === 'win32') {
@@ -1280,13 +1281,23 @@ function startScreenMirroring() {
   mirrorInterval = setInterval(async () => {
     if (tcpSocket && !tcpSocket.destroyed) {
       try {
+        // Use actual display size if mirrorWidth/Height exceed it
+        let captureW = mirrorWidth;
+        let captureH = mirrorHeight;
+        try {
+          const primary = screen.getPrimaryDisplay();
+          // Cap at actual screen resolution
+          captureW = Math.min(mirrorWidth, primary.size.width);
+          captureH = Math.min(mirrorHeight, primary.size.height);
+        } catch {}
+        
         const sources = await desktopCapturer.getSources({
           types: ['screen'],
-          thumbnailSize: { width: mirrorWidth, height: mirrorHeight }
+          thumbnailSize: { width: captureW, height: captureH }
         });
         if (sources.length > 0) {
           const jpegBase64 = sources[0].thumbnail.toJPEG(mirrorQuality).toString('base64');
-          sendToServer({ type: 'screen-frame', payload: jpegBase64 });
+          sendToServer({ type: 'screen-frame', payload: jpegBase64, width: captureW, height: captureH });
         }
       } catch (err) {
         // silently ignore capture errors
@@ -1302,11 +1313,11 @@ function stopScreenMirroring() {
   }
 }
 
-function updateMirrorSettings(highRes: boolean) {
-  const newWidth = highRes ? 1920 : 1280;
-  const newHeight = highRes ? 1080 : 720;
-  const newQuality = highRes ? 88 : 75;
-  const newInterval = highRes ? 500 : 800;
+function updateMirrorSettings(highRes: boolean, ultraRes: boolean = false) {
+  const newWidth = ultraRes ? 2560 : highRes ? 1920 : 1280;
+  const newHeight = ultraRes ? 1440 : highRes ? 1080 : 720;
+  const newQuality = ultraRes ? 95 : highRes ? 88 : 75;
+  const newInterval = ultraRes ? 300 : highRes ? 500 : 800;
 
   if (newWidth !== mirrorWidth || newHeight !== mirrorHeight || newQuality !== mirrorQuality || newInterval !== mirrorIntervalMs) {
     mirrorWidth = newWidth;
@@ -1318,7 +1329,7 @@ function updateMirrorSettings(highRes: boolean) {
       stopScreenMirroring();
       startScreenMirroring();
     }
-    logToUI(`Updated mirror settings: highRes=${highRes} (${mirrorWidth}x${mirrorHeight}, quality=${mirrorQuality}, interval=${mirrorIntervalMs}ms)`);
+    logToUI(`Updated mirror settings: ultraRes=${ultraRes}, highRes=${highRes} (${mirrorWidth}x${mirrorHeight}, quality=${mirrorQuality}, interval=${mirrorIntervalMs}ms)`);
   }
 }
 
