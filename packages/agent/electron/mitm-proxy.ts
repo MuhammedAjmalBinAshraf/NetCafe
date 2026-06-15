@@ -201,6 +201,8 @@ export class MitmProxy {
     cert.setIssuer(this.caCert.subject.attributes);
     cert.setExtensions([
       { name: 'basicConstraints', cA: false },
+      { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
+      { name: 'extKeyUsage', serverAuth: true },
       { name: 'subjectAltName', altNames: [{ type: 2 /* DNS */, value: hostname }] },
     ]);
     cert.sign(this.caKey, forge.md.sha256.create());
@@ -219,10 +221,18 @@ export class MitmProxy {
     const crtPath = path.join(this.dataDir, 'netcafe-proxy-ca.crt');
     fs.writeFileSync(crtPath, this.caCertPem);
 
-    // Install to Windows Trusted Root store (silent — agent runs as admin)
+    // Install to Windows Trusted Root store (local machine)
     exec(`certutil -addstore -f "Root" "${crtPath}"`, (err) => {
-      if (!err) this.log('[Proxy] CA installed in Windows Trusted Root store ✓');
-      else      this.log(`[Proxy] CA install note: ${err.message.split('\n')[0]}`);
+      if (!err) {
+        this.log('[Proxy] CA installed in Windows Trusted Root store (Local Machine) ✓');
+      } else {
+        this.log(`[Proxy] Local Machine CA install note: ${err.message.split('\n')[0]}`);
+        // Fallback to Current User store (does not require admin privileges)
+        exec(`certutil -user -addstore -f "Root" "${crtPath}"`, (userErr) => {
+          if (!userErr) this.log('[Proxy] CA installed in Windows Trusted Root store (Current User) ✓');
+          else this.log(`[Proxy] Current User CA install note: ${userErr.message.split('\n')[0]}`);
+        });
+      }
     });
 
     // Write Firefox enterprise policy: trust enterprise CAs + use system proxy
