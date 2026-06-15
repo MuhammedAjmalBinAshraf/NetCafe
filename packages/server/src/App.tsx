@@ -889,7 +889,7 @@ export default function App() {
           </div>
 
           <div className="p-3 bg-slate-950/40 rounded-lg text-xs text-slate-500 border border-slate-900/50 space-y-2">
-            <div className="font-semibold text-slate-400">NetCafe Server v1.0.18</div>
+            <div className="font-semibold text-slate-400">NetCafe Server v1.0.19</div>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
               <span>Database: Connected</span>
@@ -922,6 +922,25 @@ export default function App() {
           {/* TAB: Dashboard */}
           {activeTab === 'dashboard' && (
             <div className="flex-1 flex flex-col">
+              <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-900/60">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Dashboard</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">Real-time status and monitoring of cafe terminals</p>
+                </div>
+                <button
+                  onClick={async () => {
+                    if (window.ipcRenderer) {
+                      const data = await window.ipcRenderer.invoke('get-machines')
+                      setMachines(data)
+                    }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded text-xs font-semibold transition-colors"
+                >
+                  <RefreshCcw size={12} />
+                  <span>Reload Terminals</span>
+                </button>
+              </div>
+
               {machines.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center text-slate-500">
                   <ServerOff size={64} className="mb-4 opacity-50 text-slate-600" />

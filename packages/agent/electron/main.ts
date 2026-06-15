@@ -1335,6 +1335,10 @@ app.whenReady().then(() => {
     if (isLocked) {
       createLockWindow();
     }
+    // Automatically apply update and restart after 3 seconds
+    setTimeout(() => {
+      autoUpdater.quitAndInstall();
+    }, 3000);
   });
 
   // Manual IPC from operator panel
