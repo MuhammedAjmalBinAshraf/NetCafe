@@ -1232,7 +1232,8 @@ function connectToServer() {
   logToUI(`Attempting to connect to server at tcp://${serverHost}:${serverPort}...`);
   socket.connect(serverPort, serverHost, () => {
     logToUI(`Connected to server successfully!`);
-    sendToServer({ type: 'register', payload: { mac_address: machineId, name: machineId, ip_address: getIPAddress() } });
+    const mac = getMACAddress() || machineId;
+    sendToServer({ type: 'register', payload: { mac_address: mac, name: machineId, ip_address: getIPAddress() } });
     startScreenMirroring();
   });
 
@@ -1284,6 +1285,22 @@ function getIPAddress() {
     }
   }
   return '127.0.0.1';
+}
+
+function getMACAddress() {
+  try {
+    const interfaces = os.networkInterfaces();
+    for (const name of Object.keys(interfaces)) {
+      for (const net of interfaces[name] || []) {
+        if (!net.internal && net.mac && net.mac !== '00:00:00:00:00:00') {
+          return net.mac.toLowerCase();
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Failed to get MAC address:', e);
+  }
+  return '';
 }
 
 function setupWindowsFirewall() {
