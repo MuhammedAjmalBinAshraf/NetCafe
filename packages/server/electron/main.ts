@@ -108,6 +108,8 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_illegal', 'true');")
   // Custom keyword/phrase terms that always trigger a block (stored as JSON array string)
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('custom_filter_terms', '[]');")
+  // Operator (client-side) PIN password
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('operator_password', 'admin');")
 }
 
 // TCP Server & Metrics Maps
@@ -656,6 +658,55 @@ ipcMain.handle('login-staff', (_, username, password) => {
     return { success: true, user: { username: user.username, role: user.role } }
   }
   return { success: false, error: 'Invalid username or password' }
+})
+
+ipcMain.handle('change-staff-password', (_, username, currentPassword, newPassword) => {
+  const user = db.prepare("SELECT * FROM staff WHERE username = ?").get(username)
+  if (!user || user.password_hash !== currentPassword) {
+    return { success: false, error: 'Current password is incorrect' }
+  }
+  if (!newPassword || newPassword.trim().length < 3) {
+    return { success: false, error: 'New password must be at least 3 characters' }
+  }
+  db.prepare("UPDATE staff SET password_hash = ? WHERE username = ?").run(newPassword.trim(), username)
+  return { success: true }
+})
+
+ipcMain.handle('change-staff-username', (_, currentUsername, password, newUsername) => {
+  const user = db.prepare("SELECT * FROM staff WHERE username = ?").get(currentUsername)
+  if (!user || user.password_hash !== password) {
+    return { success: false, error: 'Password is incorrect' }
+  }
+  if (!newUsername || newUsername.trim().length < 3) {
+    return { success: false, error: 'New username must be at least 3 characters' }
+  }
+  const existing = db.prepare("SELECT id FROM staff WHERE username = ?").get(newUsername.trim())
+  if (existing) {
+    return { success: false, error: 'Username already taken' }
+  }
+  db.prepare("UPDATE staff SET username = ? WHERE username = ?").run(newUsername.trim(), currentUsername)
+  return { success: true }
+})
+
+ipcMain.handle('get-operator-password', () => {
+  return (db.prepare("SELECT value FROM settings WHERE key = 'operator_password'").get() as any)?.value || 'admin'
+})
+
+ipcMain.handle('set-operator-password', (_, currentPassword, newPassword) => {
+  const stored = (db.prepare("SELECT value FROM settings WHERE key = 'operator_password'").get() as any)?.value || 'admin'
+  if (stored !== currentPassword) {
+    return { success: false, error: 'Current operator password is incorrect' }
+  }
+  if (!newPassword || newPassword.trim().length < 3) {
+    return { success: false, error: 'New password must be at least 3 characters' }
+  }
+  db.prepare("UPDATE settings SET value = ? WHERE key = 'operator_password'").run(newPassword.trim())
+  // Broadcast updated operator password to all connected clients
+  const payload = JSON.stringify({ command: 'update-operator-password', payload: { password: newPassword.trim() } })
+  for (const [socket] of clients.entries()) {
+    try { socket.write(payload + '\n') } catch {}
+  }
+  return { success: true }
 })
 
 ipcMain.handle('get-machines', () => {

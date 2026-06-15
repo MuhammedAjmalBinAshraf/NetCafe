@@ -46,6 +46,7 @@ export default function App() {
   // Navigation & Data
   const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'reports' | 'settings' | 'users'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
+  const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
   const [blockRules, setBlockRules] = useState<BlockRule[]>([])
   const [reportsData, setReportsData] = useState<any>({
@@ -158,6 +159,18 @@ export default function App() {
   const [isTopUpModalOpen, setIsTopUpModalOpen] = useState(false)
   const [topUpUser, setTopUpUser] = useState<User | null>(null)
   const [topUpMinutes, setTopUpMinutes] = useState('60')
+
+  // Account & Security form states
+  const [secChangeUsernamePass, setSecChangeUsernamePass] = useState('')
+  const [secNewUsername, setSecNewUsername] = useState('')
+  const [secUsernameMsg, setSecUsernameMsg] = useState('')
+  const [secCurPassword, setSecCurPassword] = useState('')
+  const [secNewPassword, setSecNewPassword] = useState('')
+  const [secConfirmPassword, setSecConfirmPassword] = useState('')
+  const [secPasswordMsg, setSecPasswordMsg] = useState('')
+  const [secCurOpPassword, setSecCurOpPassword] = useState('')
+  const [secNewOpPassword, setSecNewOpPassword] = useState('')
+  const [secOpPasswordMsg, setSecOpPasswordMsg] = useState('')
 
   // IPC listener registration guard
   const ipcBound = useRef(false)
@@ -1184,18 +1197,36 @@ export default function App() {
                   <h2 className="text-xl font-bold text-white">Dashboard</h2>
                   <p className="text-xs text-slate-500 mt-0.5">Real-time status and monitoring of cafe terminals</p>
                 </div>
-                <button
-                  onClick={async () => {
-                    if (window.ipcRenderer) {
-                      const data = await window.ipcRenderer.invoke('get-machines')
-                      setMachines(data)
-                    }
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded text-xs font-semibold transition-colors"
-                >
-                  <RefreshCcw size={12} />
-                  <span>Reload Terminals</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* View Mode Toggle */}
+                  <div className="flex items-center bg-slate-900 border border-slate-800 rounded overflow-hidden text-xs font-bold">
+                    {(['grid', 'large', 'small', 'list', 'grouped'] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        onClick={() => setDashboardView(mode)}
+                        className={`px-2.5 py-1.5 capitalize transition-colors ${
+                          dashboardView === mode
+                            ? 'bg-blue-600 text-white'
+                            : 'text-slate-400 hover:bg-slate-800 hover:text-white'
+                        }`}
+                      >
+                        {mode === 'grid' ? '⊞ Grid' : mode === 'large' ? '⬜ Large' : mode === 'small' ? '⊠ Small' : mode === 'list' ? '☰ List' : '⊟ Group'}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      if (window.ipcRenderer) {
+                        const data = await window.ipcRenderer.invoke('get-machines')
+                        setMachines(data)
+                      }
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded text-xs font-semibold transition-colors"
+                  >
+                    <RefreshCcw size={12} />
+                    <span>Reload Terminals</span>
+                  </button>
+                </div>
               </div>
 
               {machines.length === 0 ? (
@@ -1206,8 +1237,126 @@ export default function App() {
                     Client agents connected on the same LAN will register here automatically.
                   </p>
                 </div>
+              ) : dashboardView === 'list' ? (
+                <div className="flex flex-col gap-2 flex-1">
+                  {machines.map((machine) => (
+                    <div
+                      key={machine.id}
+                      className={`flex items-center gap-4 px-4 py-3 bg-slate-900/60 border rounded-lg hover:border-slate-700 transition-all shadow ${
+                        selectedDrawerMachine?.id === machine.id ? 'border-blue-500 ring-1 ring-blue-500/50' : 'border-slate-800/80'
+                      }`}
+                    >
+                      <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${getStatusColor(machine.status).split(' ')[0]}`} />
+                      <span className="font-bold text-white w-28 truncate">{machine.name}</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 w-20">{machine.status.replace('_', ' ')}</span>
+                      {(machine.status === 'in_use' || machine.status === 'paused') && (
+                        <span className="font-mono text-sm text-white w-24">{formatTime(machine.timeRemaining || 0)}</span>
+                      )}
+                      {machine.status === 'in_use' && (
+                        <span className="text-xs text-blue-400 truncate flex-1">{machine.user || 'Guest'}</span>
+                      )}
+                      <div className="flex gap-1.5 ml-auto">
+                        {machine.status === 'available' && (
+                          <button onClick={() => handleOpenClick(machine)} className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold">Open</button>
+                        )}
+                        {machine.status === 'in_use' && (
+                          <>
+                            <button onClick={() => handlePause(machine.id)} className="px-2.5 py-1 bg-amber-600/20 border border-amber-600/50 text-amber-400 rounded text-xs font-bold">Pause</button>
+                            <button onClick={() => handleCloseClick(machine)} className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold">Close</button>
+                          </>
+                        )}
+                        {machine.status === 'paused' && (
+                          <>
+                            <button onClick={() => handleResume(machine.id)} className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-bold">Resume</button>
+                            <button onClick={() => handleCloseClick(machine)} className="px-2.5 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold">Close</button>
+                          </>
+                        )}
+                        <button
+                          onClick={() => { setSelectedDrawerMachine(machine); setScreenshotBase64(''); setScreenshotError('') }}
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-bold"
+                        >
+                          Manage
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : dashboardView === 'grouped' ? (
+                <div className="flex flex-col gap-6 flex-1">
+                  {(['in_use', 'paused', 'available', 'offline'] as const).map((status) => {
+                    const group = machines.filter((m) => m.status === status)
+                    if (group.length === 0) return null
+                    const labels: Record<string, string> = { in_use: '🟢 Active', paused: '🟡 Paused', available: '🔵 Available', offline: '⚫ Offline' }
+                    return (
+                      <div key={status}>
+                        <div className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3 flex items-center gap-2">
+                          {labels[status]}
+                          <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded-full text-[10px]">{group.length}</span>
+                        </div>
+                        <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4">
+                          {group.map((machine) => (
+                            <div
+                              key={machine.id}
+                              className={`bg-slate-900/60 border rounded-xl overflow-hidden hover:border-slate-700 transition-all flex flex-col shadow-lg ${
+                                selectedDrawerMachine?.id === machine.id ? 'border-blue-500 ring-1 ring-blue-500/50' : 'border-slate-800/80'
+                              }`}
+                            >
+                              <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950/20">
+                                <div className="flex items-center gap-2">
+                                  <h2 className="text-sm font-bold text-white">{machine.name}</h2>
+                                  <button
+                                    onClick={() => { setSelectedDrawerMachine(machine); setScreenshotBase64(''); setScreenshotError('') }}
+                                    className="text-slate-400 hover:text-blue-400 hover:bg-slate-800/80 transition-all py-0.5 px-1.5 rounded flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-800/80"
+                                  >
+                                    <Menu size={10} /><span>Manage</span>
+                                  </button>
+                                </div>
+                                <div className={`w-2 h-2 rounded-full ${getStatusColor(machine.status).split(' ')[0]}`} />
+                              </div>
+                              <div className="p-4 flex-1 flex flex-col justify-center items-center text-center">
+                                {machine.status === 'in_use' || machine.status === 'paused' ? (
+                                  <>
+                                    <div className="text-2xl font-mono font-bold tracking-widest text-white mb-1">{formatTime(machine.timeRemaining || 0)}</div>
+                                    <div className="text-xs text-slate-400">User: <span className="text-blue-400 font-semibold">{machine.user || 'Guest'}</span></div>
+                                  </>
+                                ) : (
+                                  <div className="text-slate-500 font-medium text-xs my-2">
+                                    {machine.status === 'available' ? 'Available' : 'Offline'}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="p-2 bg-slate-950/50 border-t border-slate-850 flex flex-wrap gap-1.5 justify-center">
+                                {machine.status === 'available' && (
+                                  <button onClick={() => handleOpenClick(machine)} className="flex-1 flex justify-center items-center gap-1 py-1 px-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium text-xs"><Play size={12} />Open</button>
+                                )}
+                                {machine.status === 'in_use' && (
+                                  <>
+                                    <button onClick={() => handlePause(machine.id)} className="flex-1 flex justify-center items-center gap-1 py-1 px-2 bg-amber-600/20 border border-amber-600/50 text-amber-400 rounded font-semibold text-xs"><Pause size={12} />Pause</button>
+                                    <button onClick={() => handleCloseClick(machine)} className="flex-1 flex justify-center items-center gap-1 py-1 px-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium text-xs"><Square size={12} />Close</button>
+                                  </>
+                                )}
+                                {machine.status === 'paused' && (
+                                  <>
+                                    <button onClick={() => handleResume(machine.id)} className="flex-1 flex justify-center items-center gap-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium text-xs"><Play size={12} />Resume</button>
+                                    <button onClick={() => handleCloseClick(machine)} className="flex-1 flex justify-center items-center gap-1 py-1 px-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium text-xs"><Square size={12} />Close</button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
               ) : (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-6 flex-1 items-start">
+                <div className={`${
+                  dashboardView === 'large'
+                    ? 'grid grid-cols-[repeat(auto-fill,minmax(380px,1fr))] gap-6 flex-1 items-start'
+                    : dashboardView === 'small'
+                    ? 'grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-4 flex-1 items-start'
+                    : 'grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-6 flex-1 items-start'
+                }`}>
                   {machines.map((machine) => (
                     <div 
                       key={machine.id} 
@@ -1865,6 +2014,144 @@ export default function App() {
                     >
                       <RefreshCw size={16} /> Restore from Desktop
                     </button>
+                  </div>
+                </div>
+
+                {/* Account & Security */}
+                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-6">
+                  <h3 className="text-md font-bold text-white flex items-center gap-2">
+                    <KeyRound size={18} className="text-blue-500" /> Account &amp; Security
+                  </h3>
+
+                  {/* Change Username */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold uppercase text-slate-400">Change Admin Username</label>
+                    <div className="space-y-2">
+                      <input
+                        type="password"
+                        placeholder="Current password to confirm"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secChangeUsernamePass}
+                        onChange={(e) => setSecChangeUsernamePass(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        placeholder="New username (min 3 chars)"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secNewUsername}
+                        onChange={(e) => setSecNewUsername(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!currentUser) return
+                        const res = await window.ipcRenderer?.invoke('change-staff-username', currentUser.username, secChangeUsernamePass, secNewUsername)
+                        if (res?.success) {
+                          setCurrentUser((prev: any) => ({ ...prev, username: secNewUsername.trim() }))
+                          setSecChangeUsernamePass('')
+                          setSecNewUsername('')
+                          setSecUsernameMsg('✅ Username changed successfully')
+                        } else {
+                          setSecUsernameMsg(`❌ ${res?.error || 'Failed'}`)
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition-all"
+                    >
+                      Change Username
+                    </button>
+                    {secUsernameMsg && <p className={`text-xs font-semibold ${secUsernameMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400'}`}>{secUsernameMsg}</p>}
+                  </div>
+
+                  <div className="border-t border-slate-800" />
+
+                  {/* Change Password */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold uppercase text-slate-400">Change Admin Password</label>
+                    <div className="space-y-2">
+                      <input
+                        type="password"
+                        placeholder="Current password"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secCurPassword}
+                        onChange={(e) => setSecCurPassword(e.target.value)}
+                      />
+                      <input
+                        type="password"
+                        placeholder="New password (min 3 chars)"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secNewPassword}
+                        onChange={(e) => setSecNewPassword(e.target.value)}
+                      />
+                      <input
+                        type="password"
+                        placeholder="Confirm new password"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secConfirmPassword}
+                        onChange={(e) => setSecConfirmPassword(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        if (!currentUser) return
+                        if (secNewPassword !== secConfirmPassword) {
+                          setSecPasswordMsg('❌ Passwords do not match')
+                          return
+                        }
+                        const res = await window.ipcRenderer?.invoke('change-staff-password', currentUser.username, secCurPassword, secNewPassword)
+                        if (res?.success) {
+                          setSecCurPassword('')
+                          setSecNewPassword('')
+                          setSecConfirmPassword('')
+                          setSecPasswordMsg('✅ Password changed successfully')
+                        } else {
+                          setSecPasswordMsg(`❌ ${res?.error || 'Failed'}`)
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition-all"
+                    >
+                      Change Password
+                    </button>
+                    {secPasswordMsg && <p className={`text-xs font-semibold ${secPasswordMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400'}`}>{secPasswordMsg}</p>}
+                  </div>
+
+                  <div className="border-t border-slate-800" />
+
+                  {/* Change Operator Password */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold uppercase text-slate-400">Change Operator Terminal Password</label>
+                    <p className="text-[11px] text-slate-500">This is the PIN clients use in the ⚙️ settings gear on their terminal to access operator options.</p>
+                    <div className="space-y-2">
+                      <input
+                        type="password"
+                        placeholder="Current operator password"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secCurOpPassword}
+                        onChange={(e) => setSecCurOpPassword(e.target.value)}
+                      />
+                      <input
+                        type="password"
+                        placeholder="New operator password (min 3 chars)"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
+                        value={secNewOpPassword}
+                        onChange={(e) => setSecNewOpPassword(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      onClick={async () => {
+                        const res = await window.ipcRenderer?.invoke('set-operator-password', secCurOpPassword, secNewOpPassword)
+                        if (res?.success) {
+                          setSecCurOpPassword('')
+                          setSecNewOpPassword('')
+                          setSecOpPasswordMsg('✅ Operator password updated and broadcast to all clients')
+                        } else {
+                          setSecOpPasswordMsg(`❌ ${res?.error || 'Failed'}`)
+                        }
+                      }}
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-bold transition-all"
+                    >
+                      Update Operator Password
+                    </button>
+                    {secOpPasswordMsg && <p className={`text-xs font-semibold ${secOpPasswordMsg.startsWith('✅') ? 'text-emerald-400' : 'text-red-400'}`}>{secOpPasswordMsg}</p>}
                   </div>
                 </div>
               </div>

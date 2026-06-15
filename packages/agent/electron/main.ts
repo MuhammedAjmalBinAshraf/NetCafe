@@ -40,6 +40,7 @@ let serverHost = '127.0.0.1';
 let serverPort = 9000;
 let machineId = os.hostname();
 let clientUuid = '';
+let operatorPassword = 'admin'; // synced from server via update-operator-password command
 
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
@@ -72,6 +73,7 @@ function loadConfig() {
       serverUrl = `${serverHost}:${serverPort}`;
     }
     if (data.machineId) machineId = data.machineId;
+    if (data.operatorPassword) operatorPassword = data.operatorPassword;
     if (data.clientUuid) {
       clientUuid = data.clientUuid;
     } else {
@@ -585,7 +587,9 @@ function createLockWindow() {
       const shellStatusText = document.getElementById('shellStatusText');
       const shellOpStatus = document.getElementById('shellOpStatus');
 
-      const VALID_PINS = ['admin', '9999'];
+      const VALID_PINS = ['${operatorPassword}', '${operatorPassword}'];
+      // Note: array kept for backwards compat; only operatorPassword is the active PIN
+
 
       function openSettings() {
         // Reset state
@@ -959,6 +963,21 @@ async function handleServerMessage(msg: any) {
       if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
         psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
         logToUI(`Hardware inputs block state set to: ${block}`);
+      }
+    } else if (msg.command === 'update-operator-password') {
+      // Server pushed a new operator password — persist it and update in-memory state
+      const newPwd = msg.payload?.password;
+      if (newPwd && typeof newPwd === 'string' && newPwd.trim().length >= 1) {
+        operatorPassword = newPwd.trim();
+        // Persist to config file so it survives restarts
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          cfg.operatorPassword = operatorPassword;
+          fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+          logToUI(`Operator password updated from server.`);
+        } catch (e: any) {
+          logToUI(`Failed to persist operator password: ${e.message}`);
+        }
       }
     }
   } catch (e) {
@@ -1585,9 +1604,14 @@ app.whenReady().then(() => {
   connectToServer();
 
   // Auto Updater logic for Agent
-  autoUpdater.channel = 'latest-agent';   // ← must NOT pick up latest-server.yml
-  autoUpdater.autoDownload = false;       // manual download from operator panel
+  autoUpdater.channel = 'latest-agent';  // ← must NOT pick up latest-server.yml
+  autoUpdater.autoDownload = true;        // automatically download and install updates
   autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err));
+
+  // Also check for updates every hour
+  setInterval(() => {
+    autoUpdater.checkForUpdates().catch(() => {});
+  }, 60 * 60 * 1000);
 
   function sendUpdateStatus(payload: object) {
     if (lockWindow && !lockWindow.isDestroyed()) {
