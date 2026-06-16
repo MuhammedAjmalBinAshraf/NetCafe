@@ -994,6 +994,11 @@ app.whenReady().then(async () => {
     return publicUrl;
   });
 
+  // Register get-app-version handler
+  ipcMain.handle('get-app-version', () => {
+    return app.getVersion();
+  });
+
   createWindow()
   startUdpBroadcast()
   startWebServer()

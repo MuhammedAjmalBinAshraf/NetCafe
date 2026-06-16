@@ -50,6 +50,21 @@ function logToUI(msg: string) {
   }
 }
 
+const logFilePath = "C:\\NetCafe\\logs\\agent-install.log";
+
+function writeInstallLog(msg: string) {
+  try {
+    const dir = path.dirname(logFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    fs.appendFileSync(logFilePath, `[${timestamp}] ${msg}\r\n`, 'utf8');
+  } catch (e) {
+    console.error('Failed to write install log:', e);
+  }
+}
+
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let serverUrl = '127.0.0.1:9000';   // display string (host:port)
 let serverHost = '127.0.0.1';
@@ -427,7 +442,10 @@ function createLockWindow() {
 
 
 
-    <div class="footer">Do not power off this terminal.</div>
+    <div class="footer" style="display:flex;justify-content:space-between;align-items:center;">
+      <span>Do not power off this terminal.</span>
+      <span style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);color:#60a5fa;padding:0.15rem 0.6rem;border-radius:9999px;font-size:0.68rem;font-weight:600;letter-spacing:0.04em;">v${app.getVersion()}</span>
+    </div>
   </div>
 
   ${updateReady ? `<div style="position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(16,185,129,0.9);color:white;padding:10px 20px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">✅ Update downloaded — will install on next restart</div>` : `<div id="updateBar" style="display:none;position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(37,99,235,0.9);color:white;padding:10px 24px;border-radius:20px;font-weight:600;font-size:0.9rem;box-shadow:0 4px 12px rgba(0,0,0,0.3);z-index:9999;">🔄 Checking for updates...</div>`}

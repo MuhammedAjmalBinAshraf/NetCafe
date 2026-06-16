@@ -83,6 +83,7 @@ export default function App() {
   const [aiCustomContext, setAiCustomContext] = useState('')
   const [filterLogs, setFilterLogs] = useState<Array<{timestamp: string, level: string, message: string, machineId?: number, query?: string}>>([])
   const filterLogEndRef = useRef<HTMLDivElement>(null)
+  const [appVersion, setAppVersion] = useState<string>('')
 
   // Modals & Drawers
   const [selectedMachine, setSelectedMachine] = useState<any>(null)
@@ -267,6 +268,7 @@ export default function App() {
         setPublicUrl(url || null)
         if (url) setQrMode('public')
       }).catch(() => {})
+      window.ipcRenderer.invoke('get-app-version').then((v: string) => setAppVersion(v || '')).catch(() => {})
 
       // Named listener so it can be removed on cleanup
       const machineListener = (_: any, data: any) => {
@@ -1185,6 +1187,9 @@ export default function App() {
               <div className="text-xs text-slate-400 flex items-center gap-2">
                 <span className="w-2 h-2 bg-emerald-500 rounded-full" />
                 <span>Operator: {currentUser?.username} ({currentUser?.role})</span>
+                {appVersion && (
+                  <span className="ml-1 px-1.5 py-0.5 bg-blue-500/15 border border-blue-500/25 text-blue-400 rounded text-[10px] font-semibold tracking-wide">v{appVersion}</span>
+                )}
               </div>
             </div>
           </div>
