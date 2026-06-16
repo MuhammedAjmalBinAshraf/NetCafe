@@ -3945,6 +3945,47 @@ Respond strictly in JSON format:
               <div className="absolute bottom-3 right-3 bg-blue-950/90 text-[10px] text-blue-300 px-3 py-1.5 border border-blue-900/60 rounded-full font-mono shadow-md pointer-events-none">
                 Keyboard control active. Press ESC to exit.
               </div>
+              {/* Floating Zoom Pill — always visible even when scrolled deep into zoomed view */}
+              {zoomLevel !== 'fit' && (
+                <div
+                  className="fixed bottom-6 left-1/2 z-50 flex items-center gap-1.5 bg-slate-900/95 border border-slate-700 rounded-full px-3 py-1.5 shadow-2xl backdrop-blur-sm"
+                  style={{ transform: 'translateX(-50%)' }}
+                >
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">Zoom</span>
+                  <button
+                    onClick={() => setZoomLevel('fit')}
+                    className="px-2 py-0.5 text-[11px] font-bold text-emerald-400 hover:text-white hover:bg-emerald-600 rounded-full transition-all"
+                    title="Fit Screen (reset zoom)"
+                  >Fit</button>
+                  <div className="w-px h-3 bg-slate-700" />
+                  {(['fit','100','150','200'] as const).map(lvl => (
+                    <button
+                      key={lvl}
+                      onClick={() => setZoomLevel(lvl)}
+                      className={`px-2 py-0.5 text-[11px] font-bold rounded-full transition-all ${zoomLevel === lvl ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-700 hover:text-white'}`}
+                    >{lvl === 'fit' ? 'Fit' : `${lvl}%`}</button>
+                  ))}
+                  <div className="w-px h-3 bg-slate-700" />
+                  <button
+                    onClick={() => {
+                      const levels: Array<'fit'|'100'|'150'|'200'> = ['fit','100','150','200']
+                      const idx = levels.indexOf(zoomLevel)
+                      if (idx > 0) setZoomLevel(levels[idx - 1])
+                    }}
+                    className="px-2 py-0.5 text-[11px] font-bold text-slate-300 hover:bg-slate-700 rounded-full transition-all"
+                    title="Zoom Out (−)"
+                  >−</button>
+                  <button
+                    onClick={() => {
+                      const levels: Array<'fit'|'100'|'150'|'200'> = ['fit','100','150','200']
+                      const idx = levels.indexOf(zoomLevel)
+                      if (idx < levels.length - 1) setZoomLevel(levels[idx + 1])
+                    }}
+                    className="px-2 py-0.5 text-[11px] font-bold text-slate-300 hover:bg-slate-700 rounded-full transition-all"
+                    title="Zoom In (+)"
+                  >+</button>
+                </div>
+              )}
             </div>
           </div>
 

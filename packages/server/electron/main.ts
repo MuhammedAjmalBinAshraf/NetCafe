@@ -96,6 +96,10 @@ function setupDatabase() {
   try {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_machines_uuid ON machines(uuid) WHERE uuid IS NOT NULL;")
   } catch {}
+  // Violation count for progressive enforcement (warn first, lock on repeat)
+  try {
+    db.exec("ALTER TABLE machines ADD COLUMN violation_count INTEGER DEFAULT 0;")
+  } catch {}
 
 
   // Session app logs table
@@ -505,16 +509,38 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const lowerQ = query.toLowerCase()
     const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
     if (hit) {
+      // Resolve active user for this machine
+      let hitUserDetails = 'Walk-in User'
+      try {
+        const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
+        if (activeSess?.customer_name) hitUserDetails = activeSess.customer_name
+      } catch {}
+
       if (mainWindow) mainWindow.webContents.send('filter-log', {
         timestamp: ts, level: 'block',
-        message: `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — locking Machine ${machineId}`,
+        message: `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — User: "${hitUserDetails}" — locking Machine ${machineId}`,
         machineId: Number(machineId), query
       })
-      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`)
-      sendCommandToMachine(Number(machineId), { command: 'lock' })
-      sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: blocked search detected ("${hit}").` })
-      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"` })
-      broadcastMachines()
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`, hitUserDetails)
+
+      // Progressive enforcement: 1st violation = Dynamic Island warning only, 2nd+ = full lock
+      const machineRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(Number(machineId)) as any
+      const violCount = (machineRow?.violation_count || 0) + 1
+      db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(violCount, Number(machineId))
+
+      if (violCount === 1) {
+        // First offence — warn only via Dynamic Island
+        sendCommandToMachine(Number(machineId), { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${hit}" is not allowed. This is your first warning. Further violations will lock your terminal.` })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails, warned: true })
+        broadcastMachines()
+        if (!socket.destroyed) socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId: '', allowed: false } }) + '\n')
+      } else {
+        // Repeat offence — lock machine
+        sendCommandToMachine(Number(machineId), { command: 'lock' })
+        sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails })
+        broadcastMachines()
+      }
       return
     }
 
@@ -554,12 +580,31 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const lowerQ = query.toLowerCase()
     const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
     if (hit) {
-      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — locking Machine ${machineId}`)
-      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`)
-      sendCommandToMachine(Number(machineId), { command: 'lock' })
-      sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: blocked search detected ("${hit}").` })
-      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"` })
-      broadcastMachines()
+      // Resolve active user for this machine
+      let hitUserDetails2 = 'Walk-in User'
+      try {
+        const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
+        if (activeSess?.customer_name) hitUserDetails2 = activeSess.customer_name
+      } catch {}
+
+      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — User: "${hitUserDetails2}" — locking Machine ${machineId}`)
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`, hitUserDetails2)
+
+      // Progressive enforcement
+      const machineRow2 = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(Number(machineId)) as any
+      const violCount2 = (machineRow2?.violation_count || 0) + 1
+      db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(violCount2, Number(machineId))
+
+      if (violCount2 === 1) {
+        sendCommandToMachine(Number(machineId), { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${hit}" is not allowed. This is your first warning. Further violations will lock your terminal.` })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2, warned: true })
+        broadcastMachines()
+      } else {
+        sendCommandToMachine(Number(machineId), { command: 'lock' })
+        sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2 })
+        broadcastMachines()
+      }
 
       if (!socket.destroyed) {
         socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
@@ -591,25 +636,41 @@ function handleClientMessage(socket: net.Socket, data: any) {
         }, customTerms, emitLog)
 
         if (result.isUnsafe) {
-          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — Category: "${result.category}" — locking Machine ${machineId}`)
-          db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)")
-            .run(Number(machineId), query, result.category || 'Unsafe content')
-          sendCommandToMachine(Number(machineId), { command: 'lock' })
-          sendCommandToMachine(Number(machineId), { 
-            command: 'message', 
-            payload: `Your terminal has been locked due to a safety violation. Prohibited search query detected: "${query}" (Safety Category: ${result.category || 'Inappropriate Content'}).`
-          })
-          if (mainWindow) {
-            mainWindow.webContents.send('safety-alert-triggered', {
-              machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString()
+          // Resolve active user
+          let l2UserDetails = 'Walk-in User'
+          try {
+            const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
+            if (activeSess?.customer_name) l2UserDetails = activeSess.customer_name
+          } catch {}
+
+          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — User: "${l2UserDetails}" — Category: "${result.category}" — locking Machine ${machineId}`)
+          db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
+            .run(Number(machineId), query, result.category || 'Unsafe content', l2UserDetails)
+
+          // Progressive enforcement
+          const l2machineRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(Number(machineId)) as any
+          const l2violCount = (l2machineRow?.violation_count || 0) + 1
+          db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(l2violCount, Number(machineId))
+
+          if (l2violCount === 1) {
+            sendCommandToMachine(Number(machineId), { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${query}" may violate safety rules (${result.category || 'Inappropriate Content'}). This is your first warning. Further violations will lock your terminal.` })
+            if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails: l2UserDetails, warned: true })
+            broadcastMachines()
+          } else {
+            sendCommandToMachine(Number(machineId), { command: 'lock' })
+            sendCommandToMachine(Number(machineId), { 
+              command: 'message', 
+              payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
             })
+            if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails: l2UserDetails })
+            broadcastMachines()
           }
-          broadcastMachines()
+
           if (!socket.destroyed) {
             socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
           }
         } else {
-          emitLog('allow', `[MITM] LAYER 2 ALLOWED — Query "${query}" is safe`)
+          emitLog('allow', `[MITM] LAYER 2 ALLOWED — Query "${query}" is safe (${result.reason || 'No issues'})`)
           if (!socket.destroyed) {
             socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
           }
@@ -627,6 +688,14 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const machineId = clients.get(socket)
     if (machineId && db) {
       const { username, password } = data.payload || {}
+
+      // Check if machine is locked due to a safety violation
+      const machineState = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(machineId) as any
+      if (machineState && (machineState.violation_count || 0) >= 2) {
+        socket.write(JSON.stringify({ command: 'login-fail', message: '🔒 Your session was locked due to a safety violation. Please visit the Lab In-Charge to continue your session.' }) + '\n')
+        return
+      }
+
       const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password)
       if (!user) {
         socket.write(JSON.stringify({ command: 'login-fail', message: 'Invalid username or password.' }) + '\n')
@@ -1169,8 +1238,8 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
     VALUES (?, ?, ?, datetime('now'), ?, 'active', ?)
   `).run(machineId, customerName || 'Walk-in', planId || null, mode || 'postpaid', duration)
 
-  db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
-  logToUI(`Opening session on machine ID ${machineId} for user ${customerName || 'Walk-in'}`)
+  db.prepare("UPDATE machines SET status = 'in_use', violation_count = 0 WHERE id = ?").run(machineId)
+  logToUI(`Opening session on machine ID ${machineId} for user ${customerName || 'Walk-in'} — violation count reset`)
 
   const activeSession = db.prepare(`
     SELECT s.*, p.duration_minutes as plan_duration, p.price
@@ -1206,7 +1275,7 @@ ipcMain.handle('pause-session', (_, machineId) => {
 })
 
 ipcMain.handle('resume-session', (_, machineId) => {
-  db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
+  db.prepare("UPDATE machines SET status = 'in_use', violation_count = 0 WHERE id = ?").run(machineId)
   db.prepare("UPDATE sessions SET status = 'active' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
 
   const activeSession = db.prepare(`
@@ -1716,17 +1785,25 @@ async function checkQuerySafety(
       emitLog('block', `LAYER 2 UNSAFE — User: "${userDetails}" — Category: "${result.category}" — Reason: "${result.reason || 'Prohibited content'}" — Locking machine ${machineId}`)
       db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
         .run(machineId, query, result.category || 'Unsafe content', userDetails)
-      sendCommandToMachine(machineId, { command: 'lock' })
-      sendCommandToMachine(machineId, { 
-        command: 'message', 
-        payload: `Your terminal has been locked due to a safety violation. Prohibited search query detected: "${query}" (Safety Category: ${result.category || 'Inappropriate Content'}).`
-      })
-      if (mainWindow) {
-        mainWindow.webContents.send('safety-alert-triggered', {
-          machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails
+
+      // Progressive enforcement
+      const csViolRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(machineId) as any
+      const csViolCount = (csViolRow?.violation_count || 0) + 1
+      db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(csViolCount, machineId)
+
+      if (csViolCount === 1) {
+        sendCommandToMachine(machineId, { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${query}" may violate safety rules (${result.category || 'Inappropriate Content'}). This is your first warning. Further violations will lock your terminal.` })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails, warned: true })
+        broadcastMachines()
+      } else {
+        sendCommandToMachine(machineId, { command: 'lock' })
+        sendCommandToMachine(machineId, { 
+          command: 'message', 
+          payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
         })
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails })
+        broadcastMachines()
       }
-      broadcastMachines()
     } else {
       let userDetails = 'Walk-in User'
       try {
