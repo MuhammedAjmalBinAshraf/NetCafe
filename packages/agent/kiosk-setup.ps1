@@ -161,8 +161,8 @@ try {
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name
-        # Skip system accounts, Guest, and utility VMs
-        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
+        # Skip system accounts, Guest, utility VMs, and 'Student' user
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM" -or $username -eq "Student") {
             continue
         }
         

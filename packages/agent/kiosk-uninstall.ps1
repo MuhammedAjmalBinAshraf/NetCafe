@@ -79,7 +79,7 @@ try {
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name
-        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM" -or $username -eq "Student") {
             continue
         }
         
