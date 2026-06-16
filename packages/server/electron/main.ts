@@ -132,9 +132,13 @@ function setupDatabase() {
       machine_id INTEGER,
       query TEXT,
       reason TEXT,
+      user_details TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `)
+  try {
+    db.exec("ALTER TABLE safety_alerts ADD COLUMN user_details TEXT;")
+  } catch {}
   // AI safety settings defaults
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_safety_enabled', 'false');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', '');")
@@ -1031,6 +1035,14 @@ app.whenReady().then(async () => {
 
   autoUpdater.on('update-downloaded', (info) => {
     mainWindow?.webContents.send('update-status', { status: 'downloaded', info });
+    
+    // Log the download event to Server install log
+    const logPath = "C:\\NetCafeServer_Install.log";
+    try {
+      const fs = require('fs');
+      fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Server version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
+    } catch {}
+
     dialog.showMessageBox({
       title: 'Install Update',
       message: 'Update downloaded. The application will restart to install it.'
@@ -1686,9 +1698,19 @@ async function checkQuerySafety(
   try {
     const result = await evaluateQuerySafety(query, apiKey, filters, filters.customTerms || [], emitLog)
     if (result.isUnsafe) {
-      emitLog('block', `LAYER 2 UNSAFE — Category: "${result.category}" — Locking machine ${machineId}`)
-      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)")
-        .run(machineId, query, result.category || 'Unsafe content')
+      let userDetails = 'Walk-in User'
+      try {
+        const activeSession = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(machineId) as any
+        if (activeSession && activeSession.customer_name) {
+          userDetails = activeSession.customer_name
+        }
+      } catch (err) {
+        console.error('Failed to fetch user details for safety alert:', err)
+      }
+
+      emitLog('block', `LAYER 2 UNSAFE — User: "${userDetails}" — Category: "${result.category}" — Reason: "${result.reason || 'Prohibited content'}" — Locking machine ${machineId}`)
+      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
+        .run(machineId, query, result.category || 'Unsafe content', userDetails)
       sendCommandToMachine(machineId, { command: 'lock' })
       sendCommandToMachine(machineId, { 
         command: 'message', 
@@ -1696,12 +1718,19 @@ async function checkQuerySafety(
       })
       if (mainWindow) {
         mainWindow.webContents.send('safety-alert-triggered', {
-          machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString()
+          machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails
         })
       }
       broadcastMachines()
     } else {
-      emitLog('allow', `LAYER 2 ALLOWED — Query "${query}" is safe`)
+      let userDetails = 'Walk-in User'
+      try {
+        const activeSession = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(machineId) as any
+        if (activeSession && activeSession.customer_name) {
+          userDetails = activeSession.customer_name
+        }
+      } catch {}
+      emitLog('allow', `LAYER 2 ALLOWED — User: "${userDetails}" — Query "${query}" is safe (Reason: "${result.reason || 'No safety hazards detected'}")`)
     }
   } catch (err: any) {
     emitLog('warn', `LAYER 2 ERROR: ${err.message}`)
@@ -1715,7 +1744,7 @@ async function evaluateQuerySafety(
   filters: { porn: boolean; violence: boolean; selfHarm: boolean; illegal: boolean },
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
-): Promise<{ isUnsafe: boolean, category: string }> {
+): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
@@ -1727,7 +1756,7 @@ async function evaluateQuerySafety(
 
   if (topics.length === 0) {
     emitLog?.('warn', 'LAYER 2 SKIPPED — No filter categories enabled')
-    return { isUnsafe: false, category: "" };
+    return { isUnsafe: false, category: "", reason: "No filter categories active" };
   }
 
   // Load admin-supplied extra context
@@ -1738,7 +1767,8 @@ async function evaluateQuerySafety(
   Respond strictly in JSON format:
   {
     "isUnsafe": true or false,
-    "category": "Reason/category if unsafe, otherwise empty string"
+    "category": "Reason/category if unsafe, otherwise empty string",
+    "reason": "Brief explanation of why this query is allowed or blocked (e.g. why it is safe or unsafe)"
   }
   Query: "${query}"`;
 

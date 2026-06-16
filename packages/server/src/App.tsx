@@ -1951,6 +1951,38 @@ export default function App() {
                 </div>
               </div>
 
+              {/* Active AI System Context / Prompt Preview */}
+              <div className="bg-slate-900/30 border border-slate-900 rounded-xl p-5 space-y-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                    <Terminal size={16} className="text-blue-400" /> Active AI System Context (Layer 2)
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">The exact hardcoded system prompt and configuration passed to Gemini 2.5 Flash for filtering.</p>
+                </div>
+                
+                <div className="bg-slate-950 border border-slate-800/60 rounded-lg p-4 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-all">
+                  {`You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${[
+                    settings.filter_porn !== 'false' ? 'pornography/adult content' : null,
+                    settings.filter_violence !== 'false' ? 'severe violence/gore/terrorist activities' : null,
+                    settings.filter_self_harm !== 'false' ? 'self-harm/suicide instructions' : null,
+                    settings.filter_illegal !== 'false' ? 'illegal acts/weapons/hacking guides' : null,
+                    settings.custom_filter_terms && JSON.parse(settings.custom_filter_terms || '[]').length > 0
+                      ? `any of these specific blocked terms/topics: ${JSON.parse(settings.custom_filter_terms).join(', ')}`
+                      : null
+                  ].filter(Boolean).join(', ') || 'none'}.${
+                    settings.ai_custom_context?.trim()
+                      ? `\nAdditional instructions from administrator: ${settings.ai_custom_context.trim()}`
+                      : ''
+                  }
+Respond strictly in JSON format:
+{
+  "isUnsafe": true or false,
+  "category": "Reason/category if unsafe, otherwise empty string",
+  "reason": "Brief explanation of why this query is allowed or blocked (e.g. why it is safe or unsafe)"
+}`}
+                </div>
+              </div>
+
               <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
                 <div className="flex justify-between items-center p-4 border-b border-slate-900 bg-slate-950/30">
                   <h3 className="text-sm font-bold text-white flex items-center gap-2">
@@ -1978,6 +2010,7 @@ export default function App() {
                       <thead>
                         <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
                           <th className="p-4">Terminal</th>
+                          <th className="p-4">Active User</th>
                           <th className="p-4">Search Query</th>
                           <th className="p-4">Reason</th>
                           <th className="p-4">Timestamp</th>
@@ -1987,6 +2020,7 @@ export default function App() {
                         {safetyAlerts.map((alert: any) => (
                           <tr key={alert.id} className="hover:bg-red-950/20 transition-colors">
                             <td className="p-4 font-semibold text-white">{alert.machine_name || `PC-${alert.machine_id}`}</td>
+                            <td className="p-4 text-slate-300 text-xs font-semibold">{alert.user_details || 'Walk-in User'}</td>
                             <td className="p-4 font-mono text-red-300 text-xs">{alert.query}</td>
                             <td className="p-4 text-slate-300 text-xs">{alert.reason}</td>
                             <td className="p-4 font-mono text-xs text-slate-400">{new Date(alert.timestamp).toLocaleString()}</td>

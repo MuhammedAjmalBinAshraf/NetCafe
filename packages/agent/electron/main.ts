@@ -1967,9 +1967,16 @@ app.whenReady().then(async () => {
   autoUpdater.on('update-not-available', () => sendUpdateStatus({ status: 'not-available' }));
   autoUpdater.on('error', (err: Error) => sendUpdateStatus({ status: 'error', message: err.message }));
   autoUpdater.on('download-progress', (progress: any) => sendUpdateStatus({ status: 'downloading', progress }));
-  autoUpdater.on('update-downloaded', () => {
+  autoUpdater.on('update-downloaded', (info: any) => {
     updateReady = true;
-    sendUpdateStatus({ status: 'downloaded' });
+    sendUpdateStatus({ status: 'downloaded', info });
+    
+    // Log the download event in the setup/install log
+    const logPath = "C:\\NetCafeKiosk_Setup.log";
+    try {
+      fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
+    } catch {}
+
     // Rebuild lock window to show the downloaded banner
     if (isLocked) {
       createLockWindow();
@@ -2722,14 +2729,23 @@ async function runKioskSetup(): Promise<void> {
   logToUI('Kiosk Setup: Starting custom shell configuration...');
   const exePath = process.execPath;
   const script = `
+    Start-Transcript -Path "C:\\NetCafeKiosk_Setup.log" -Force
+    
+    Write-Host "Starting NetCafe Kiosk Setup at $(Get-Date)"
+    Write-Host "Agent Executable Path: ${exePath}"
+
     # 1. Create CafeKiosk user if it doesn't exist
     $userExists = [bool](Get-LocalUser -Name "CafeKiosk" -ErrorAction SilentlyContinue)
     if (-not $userExists) {
+        Write-Host "Creating CafeKiosk user..."
         net user CafeKiosk "CafeKiosk123!" /add /expires:never /active:yes
         wmic useraccount where "name='CafeKiosk'" set PasswordExpires=FALSE
+    } else {
+        Write-Host "CafeKiosk user already exists."
     }
 
     # 2. Configure Auto-Logon
+    Write-Host "Configuring HKLM Auto-Logon..."
     $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
     Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "1" -Type String
     Set-ItemProperty -Path $winlogon -Name "DefaultUserName" -Value "CafeKiosk" -Type String
@@ -2737,24 +2753,31 @@ async function runKioskSetup(): Promise<void> {
     Set-ItemProperty -Path $winlogon -Name "DefaultDomainName" -Value $env:COMPUTERNAME -Type String
 
     # 3. Enable Shell Launcher feature
+    Write-Host "Enabling Client-EmbeddedShellLauncher feature..."
     dism /online /Enable-Feature /all /FeatureName:Client-EmbeddedShellLauncher /NoRestart
 
     # 4. Get SID of CafeKiosk
     $objUser = New-Object System.Security.Principal.NTAccount("CafeKiosk")
     $strSID = $objUser.Translate([System.Security.Principal.SecurityIdentifier]).Value
+    Write-Host "CafeKiosk SID: $strSID"
 
     # 5. Configure Shell Launcher via WMI if available
     try {
+        Write-Host "Attempting Shell Launcher WMI configuration..."
         $ShellLauncherClass = [wmiclass]"\\\\localhost\\root\\standardcimv2\\embedded:WESL_UserSetting"
         if ($ShellLauncherClass) {
             $ShellLauncherClass.SetEnabled($true)
             $ShellLauncherClass.SetCustomShell($strSID, "${exePath}", $null, $null, 0)
+            Write-Host "Custom shell registered in WMI successfully."
         }
-    } catch {}
+    } catch {
+        Write-Host "WMI Custom Shell configuration failed/skipped: $_"
+    }
 
     # 6. Pre-create User Profile directory and NTUSER.DAT
     $profilePath = "C:\\Users\\CafeKiosk"
     if (!(Test-Path $profilePath)) {
+        Write-Host "Pre-creating profile path and NTUSER.DAT hive..."
         New-Item -ItemType Directory -Path $profilePath -Force
         Copy-Item -Path "C:\\Users\\Default\\NTUSER.DAT" -Destination "$profilePath\\NTUSER.DAT" -Force
     }
@@ -2762,6 +2785,7 @@ async function runKioskSetup(): Promise<void> {
     icacls $profilePath /grant "CafeKiosk:(OI)(CI)F" /T
 
     # 7. Load Hive, write Shell and GPO registry keys, unload Hive
+    Write-Host "Loading NTUSER.DAT hive to write user-specific policies..."
     reg load "HKU\\CafeKioskTemp" "$profilePath\\NTUSER.DAT"
     # Set Kiosk shell in HKCU
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" -Force -ErrorAction SilentlyContinue
@@ -2773,13 +2797,18 @@ async function runKioskSetup(): Promise<void> {
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Name "DisableCMD" -Value 1 -Type DWord
     reg unload "HKU\\CafeKioskTemp"
+    Write-Host "User-specific registry keys written and NTUSER.DAT unloaded successfully."
 
     # 8. Create Scheduled Task to run elevated
+    Write-Host "Registering elevated Scheduled Task..."
     $action = New-ScheduledTaskAction -Execute '${exePath}';
     $trigger = New-ScheduledTaskTrigger -AtLogon;
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0);
     $principal = New-ScheduledTaskPrincipal -UserId "CafeKiosk" -RunLevel Highest;
     Register-ScheduledTask -TaskName "NetCafeAgent" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force;
+    
+    Write-Host "NetCafe Kiosk Setup completed successfully."
+    Stop-Transcript
   `;
 
   try {
@@ -2822,7 +2851,12 @@ async function runKioskSetup(): Promise<void> {
 async function runKioskUninstall(): Promise<void> {
   logToUI('Kiosk Uninstall: Restoring standard shell...');
   const script = `
+    Start-Transcript -Path "C:\\NetCafeKiosk_Uninstall.log" -Force
+    
+    Write-Host "Starting NetCafe Kiosk Uninstall at $(Get-Date)"
+
     # 1. Disable Auto-Logon
+    Write-Host "Disabling Auto-Logon..."
     $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
     Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon" -Value "0" -Type String
     Remove-ItemProperty -Path $winlogon -Name "DefaultUserName" -ErrorAction SilentlyContinue
@@ -2830,18 +2864,24 @@ async function runKioskUninstall(): Promise<void> {
 
     # 2. Disable Shell Launcher WMI if enabled
     try {
+        Write-Host "Disabling WMI custom shell launcher..."
         $ShellLauncherClass = [wmiclass]"\\\\localhost\\root\\standardcimv2\\embedded:WESL_UserSetting"
         if ($ShellLauncherClass) {
             $ShellLauncherClass.SetEnabled($false)
         }
-    } catch {}
+    } catch {
+        Write-Host "WMI custom shell launcher disable skipped: $_"
+    }
 
     # 3. Remove Scheduled Task
+    Write-Host "Removing Scheduled Task..."
     Unregister-ScheduledTask -TaskName "NetCafeAgent" -Confirm:$false -ErrorAction SilentlyContinue
 
     # 4. Delete CafeKiosk user and profile list entry
+    Write-Host "Deleting CafeKiosk user account..."
     net user CafeKiosk /delete
 
+    Write-Host "Cleaning up CafeKiosk profile registries and directories..."
     $profileListPath = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList"
     Get-ChildItem -Path $profileListPath | ForEach-Object {
         $val = Get-ItemProperty -Path $_.PSPath
@@ -2850,6 +2890,9 @@ async function runKioskUninstall(): Promise<void> {
         }
     }
     Remove-Item -Path "C:\\Users\\CafeKiosk" -Force -Recurse -ErrorAction SilentlyContinue
+    
+    Write-Host "NetCafe Kiosk Uninstall completed."
+    Stop-Transcript
   `;
 
   try {
