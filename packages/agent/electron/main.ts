@@ -35,6 +35,20 @@ const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean) => void
 let nextRequestId = 1;
 
 const agentLogsCache: { timestamp: string, message: string }[] = [];
+const runtimeLogFilePath = "C:\\NetCafe\\logs\\agent.log";
+
+function writeAgentRuntimeLog(msg: string) {
+  try {
+    const dir = path.dirname(runtimeLogFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    fs.appendFileSync(runtimeLogFilePath, `[${timestamp}] ${msg}\r\n`, 'utf8');
+  } catch (e) {
+    console.error('Failed to write agent runtime log:', e);
+  }
+}
 
 function logToUI(msg: string) {
   const logEntry = {
@@ -48,6 +62,7 @@ function logToUI(msg: string) {
   if (lockWindow && !lockWindow.isDestroyed()) {
     lockWindow.webContents.send('agent-log-updated', logEntry);
   }
+  writeAgentRuntimeLog(msg);
 }
 
 const logFilePath = "C:\\NetCafe\\logs\\agent-install.log";
@@ -161,7 +176,10 @@ function createLockWindow() {
 <html>
 <head>
   <meta charset="UTF-8">
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;800&display=swap" rel="stylesheet">
+  <!-- No external font requests – using system fonts so the UI renders instantly offline -->
+  <style>
+    @import url('data:text/css,');
+  </style>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -172,7 +190,7 @@ function createLockWindow() {
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
       overflow: hidden;
       user-select: none;
     }
@@ -265,7 +283,7 @@ function createLockWindow() {
       border: 1px solid rgba(255,255,255,0.1);
       border-radius: 10px;
       color: #e2e8f0;
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
       font-size: 0.9rem;
       outline: none;
       transition: border-color 0.15s, box-shadow 0.15s;
@@ -282,7 +300,7 @@ function createLockWindow() {
       border: none;
       border-radius: 10px;
       color: white;
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
       font-size: 0.9rem;
       font-weight: 700;
       cursor: pointer;
@@ -533,6 +551,15 @@ function createLockWindow() {
             </button>
           </div>
           <div id="updateStatusText" style="margin-top:0.5rem;font-size:0.72rem;color:#64748b;"></div>
+        </div>
+
+        <!-- Agent Logs Section -->
+        <div style="margin-top:0.5rem;padding:0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;">
+          <div id="logToggle" style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
+            <span>📋 Real-time Agent Logs</span>
+            <span id="logArrow">▼</span>
+          </div>
+          <div id="logConsole" style="display:none;background:#020617;border:1px solid rgba(255,255,255,0.05);border-radius:8px;padding:0.5rem;height:125px;overflow-y:auto;font-family:monospace;font-size:0.68rem;color:#cbd5e1;line-height:1.4;word-break:break-all;margin-top:0.5rem;"></div>
         </div>
       </div>
     </div>
@@ -1144,7 +1171,10 @@ function installAsShell() {
 function restoreShell() {
   try {
     execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "explorer.exe" /f`);
-    console.log('Shell restored to explorer.exe');
+    // Also disable system proxy!
+    execSync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
+    execSync('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
+    console.log('Shell restored to explorer.exe and proxy disabled');
   } catch (e) {
     console.error('Failed to restore shell:', e);
   }
@@ -2122,6 +2152,18 @@ app.on('window-all-closed', () => {
   // Prevent quitting when lock window is closed
 });
 
+function cleanupProxySync() {
+  try {
+    // Direct registry edit synchronously to make sure it gets written
+    const { execSync } = require('child_process');
+    execSync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
+    execSync('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
+    console.log('Synchronously disabled system proxy on exit');
+  } catch (e) {
+    console.error('Failed to disable proxy synchronously:', e);
+  }
+}
+
 app.on('before-quit', () => {
   isAppQuitting = true;
   // Restore system proxy settings before exit
@@ -2129,6 +2171,26 @@ app.on('before-quit', () => {
     try { mitmProxy.stop(); } catch {}
     mitmProxy = null;
   }
+});
+
+process.on('exit', () => {
+  cleanupProxySync();
+});
+
+process.on('SIGINT', () => {
+  cleanupProxySync();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  cleanupProxySync();
+  process.exit(0);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  cleanupProxySync();
+  process.exit(1);
 });
 
 function checkFullscreen(): Promise<boolean> {

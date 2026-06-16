@@ -129,100 +129,130 @@ try {
     Log "WARN:" "WMI custom shell config failed (non-fatal, NTUSER.DAT fallback will be used): $_"
 }
 
-# ─── STEP 6: Pre-create CafeKiosk user profile ────────────────────────────────
-$profilePath = "C:\Users\CafeKiosk"
-Log "STEP:" "Ensuring CafeKiosk profile directory exists at $profilePath..."
-try {
-    if (!(Test-Path $profilePath)) {
-        New-Item -ItemType Directory -Path $profilePath -Force | Out-Null
-        $defaultNtuser = "C:\Users\Default\NTUSER.DAT"
-        if (Test-Path $defaultNtuser) {
-            Copy-Item -Path $defaultNtuser -Destination "$profilePath\NTUSER.DAT" -Force
-            Log "OK:" "Profile directory created and NTUSER.DAT copied from Default"
-        } else {
-            Log "WARN:" "Default NTUSER.DAT not found — hive will be created fresh on first logon"
-        }
-    } else {
-        Log "OK:" "Profile directory already exists"
-    }
-    $icaclsOutput = icacls $profilePath /grant "CafeKiosk:(OI)(CI)F" /T 2>&1
-    Log "INFO:" "icacls: $icaclsOutput"
-    Log "OK:"   "Profile directory permissions set"
-} catch {
-    Log "ERROR:" "Profile directory setup failed: $_"
-}
-
-# ─── STEP 7: Load NTUSER.DAT and write ONLY CafeKiosk user Shell ──────────────
-# This is the ONLY place the Shell is changed — per-user, not system-wide.
-# Other accounts (Admin, etc.) keep explorer.exe because HKLM is untouched.
-Log "STEP:" "Loading CafeKiosk NTUSER.DAT hive to write per-user Shell override..."
-$ntuserDat = "$profilePath\NTUSER.DAT"
-if (Test-Path $ntuserDat) {
+# ─── Helper: Check if user is an Administrator ────────────────────────────────
+function Get-IsUserAdmin {
+    param([string]$UserName)
+    if ($UserName -eq "Administrator") { return $true }
     try {
-        # Force garbage collection so no .NET handles linger on the hive
-        [System.GC]::Collect()
-        Start-Sleep -Milliseconds 500
-
-        $loadResult = reg load "HKU\CafeKioskTemp" $ntuserDat 2>&1
-        Log "INFO:" "reg load: $loadResult"
-
-        # Create the Winlogon key in the user hive if it does not exist
-        New-Item -Path "HKU:\CafeKioskTemp\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-                 -Force -ErrorAction SilentlyContinue | Out-Null
-
-        # *** Per-user Shell — only CafeKiosk gets the kiosk shell ***
-        Set-ItemProperty `
-            -Path "HKU:\CafeKioskTemp\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-            -Name  "Shell" `
-            -Value $AgentExe `
-            -Force
-        Log "OK:" "Per-user Shell written for CafeKiosk: $AgentExe"
-
-        # Lock-down GPO policies for this user only
-        Log "STEP:" "Writing GPO kiosk restriction policies into user hive..."
-        New-Item -Path "HKU:\CafeKioskTemp\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
-                 -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty `
-            -Path "HKU:\CafeKioskTemp\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
-            -Name  "DisableTaskMgr"        -Value 1 -Type DWord -Force
-        Set-ItemProperty `
-            -Path "HKU:\CafeKioskTemp\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
-            -Name  "HideFastUserSwitching" -Value 1 -Type DWord -Force
-
-        New-Item -Path "HKU:\CafeKioskTemp\Software\Policies\Microsoft\Windows\System" `
-                 -Force -ErrorAction SilentlyContinue | Out-Null
-        Set-ItemProperty `
-            -Path "HKU:\CafeKioskTemp\Software\Policies\Microsoft\Windows\System" `
-            -Name  "DisableCMD" -Value 1 -Type DWord -Force
-
-        Log "OK:" "GPO restriction policies written into CafeKiosk user hive"
-
-        # Flush and unload — must unload or the hive stays locked
-        [System.GC]::Collect()
-        Start-Sleep -Milliseconds 500
-        $unloadResult = reg unload "HKU\CafeKioskTemp" 2>&1
-        Log "INFO:" "reg unload: $unloadResult"
-        Log "OK:"   "CafeKiosk NTUSER.DAT hive unloaded successfully"
-
+        $member = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$UserName" -or $_.Name -eq $UserName }
+        return ($null -ne $member)
     } catch {
-        Log "ERROR:" "NTUSER.DAT hive operations failed: $_"
-        try { reg unload "HKU\CafeKioskTemp" 2>&1 | Out-Null } catch {}
+        return $false
     }
-} else {
-    Log "WARN:" "NTUSER.DAT not found at $ntuserDat — Shell override will be applied on first logon via Scheduled Task"
 }
 
-# ─── STEP 8: Register Elevated Scheduled Task ─────────────────────────────────
-Log "STEP:" "Registering NetCafeAgent elevated Scheduled Task..."
+# ─── STEP 6: Configure Standard User Profiles, Shells, and Restrictions ────────
+Log "STEP:" "Configuring shell replacement for all standard users, leaving Administrators on explorer..."
 try {
-    $action    = New-ScheduledTaskAction -Execute $AgentExe
-    $trigger   = New-ScheduledTaskTrigger -AtLogon -User "CafeKiosk"
-    $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0)
-    $principal = New-ScheduledTaskPrincipal -UserId "CafeKiosk" -RunLevel Highest
-    Register-ScheduledTask -TaskName "NetCafeAgent" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-    Log "OK:" "Scheduled Task 'NetCafeAgent' registered (runs at CafeKiosk logon with Highest privileges)"
+    $users = Get-LocalUser
+    foreach ($u in $users) {
+        $username = $u.Name
+        # Skip system accounts, Guest, and utility VMs
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
+            continue
+        }
+        
+        $isAdmin = Get-IsUserAdmin $username
+        if ($isAdmin) {
+            Log "INFO:" "User '$username' is an Administrator — leaving on explorer.exe"
+            continue
+        }
+        
+        Log "STEP:" "Configuring standard user: $username..."
+        
+        # Find the profile directory
+        $profilePath = "C:\Users\$username"
+        
+        # Ensure the profile directory exists
+        if (!(Test-Path $profilePath)) {
+            try {
+                New-Item -ItemType Directory -Path $profilePath -Force | Out-Null
+                $defaultNtuser = "C:\Users\Default\NTUSER.DAT"
+                if (Test-Path $defaultNtuser) {
+                    Copy-Item -Path $defaultNtuser -Destination "$profilePath\NTUSER.DAT" -Force
+                    Log "OK:" "Pre-created profile directory and copied NTUSER.DAT for standard user '$username'"
+                }
+            } catch {
+                Log "WARN:" "Could not pre-create profile for '$username': $_"
+            }
+        }
+        
+        # Grant permissions to the user on their own folder
+        try {
+            $icaclsOutput = icacls $profilePath /grant "${username}:(OI)(CI)F" /T 2>&1
+            Log "INFO:" "icacls for $username: $icaclsOutput"
+        } catch {}
+
+        # Load NTUSER.DAT and write per-user Shell registry keys
+        $ntuserDat = "$profilePath\NTUSER.DAT"
+        if (Test-Path $ntuserDat) {
+            try {
+                [System.GC]::Collect()
+                Start-Sleep -Milliseconds 200
+                
+                $tempHiveName = "${username}Temp"
+                $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
+                Log "INFO:" "reg load for $username: $loadResult"
+                
+                # Create the Winlogon key in the user hive if it does not exist
+                New-Item -Path "HKU:\$tempHiveName\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+                         -Force -ErrorAction SilentlyContinue | Out-Null
+                
+                # Per-user Shell — only standard users get the kiosk shell
+                Set-ItemProperty `
+                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+                    -Name  "Shell" `
+                    -Value $AgentExe `
+                    -Force
+                Log "OK:" "Per-user Shell written for standard user '$username': $AgentExe"
+                
+                # Lock-down GPO policies for this standard user
+                New-Item -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                         -Force -ErrorAction SilentlyContinue | Out-Null
+                Set-ItemProperty `
+                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                    -Name  "DisableTaskMgr"        -Value 1 -Type DWord -Force
+                Set-ItemProperty `
+                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                    -Name  "HideFastUserSwitching" -Value 1 -Type DWord -Force
+                
+                New-Item -Path "HKU:\$tempHiveName\Software\Policies\Microsoft\Windows\System" `
+                         -Force -ErrorAction SilentlyContinue | Out-Null
+                Set-ItemProperty `
+                    -Path "HKU:\$tempHiveName\Software\Policies\Microsoft\Windows\System" `
+                    -Name  "DisableCMD" -Value 1 -Type DWord -Force
+                
+                Log "OK:" "GPO restriction policies written for standard user '$username'"
+                
+                # Flush and unload
+                [System.GC]::Collect()
+                Start-Sleep -Milliseconds 200
+                $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
+                Log "INFO:" "reg unload for $username: $unloadResult"
+                Log "OK:" "Standard user '$username' profile hive unloaded successfully"
+            } catch {
+                Log "ERROR:" "Profile hive operations failed for standard user '$username': $_"
+                try { reg unload "HKU\$tempHiveName" 2>&1 | Out-Null } catch {}
+            }
+        } else {
+            Log "WARN:" "NTUSER.DAT not found for standard user '$username'"
+        }
+
+        # ─── Register Elevated Scheduled Task for this standard user ───
+        Log "STEP:" "Registering NetCafeAgent elevated Scheduled Task for standard user '$username'..."
+        try {
+            $action    = New-ScheduledTaskAction -Execute $AgentExe
+            $trigger   = New-ScheduledTaskTrigger -AtLogon -User $username
+            $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0)
+            $principal = New-ScheduledTaskPrincipal -UserId $username -RunLevel Highest
+            Register-ScheduledTask -TaskName "NetCafeAgent_$username" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
+            Log "OK:" "Scheduled Task 'NetCafeAgent_$username' registered (runs at $username logon with Highest privileges)"
+        } catch {
+            Log "ERROR:" "Scheduled Task registration failed for '$username': $_"
+        }
+    }
 } catch {
-    Log "ERROR:" "Scheduled Task registration failed: $_"
+    Log "ERROR:" "Failed to configure standard users: $_"
 }
 
 # ─── STEP 9: Write installed flag ─────────────────────────────────────────────

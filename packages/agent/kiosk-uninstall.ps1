@@ -44,11 +44,13 @@ try {
     Log "WARN:" "WMI Shell Launcher disable skipped (non-fatal): $_"
 }
 
-# ─── STEP 3: Remove Scheduled Task ────────────────────────────────────────────
-Log "STEP:" "Removing NetCafeAgent Scheduled Task..."
+# ─── STEP 3: Remove Scheduled Tasks ───────────────────────────────────────────
+Log "STEP:" "Removing NetCafeAgent Scheduled Tasks..."
 try {
-    Unregister-ScheduledTask -TaskName "NetCafeAgent" -Confirm:$false -ErrorAction SilentlyContinue
-    Log "OK:" "Scheduled Task removed"
+    Get-ScheduledTask -TaskName "NetCafeAgent*" -ErrorAction SilentlyContinue | ForEach-Object {
+        Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false | Out-Null
+        Log "OK:" "Scheduled Task '$($_.TaskName)' removed"
+    }
 } catch {
     Log "WARN:" "Scheduled Task removal skipped: $_"
 }
@@ -95,6 +97,19 @@ try {
     Log "OK:" "installed.flag removed"
 } catch {
     Log "WARN:" "installed.flag removal skipped: $_"
+}
+
+# ─── STEP 8: Disable System Proxy for Current User ────────────────────────────
+Log "STEP:" "Disabling system proxy for current user..."
+try {
+    $proxyKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+    Set-ItemProperty -Path $proxyKey -Name "ProxyEnable" -Value 0 -Type DWord -Force
+    # Notify WinINet
+    Add-Type -MemberDefinition '[DllImport("wininet.dll", SetLastError = true)] public static extern bool InternetSetOption(IntPtr hInternet, int dwOption, IntPtr lpBuffer, int dwBufferLength);' -Name WinINetHelper -Namespace WinINet
+    [WinINet.WinINetHelper]::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0) | Out-Null
+    Log "OK:" "System proxy disabled for current user"
+} catch {
+    Log "WARN:" "Could not disable system proxy for current user: $_"
 }
 
 Log "DONE:" "NetCafe Kiosk Uninstall completed. Review log at $LogFile"

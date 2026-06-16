@@ -256,8 +256,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
       machine = { id: info.lastInsertRowid }
       logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${incomingIp}`)
     } else {
-      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, incomingIp, 'available', payload.uuid || null, machine.id)
-      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, IP=${incomingIp}`)
+      const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machine.id)
+      const currentStatus = activeSession ? 'in_use' : 'available'
+      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, incomingIp, currentStatus, payload.uuid || null, machine.id)
+      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, Status=${currentStatus}, IP=${incomingIp}`)
     }
 
     // Clean up stale sockets for this machine ID
