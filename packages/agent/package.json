@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.40",
+  "version": "1.0.41",
 
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
@@ -55,6 +55,16 @@
     "nsis": {
       "include": "installer.nsh"
     },
+    "extraResources": [
+      {
+        "from": "kiosk-setup.ps1",
+        "to": "kiosk-setup.ps1"
+      },
+      {
+        "from": "kiosk-uninstall.ps1",
+        "to": "kiosk-uninstall.ps1"
+      }
+    ],
     "asarUnpack": [
       "node_modules/node-windows/**/*"
     ],
