@@ -2710,14 +2710,37 @@ function runPowerShellScript(scriptText: string): Promise<string> {
     const tempPath = path.join(app.getPath('temp'), `setup-kiosk-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tempPath, scriptText, 'utf8');
-      const cmd = `powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${tempPath}"`;
-      exec(cmd, (err, stdout) => {
+      const child = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        tempPath
+      ]);
+
+      let stdoutData = '';
+      child.stdout.on('data', (data) => {
+        const str = data.toString();
+        stdoutData += str;
+        process.stdout.write(str);
+      });
+
+      child.stderr.on('data', (data) => {
+        process.stderr.write(data.toString());
+      });
+
+      child.on('close', (code) => {
         try { fs.unlinkSync(tempPath); } catch {}
-        if (err) {
-          reject(err);
+        if (code !== 0) {
+          reject(new Error(`PowerShell exited with code ${code}`));
         } else {
-          resolve(stdout);
+          resolve(stdoutData);
         }
+      });
+
+      child.on('error', (err) => {
+        try { fs.unlinkSync(tempPath); } catch {}
+        reject(err);
       });
     } catch (e) {
       reject(e);
