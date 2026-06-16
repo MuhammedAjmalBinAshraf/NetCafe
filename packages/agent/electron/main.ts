@@ -50,6 +50,16 @@ function writeAgentRuntimeLog(msg: string) {
   }
 }
 
+function isAgentTheShell(): boolean {
+  if (process.platform !== 'win32') return false;
+  try {
+    const current = execSync('reg query "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell 2>nul').toString();
+    return current.toLowerCase().includes('netcafe agent.exe') || current.toLowerCase().includes(process.execPath.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 function logToUI(msg: string) {
   const logEntry = {
     timestamp: new Date().toISOString().substring(11, 19),
@@ -136,6 +146,10 @@ function loadConfig() {
 
 // ─── Lock enforcement: re-focus every 500ms ───────────────────────────────────
 function startLockEnforcement() {
+  if (!isAgentTheShell()) {
+    logToUI('Agent is not the shell of the current user. Skipping lock enforcement.');
+    return;
+  }
   if (lockEnforceInterval) return;
   lockEnforceInterval = setInterval(() => {
     if (isLocked && lockWindow && !lockWindow.isDestroyed()) {
@@ -460,9 +474,11 @@ function createLockWindow() {
 
 
 
-    <div class="footer" style="display:flex;justify-content:space-between;align-items:center;">
-      <span>Do not power off this terminal.</span>
-      <span style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);color:#60a5fa;padding:0.15rem 0.6rem;border-radius:9999px;font-size:0.68rem;font-weight:600;letter-spacing:0.04em;">v${app.getVersion()}</span>
+    <div class="footer" style="display:flex;justify-content:space-between;align-items:center;margin-top:1.25rem;">
+      <button id="shutdownBtn" title="Shutdown PC" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:8px;color:#fca5a5;padding:0.35rem 0.65rem;font-family:'Inter', sans-serif;font-size:0.75rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:0.35rem;transition:background 0.15s, border-color 0.15s;" onmouseover="this.style.background='rgba(239,68,68,0.2)'" onmouseout="this.style.background='rgba(239,68,68,0.1)'">
+        <span>⏻</span> <span>Shutdown</span>
+      </button>
+      <span style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);color:#60a5fa;padding:0.2rem 0.75rem;border-radius:9999px;font-size:0.68rem;font-weight:600;letter-spacing:0.04em;">v${app.getVersion()}</span>
     </div>
   </div>
 
@@ -611,6 +627,21 @@ function createLockWindow() {
       loginBtn.addEventListener('click', attemptLogin);
       passwordEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptLogin(); });
       usernameEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') passwordEl.focus(); });
+
+      // ── Shutdown Button Logic ────────────────────────────────────────────────
+      const shutdownBtn = document.getElementById('shutdownBtn');
+      if (shutdownBtn) {
+        shutdownBtn.addEventListener('click', async () => {
+          const confirmShutdown = confirm('Are you sure you want to shut down this PC?');
+          if (confirmShutdown) {
+            try {
+              await ipcRenderer.invoke('system-shutdown');
+            } catch (err) {
+              alert('Failed to execute shutdown command.');
+            }
+          }
+        });
+      }
 
       // ── Settings Gear Logic ──────────────────────────────────────────────────
       const settingsTrigger = document.getElementById('settingsTrigger');
@@ -940,8 +971,8 @@ async function handleServerMessage(msg: any) {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
 
-      // Spawn explorer.exe on unlock to show desktop shell
-      if (process.platform === 'win32') {
+      // Spawn explorer.exe on unlock to show desktop shell (if agent is the shell)
+      if (isAgentTheShell()) {
         exec('tasklist /FI "IMAGENAME eq explorer.exe"', (err, stdout) => {
           if (stdout && !stdout.includes('explorer.exe')) {
             logToUI('Spawning explorer.exe to load desktop shell...');
@@ -974,8 +1005,8 @@ async function handleServerMessage(msg: any) {
       }
       destroyIslandWindow();
 
-      // Kill explorer.exe on lock
-      if (process.platform === 'win32') {
+      // Kill explorer.exe on lock (if agent is the shell)
+      if (isAgentTheShell()) {
         logToUI('Terminating explorer.exe to lock desktop shell...');
         exec('taskkill /F /IM explorer.exe', () => {});
       }
@@ -1160,6 +1191,16 @@ ipcMain.handle('install-as-shell', () => {
 
 ipcMain.handle('restore-shell', () => {
   restoreShell();
+  return { success: true };
+});
+
+ipcMain.handle('system-shutdown', () => {
+  logToUI('System shutdown requested via lockscreen.');
+  if (process.platform === 'win32') {
+    exec('shutdown /s /t 0', () => {});
+  } else {
+    exec('shutdown -h now', () => {});
+  }
   return { success: true };
 });
 
@@ -1522,8 +1563,8 @@ function connectToServer() {
       startLockEnforcement();
     }
 
-    // Kill explorer.exe on server disconnect lock
-    if (process.platform === 'win32') {
+    // Kill explorer.exe on server disconnect lock (if agent is the shell)
+    if (isAgentTheShell()) {
       logToUI('Terminating explorer.exe on server disconnect lock...');
       exec('taskkill /F /IM explorer.exe', () => {});
     }
@@ -2020,8 +2061,8 @@ app.whenReady().then(async () => {
   setupWindowsFirewall();
   startUdpDiscovery();
 
-  // Terminate explorer.exe on startup if locked (primary shell replacement mode behavior)
-  if (isLocked && process.platform === 'win32') {
+  // Terminate explorer.exe on startup if locked (if agent is the shell)
+  if (isLocked && isAgentTheShell()) {
     logToUI('Terminating explorer.exe on startup (locked)...');
     exec('taskkill /F /IM explorer.exe', () => {});
   }

@@ -6,9 +6,16 @@
 ShowInstDetails show
 ShowUninstDetails show
 
+; Enable "View Installation Log" checkbox on the finish page
+!define MUI_FINISHPAGE_RUN "$WINDIR\notepad.exe"
+!define MUI_FINISHPAGE_RUN_PARAMETERS "C:\NetCafe\logs\agent-install.log"
+!define MUI_FINISHPAGE_RUN_TEXT "View Installation Log"
 
 !macro customInit
   nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
+  Pop $0
+  ; Clean up legacy global scheduled task from older versions
+  nsExec::ExecToLog 'schtasks /Delete /TN "NetCafeAgent" /F'
   Pop $0
 !macroend
 

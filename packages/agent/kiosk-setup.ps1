@@ -134,10 +134,24 @@ function Get-IsUserAdmin {
     param([string]$UserName)
     if ($UserName -eq "Administrator") { return $true }
     try {
-        $member = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$UserName" -or $_.Name -eq $UserName }
+        # Translate well-known Administrators SID (S-1-5-32-544) to localized group name
+        $adminSid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+        $adminGroupName = $adminSid.Translate([System.Security.Principal.NTAccount]).Value
+        # Strip domain prefix if present (e.g. "BUILTIN\Administrators" -> "Administrators")
+        if ($adminGroupName -like "*\*") {
+            $adminGroupName = $adminGroupName.Split("\")[1]
+        }
+        $member = Get-LocalGroupMember -Group $adminGroupName -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$UserName" -or $_.Name -eq $UserName }
         return ($null -ne $member)
     } catch {
-        return $false
+        # Fallback using ADSI
+        try {
+            $user = [ADSI]"WinNT://$env:COMPUTERNAME/$UserName,user"
+            $groups = $user.Groups() | ForEach-Object { $_.GetType().InvokeMember("Name", 'GetProperty', $null, $_, $null) }
+            return ($groups -contains "Administrators" -or $groups -contains "Administrateurs" -or $groups -contains "Administradores")
+        } catch {
+            return $false
+        }
     }
 }
 
