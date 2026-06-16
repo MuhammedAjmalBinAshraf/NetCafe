@@ -939,6 +939,17 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
+
+      // Spawn explorer.exe on unlock to show desktop shell
+      if (process.platform === 'win32') {
+        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (err, stdout) => {
+          if (stdout && !stdout.includes('explorer.exe')) {
+            logToUI('Spawning explorer.exe to load desktop shell...');
+            spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+          }
+        });
+      }
+
       // Destroy any existing island window first to prevent timer carry-over
       destroyIslandWindow();
       // Create and show dynamic island
@@ -962,6 +973,12 @@ async function handleServerMessage(msg: any) {
         startLockEnforcement();
       }
       destroyIslandWindow();
+
+      // Kill explorer.exe on lock
+      if (process.platform === 'win32') {
+        logToUI('Terminating explorer.exe to lock desktop shell...');
+        exec('taskkill /F /IM explorer.exe', () => {});
+      }
     } else if (msg.command === 'message') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('show-message', msg.payload || '');
@@ -1175,6 +1192,11 @@ function restoreShell() {
     execSync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
     execSync('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
     console.log('Shell restored to explorer.exe and proxy disabled');
+
+    // Spawn explorer immediately so the operator gets their desktop back without restarting!
+    if (process.platform === 'win32') {
+      spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    }
   } catch (e) {
     console.error('Failed to restore shell:', e);
   }
@@ -1498,6 +1520,12 @@ function connectToServer() {
       createLockWindow();
     } else {
       startLockEnforcement();
+    }
+
+    // Kill explorer.exe on server disconnect lock
+    if (process.platform === 'win32') {
+      logToUI('Terminating explorer.exe on server disconnect lock...');
+      exec('taskkill /F /IM explorer.exe', () => {});
     }
     
     setTimeout(connectToServer, 5000);
@@ -1991,6 +2019,13 @@ app.whenReady().then(async () => {
 
   setupWindowsFirewall();
   startUdpDiscovery();
+
+  // Terminate explorer.exe on startup if locked (primary shell replacement mode behavior)
+  if (isLocked && process.platform === 'win32') {
+    logToUI('Terminating explorer.exe on startup (locked)...');
+    exec('taskkill /F /IM explorer.exe', () => {});
+  }
+
   createLockWindow();
   connectToServer();
 
