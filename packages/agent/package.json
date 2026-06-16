@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.48",
+  "version": "1.0.49",
 
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
@@ -53,6 +53,8 @@
       ]
     },
     "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
       "include": "installer.nsh"
     },
     "extraResources": [
