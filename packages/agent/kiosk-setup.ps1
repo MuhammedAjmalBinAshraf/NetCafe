@@ -1,4 +1,12 @@
 #Requires -RunAsAdministrator
+param(
+    [Parameter(Position=0)]
+    [string]$AgentExe,
+    [Parameter(Position=1)]
+    [string]$KioskUser = "CafeKiosk",
+    [Parameter(Position=2)]
+    [string]$KioskPassword = "CafeKiosk123!"
+)
 # NetCafe Kiosk Setup Script
 # Outputs detailed progress to stdout so NSIS nsExec::ExecToLog shows it in the installer detail window.
 # Also writes to C:\NetCafe\logs\agent-install.log for post-install review.
@@ -23,9 +31,32 @@ Log "START:" "NetCafe Kiosk Setup launched"
 Log "INFO:"  "PowerShell version: $($PSVersionTable.PSVersion)"
 Log "INFO:"  "Running as: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
 
+# ─── Load kiosk.ini configuration override if present ──────────────────────────
+$ConfigIni = "C:\NetCafe\kiosk.ini"
+if (Test-Path $ConfigIni) {
+    Log "INFO:" "Found kiosk configuration file at $ConfigIni"
+    try {
+        $iniData = Get-Content -Path $ConfigIni -ErrorAction SilentlyContinue | Where-Object { $_ -like "*=*" }
+        foreach ($line in $iniData) {
+            $parts = $line.Split("=", 2)
+            $key = $parts[0].Trim()
+            $value = $parts[1].Trim()
+            if ($key -eq "KioskUser" -and $value -ne "") {
+                $KioskUser = $value
+                Log "INFO:" "Overrode KioskUser from kiosk.ini: $KioskUser"
+            }
+            if ($key -eq "KioskPassword") {
+                $KioskPassword = $value
+                Log "INFO:" "Overrode KioskPassword from kiosk.ini: $KioskPassword"
+            }
+        }
+    } catch {
+        Log "WARN:" "Failed to parse $ConfigIni: $_"
+    }
+}
+
 # ─── Determine agent exe path ─────────────────────────────────────────────────
-# Installer passes the full path as $args[0].  Fall back to known install location.
-$AgentExe = $args[0]
+# Installer passes the full path as position 0 parameter. Fall back to known install location.
 if (-not $AgentExe -or !(Test-Path $AgentExe)) {
     $AgentExe = "C:\Program Files\NetCafe Agent\NetCafe Agent.exe"
 }
@@ -58,37 +89,46 @@ try {
     Log "WARN:" "Could not verify/reset HKLM Shell: $_"
 }
 
-# ─── STEP 1: Create CafeKiosk user ────────────────────────────────────────────
-Log "STEP:" "Checking if CafeKiosk user exists..."
+# ─── STEP 1: Create Kiosk User Account if Needed ──────────────────────────────
+Log "STEP:" "Checking if $KioskUser user exists..."
 try {
-    $userExists = [bool](Get-LocalUser -Name "CafeKiosk" -ErrorAction SilentlyContinue)
+    $userExists = [bool](Get-LocalUser -Name $KioskUser -ErrorAction SilentlyContinue)
     if (-not $userExists) {
-        Log "STEP:" "Creating CafeKiosk user account..."
-        $result = net user CafeKiosk "CafeKiosk123!" /add /expires:never /active:yes 2>&1
-        Log "INFO:" "net user output: $result"
-        $wmicResult = wmic useraccount where "name='CafeKiosk'" set PasswordExpires=FALSE 2>&1
-        Log "INFO:" "wmic output: $wmicResult"
-        Log "OK:"   "CafeKiosk user created successfully"
+        if ($KioskUser -eq "CafeKiosk") {
+            Log "STEP:" "Creating CafeKiosk user account..."
+            $result = net user CafeKiosk "CafeKiosk123!" /add /expires:never /active:yes 2>&1
+            Log "INFO:" "net user output: $result"
+            $wmicResult = wmic useraccount where "name='CafeKiosk'" set PasswordExpires=FALSE 2>&1
+            Log "INFO:" "wmic output: $wmicResult"
+            Log "OK:"   "CafeKiosk user created successfully"
+        } else {
+            Log "ERROR:" "Kiosk user '$KioskUser' does not exist, and cannot be created automatically (custom accounts must be created beforehand)."
+            exit 1
+        }
     } else {
-        Log "OK:" "CafeKiosk user already exists — skipping creation"
+        Log "OK:" "Kiosk user '$KioskUser' already exists — skipping creation"
     }
 } catch {
-    Log "ERROR:" "Failed to create CafeKiosk user: $_"
+    Log "ERROR:" "Failed to verify or create kiosk user '$KioskUser': $_"
 }
 
 # ─── STEP 2: Configure Auto-Logon ─────────────────────────────────────────────
-# AutoAdminLogon auto-logs in CafeKiosk. Shell stays explorer.exe in HKLM.
+# AutoAdminLogon auto-logs in Kiosk user. Shell stays explorer.exe in HKLM.
 # The per-user Shell override in NTUSER.DAT (Step 6 below) handles the kiosk shell.
-Log "STEP:" "Configuring auto-logon for CafeKiosk..."
-try {
-    $winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-    Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon"    -Value "1"              -Type String -Force
-    Set-ItemProperty -Path $winlogon -Name "DefaultUserName"   -Value "CafeKiosk"      -Type String -Force
-    Set-ItemProperty -Path $winlogon -Name "DefaultPassword"   -Value "CafeKiosk123!"  -Type String -Force
-    Set-ItemProperty -Path $winlogon -Name "DefaultDomainName" -Value $env:COMPUTERNAME -Type String -Force
-    Log "OK:" "Auto-logon registry keys written"
-} catch {
-    Log "ERROR:" "Auto-logon configuration failed: $_"
+if ($KioskPassword -ne "SKIP" -and $KioskPassword -ne "") {
+    Log "STEP:" "Configuring auto-logon for $KioskUser..."
+    try {
+        $winlogon = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+        Set-ItemProperty -Path $winlogon -Name "AutoAdminLogon"    -Value "1"              -Type String -Force
+        Set-ItemProperty -Path $winlogon -Name "DefaultUserName"   -Value $KioskUser      -Type String -Force
+        Set-ItemProperty -Path $winlogon -Name "DefaultPassword"   -Value $KioskPassword  -Type String -Force
+        Set-ItemProperty -Path $winlogon -Name "DefaultDomainName" -Value $env:COMPUTERNAME -Type String -Force
+        Log "OK:" "Auto-logon registry keys written"
+    } catch {
+        Log "ERROR:" "Auto-logon configuration failed: $_"
+    }
+} else {
+    Log "INFO:" "Skipping auto-logon configuration (KioskPassword is blank or SKIP)"
 }
 
 # ─── STEP 3: Enable Shell Launcher Windows Feature ────────────────────────────
@@ -103,15 +143,15 @@ try {
     Log "ERROR:" "DISM Shell Launcher feature enable failed: $_"
 }
 
-# ─── STEP 4: Get CafeKiosk SID ────────────────────────────────────────────────
-Log "STEP:" "Resolving CafeKiosk account SID..."
+# ─── STEP 4: Get Kiosk User SID ───────────────────────────────────────────────
+Log "STEP:" "Resolving $KioskUser account SID..."
 $strSID = $null
 try {
-    $objUser = New-Object System.Security.Principal.NTAccount("CafeKiosk")
+    $objUser = New-Object System.Security.Principal.NTAccount($KioskUser)
     $strSID  = $objUser.Translate([System.Security.Principal.SecurityIdentifier]).Value
-    Log "OK:" "CafeKiosk SID: $strSID"
+    Log "OK:" "$KioskUser SID: $strSID"
 } catch {
-    Log "ERROR:" "Could not resolve CafeKiosk SID: $_"
+    Log "ERROR:" "Could not resolve $KioskUser SID: $_"
 }
 
 # ─── STEP 5: Register Custom Shell via WMI (Shell Launcher) ───────────────────
@@ -161,13 +201,13 @@ try {
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name
-        # Skip system accounts, Guest, utility VMs, and 'Student' user
-        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM" -or $username -eq "Student") {
+        # Skip system accounts, Guest, and utility VMs
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
             continue
         }
         
         $isAdmin = Get-IsUserAdmin $username
-        if ($isAdmin) {
+        if ($isAdmin -and $username -ne $KioskUser) {
             Log "INFO:" "User '$username' is an Administrator — leaving on explorer.exe"
             continue
         }

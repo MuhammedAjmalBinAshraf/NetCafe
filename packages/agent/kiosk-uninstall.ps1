@@ -1,4 +1,8 @@
 #Requires -RunAsAdministrator
+param(
+    [Parameter(Position=0)]
+    [string]$KioskUser = "CafeKiosk"
+)
 # NetCafe Kiosk Uninstall Script
 # Outputs detailed progress to stdout so NSIS nsExec::ExecToLog shows it in the installer detail window.
 # Also writes to C:\NetCafe\logs\agent-install.log
@@ -37,6 +41,26 @@ function Get-IsUserAdmin {
         } catch {
             return $false
         }
+    }
+}
+
+# ─── Load kiosk.ini configuration override if present ──────────────────────────
+$ConfigIni = "C:\NetCafe\kiosk.ini"
+if (Test-Path $ConfigIni) {
+    Log "INFO:" "Found kiosk configuration file at $ConfigIni"
+    try {
+        $iniData = Get-Content -Path $ConfigIni -ErrorAction SilentlyContinue | Where-Object { $_ -like "*=*" }
+        foreach ($line in $iniData) {
+            $parts = $line.Split("=", 2)
+            $key = $parts[0].Trim()
+            $value = $parts[1].Trim()
+            if ($key -eq "KioskUser" -and $value -ne "") {
+                $KioskUser = $value
+                Log "INFO:" "Overrode KioskUser from kiosk.ini: $KioskUser"
+            }
+        }
+    } catch {
+        Log "WARN:" "Failed to parse $ConfigIni: $_"
     }
 }
 
@@ -79,12 +103,13 @@ try {
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name
-        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM" -or $username -eq "Student") {
+        # Skip system accounts, Guest, and utility VMs
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
             continue
         }
         
         $isAdmin = Get-IsUserAdmin $username
-        if ($isAdmin) {
+        if ($isAdmin -and $username -ne $KioskUser) {
             continue
         }
         
@@ -146,39 +171,47 @@ try {
     Log "ERROR:" "Failed to clean up standard user registry hives: $_"
 }
 
-# ─── STEP 4: Delete CafeKiosk user ────────────────────────────────────────────
-Log "STEP:" "Deleting CafeKiosk user account..."
-try {
-    $deleteResult = net user CafeKiosk /delete 2>&1
-    Log "INFO:" "net user delete: $deleteResult"
-    Log "OK:" "CafeKiosk user deleted"
-} catch {
-    Log "WARN:" "CafeKiosk user deletion failed (may not exist): $_"
-}
-
-# ─── STEP 5: Clean up profile list registry entries ───────────────────────────
-Log "STEP:" "Cleaning up CafeKiosk profile registry entries..."
-try {
-    $profileListPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
-    Get-ChildItem -Path $profileListPath | ForEach-Object {
-        $val = Get-ItemProperty -Path $_.PSPath
-        if ($val.ProfileImagePath -like "*CafeKiosk") {
-            Remove-Item -Path $_.PSPath -Force -Recurse -ErrorAction SilentlyContinue
-            Log "OK:" "Removed profile list entry: $($_.PSPath)"
-        }
+# ─── STEP 4: Delete CafeKiosk user (only if created by us) ────────────────────
+if ($KioskUser -eq "CafeKiosk") {
+    Log "STEP:" "Deleting CafeKiosk user account..."
+    try {
+        $deleteResult = net user CafeKiosk /delete 2>&1
+        Log "INFO:" "net user delete: $deleteResult"
+        Log "OK:" "CafeKiosk user deleted"
+    } catch {
+        Log "WARN:" "CafeKiosk user deletion failed (may not exist): $_"
     }
-    Log "OK:" "Profile registry cleanup complete"
-} catch {
-    Log "WARN:" "Profile registry cleanup error: $_"
+} else {
+    Log "INFO:" "Skipping deletion of custom kiosk user account '$KioskUser'"
 }
 
-# ─── STEP 6: Remove profile directory ─────────────────────────────────────────
-Log "STEP:" "Removing C:\Users\CafeKiosk directory..."
-try {
-    Remove-Item -Path "C:\Users\CafeKiosk" -Force -Recurse -ErrorAction SilentlyContinue
-    Log "OK:" "CafeKiosk profile directory removed"
-} catch {
-    Log "WARN:" "Profile directory removal failed: $_"
+# ─── STEP 5: Clean up profile list registry entries (only if created by us) ────
+if ($KioskUser -eq "CafeKiosk") {
+    Log "STEP:" "Cleaning up CafeKiosk profile registry entries..."
+    try {
+        $profileListPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+        Get-ChildItem -Path $profileListPath | ForEach-Object {
+            $val = Get-ItemProperty -Path $_.PSPath
+            if ($val.ProfileImagePath -like "*CafeKiosk") {
+                Remove-Item -Path $_.PSPath -Force -Recurse -ErrorAction SilentlyContinue
+                Log "OK:" "Removed profile list entry: $($_.PSPath)"
+            }
+        }
+        Log "OK:" "Profile registry cleanup complete"
+    } catch {
+        Log "WARN:" "Profile registry cleanup error: $_"
+    }
+}
+
+# ─── STEP 6: Remove profile directory (only if created by us) ─────────────────
+if ($KioskUser -eq "CafeKiosk") {
+    Log "STEP:" "Removing C:\Users\CafeKiosk directory..."
+    try {
+        Remove-Item -Path "C:\Users\CafeKiosk" -Force -Recurse -ErrorAction SilentlyContinue
+        Log "OK:" "CafeKiosk profile directory removed"
+    } catch {
+        Log "WARN:" "Profile directory removal failed: $_"
+    }
 }
 
 # ─── STEP 7: Remove installed flag ────────────────────────────────────────────
