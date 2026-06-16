@@ -3,6 +3,9 @@
 ; PS1 scripts are bundled as extraResources inside the installer package.
 ; NOTE: ShowInstDetails and SetDetailsPrint are global compiler directives only
 ;       and cannot be used inside any macro in electron-builder templates.
+ShowInstDetails show
+ShowUninstDetails show
+
 
 !macro customInit
   nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
