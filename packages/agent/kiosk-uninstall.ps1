@@ -17,8 +17,28 @@ function Log {
     } catch {}
 }
 
-Log "START:" "NetCafe Kiosk Uninstall launched"
-Log "INFO:" "Running as: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+# Helper: Check if user is an Administrator
+function Get-IsUserAdmin {
+    param([string]$UserName)
+    if ($UserName -eq "Administrator") { return $true }
+    try {
+        $adminSid = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+        $adminGroupName = $adminSid.Translate([System.Security.Principal.NTAccount]).Value
+        if ($adminGroupName -like "*\*") {
+            $adminGroupName = $adminGroupName.Split("\")[1]
+        }
+        $member = Get-LocalGroupMember -Group $adminGroupName -ErrorAction SilentlyContinue | Where-Object { $_.Name -like "*\$UserName" -or $_.Name -eq $UserName }
+        return ($null -ne $member)
+    } catch {
+        try {
+            $user = [ADSI]"WinNT://$env:COMPUTERNAME/$UserName,user"
+            $groups = $user.Groups() | ForEach-Object { $_.GetType().InvokeMember("Name", 'GetProperty', $null, $_, $null) }
+            return ($groups -contains "Administrators" -or $groups -contains "Administrateurs" -or $groups -contains "Administradores")
+        } catch {
+            return $false
+        }
+    }
+}
 
 # ─── STEP 1: Disable Auto-Logon ───────────────────────────────────────────────
 Log "STEP:" "Disabling auto-logon..."
@@ -53,6 +73,77 @@ try {
     }
 } catch {
     Log "WARN:" "Scheduled Task removal skipped: $_"
+# ─── STEP 3.5: Restore Explorer Shell & Remove GPO Restrictions for Standard Users ───
+Log "STEP:" "Restoring default Explorer shell and removing GPO policies for standard users..."
+try {
+    $users = Get-LocalUser
+    foreach ($u in $users) {
+        $username = $u.Name
+        if ($username -eq "DefaultAccount" -or $username -eq "WDAGUtilityAccount" -or $username -eq "Guest" -or $username -eq "UtilityVM") {
+            continue
+        }
+        
+        $isAdmin = Get-IsUserAdmin $username
+        if ($isAdmin) {
+            continue
+        }
+        
+        Log "STEP:" "Restoring standard user '$username' profile registry settings..."
+        
+        $profilePath = "C:\Users\$username"
+        $userSid = $null
+        try {
+            $userObj = New-Object System.Security.Principal.NTAccount($username)
+            $userSid = $userObj.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        } catch {
+            Log "WARN:" "Could not resolve SID for user '$username': $_"
+        }
+
+        $ntuserDat = "$profilePath\NTUSER.DAT"
+        if (Test-Path $ntuserDat -or ($null -ne $userSid -and (Test-Path "HKU:\$userSid"))) {
+            try {
+                $isLoaded = $null -ne $userSid -and (Test-Path "HKU:\$userSid")
+                $tempHiveName = $null
+                if ($isLoaded) {
+                    $hivePath = "HKU:\$userSid"
+                    Log "INFO:" "User '$username' profile hive is already loaded. Restoring directly."
+                } else {
+                    [System.GC]::Collect()
+                    Start-Sleep -Milliseconds 200
+                    $tempHiveName = "${username}UninstallTemp"
+                    $hivePath = "HKU:\$tempHiveName"
+                    $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
+                    Log "INFO:" "reg load for $username: $loadResult"
+                }
+                
+                # Delete per-user custom Winlogon Shell if present
+                Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "Shell" -ErrorAction SilentlyContinue
+                Log "OK:" "Restored default Shell for standard user '$username'"
+                
+                # Remove GPO restriction policies
+                Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "HideFastUserSwitching" -ErrorAction SilentlyContinue
+                Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Windows\System" -Name "DisableCMD" -ErrorAction SilentlyContinue
+                Log "OK:" "GPO restriction policies removed for standard user '$username'"
+                
+                # Flush and unload if we loaded it
+                if (-not $isLoaded) {
+                    [System.GC]::Collect()
+                    Start-Sleep -Milliseconds 200
+                    $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
+                    Log "INFO:" "reg unload for $username: $unloadResult"
+                    Log "OK:" "Standard user '$username' profile hive unloaded successfully"
+                }
+            } catch {
+                Log "ERROR:" "Profile hive operations failed for standard user '$username': $_"
+                if ($null -ne $tempHiveName -and -not $isLoaded) {
+                    try { reg unload "HKU\$tempHiveName" 2>&1 | Out-Null } catch {}
+                }
+            }
+        }
+    }
+} catch {
+    Log "ERROR:" "Failed to clean up standard user registry hives: $_"
 }
 
 # ─── STEP 4: Delete CafeKiosk user ────────────────────────────────────────────

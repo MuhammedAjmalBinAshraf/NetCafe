@@ -197,59 +197,78 @@ try {
             Log "INFO:" "icacls for $username: $icaclsOutput"
         } catch {}
 
-        # Load NTUSER.DAT and write per-user Shell registry keys
+        $userSid = $null
+        try {
+            $userObj = New-Object System.Security.Principal.NTAccount($username)
+            $userSid = $userObj.Translate([System.Security.Principal.SecurityIdentifier]).Value
+        } catch {
+            Log "WARN:" "Could not resolve SID for user '$username': $_"
+        }
+
+        # Load NTUSER.DAT or write directly if already loaded
         $ntuserDat = "$profilePath\NTUSER.DAT"
-        if (Test-Path $ntuserDat) {
+        if (Test-Path $ntuserDat -or ($null -ne $userSid -and (Test-Path "HKU:\$userSid"))) {
             try {
-                [System.GC]::Collect()
-                Start-Sleep -Milliseconds 200
-                
-                $tempHiveName = "${username}Temp"
-                $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
-                Log "INFO:" "reg load for $username: $loadResult"
+                $isLoaded = $null -ne $userSid -and (Test-Path "HKU:\$userSid")
+                $tempHiveName = $null
+                if ($isLoaded) {
+                    $hivePath = "HKU:\$userSid"
+                    Log "INFO:" "User '$username' profile hive is already loaded (active session). Writing directly to $hivePath"
+                } else {
+                    [System.GC]::Collect()
+                    Start-Sleep -Milliseconds 200
+                    $tempHiveName = "${username}Temp"
+                    $hivePath = "HKU:\$tempHiveName"
+                    $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
+                    Log "INFO:" "reg load for $username: $loadResult"
+                }
                 
                 # Create the Winlogon key in the user hive if it does not exist
-                New-Item -Path "HKU:\$tempHiveName\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+                New-Item -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                          -Force -ErrorAction SilentlyContinue | Out-Null
                 
                 # Per-user Shell — only standard users get the kiosk shell
                 Set-ItemProperty `
-                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
+                    -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                     -Name  "Shell" `
                     -Value $AgentExe `
                     -Force
                 Log "OK:" "Per-user Shell written for standard user '$username': $AgentExe"
                 
                 # Lock-down GPO policies for this standard user
-                New-Item -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
                          -Force -ErrorAction SilentlyContinue | Out-Null
                 Set-ItemProperty `
-                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                    -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
                     -Name  "DisableTaskMgr"        -Value 1 -Type DWord -Force
                 Set-ItemProperty `
-                    -Path "HKU:\$tempHiveName\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                    -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
                     -Name  "HideFastUserSwitching" -Value 1 -Type DWord -Force
                 
-                New-Item -Path "HKU:\$tempHiveName\Software\Policies\Microsoft\Windows\System" `
+                New-Item -Path "$hivePath\Software\Policies\Microsoft\Windows\System" `
                          -Force -ErrorAction SilentlyContinue | Out-Null
                 Set-ItemProperty `
-                    -Path "HKU:\$tempHiveName\Software\Policies\Microsoft\Windows\System" `
+                    -Path "$hivePath\Software\Policies\Microsoft\Windows\System" `
                     -Name  "DisableCMD" -Value 1 -Type DWord -Force
                 
                 Log "OK:" "GPO restriction policies written for standard user '$username'"
                 
-                # Flush and unload
-                [System.GC]::Collect()
-                Start-Sleep -Milliseconds 200
-                $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
-                Log "INFO:" "reg unload for $username: $unloadResult"
-                Log "OK:" "Standard user '$username' profile hive unloaded successfully"
+                # Flush and unload if we loaded it
+                if (-not $isLoaded) {
+                    [System.GC]::Collect()
+                    Start-Sleep -Milliseconds 200
+                    $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
+                    Log "INFO:" "reg unload for $username: $unloadResult"
+                    Log "OK:" "Standard user '$username' profile hive unloaded successfully"
+                }
             } catch {
                 Log "ERROR:" "Profile hive operations failed for standard user '$username': $_"
-                try { reg unload "HKU\$tempHiveName" 2>&1 | Out-Null } catch {}
+                if ($null -ne $tempHiveName -and -not $isLoaded) {
+                    try { reg unload "HKU\$tempHiveName" 2>&1 | Out-Null } catch {}
+                }
             }
         } else {
-            Log "WARN:" "NTUSER.DAT not found for standard user '$username'"
+            Log "WARN:" "NTUSER.DAT not found and hive not loaded for standard user '$username'"
         }
 
         # ─── Register Elevated Scheduled Task for this standard user ───
