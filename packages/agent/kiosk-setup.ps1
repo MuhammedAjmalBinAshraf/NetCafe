@@ -22,8 +22,8 @@ function Log {
     Write-Output $line
     # Also persist to disk
     try {
-        if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-        Add-Content -Path $LogFile -Value $line -Encoding UTF8
+        if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force -ErrorAction SilentlyContinue | Out-Null }
+        Add-Content -Path $LogFile -Value $line -Encoding UTF8 -ErrorAction SilentlyContinue
     } catch {}
 }
 
@@ -247,7 +247,7 @@ try {
 
         # Load NTUSER.DAT or write directly if already loaded
         $ntuserDat = "$profilePath\NTUSER.DAT"
-        if (Test-Path $ntuserDat -or ($null -ne $userSid -and (Test-Path "HKU:\$userSid"))) {
+        if ((Test-Path $ntuserDat) -or ($null -ne $userSid -and (Test-Path "HKU:\$userSid"))) {
             try {
                 $isLoaded = $null -ne $userSid -and (Test-Path "HKU:\$userSid")
                 $tempHiveName = $null
