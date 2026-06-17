@@ -51,7 +51,7 @@ if (Test-Path $ConfigIni) {
             }
         }
     } catch {
-        Log "WARN:" "Failed to parse $ConfigIni: $_"
+        Log "WARN:" "Failed to parse $($ConfigIni) - $_"
     }
 }
 
@@ -66,7 +66,7 @@ Log "INFO:" "Agent exe path resolved to: $AgentExe"
 # ─── GUARD: abort shell replacement if binary is missing ──────────────────────
 if (!(Test-Path $AgentExe)) {
     Log "ERROR:" "Agent binary NOT found at: $AgentExe"
-    Log "ERROR:" "Shell replacement SKIPPED — install the NetCafe Agent first, then re-run this script."
+    Log "ERROR:" "Shell replacement SKIPPED - install the NetCafe Agent first, then re-run this script."
     Log "DONE:"  "Setup aborted (agent missing). No registry changes made."
     exit 1
 }
@@ -81,9 +81,9 @@ try {
     $currentShell = (Get-ItemProperty -Path $winlogon -Name "Shell" -ErrorAction SilentlyContinue).Shell
     if ($currentShell -ne "explorer.exe") {
         Set-ItemProperty -Path $winlogon -Name "Shell" -Value "explorer.exe" -Type String -Force
-        Log "OK:" "HKLM Shell was '$currentShell' — reset to 'explorer.exe'"
+        Log "OK:" "HKLM Shell was '$currentShell' - reset to 'explorer.exe'"
     } else {
-        Log "OK:" "HKLM Shell is already 'explorer.exe' — no change needed"
+        Log "OK:" "HKLM Shell is already 'explorer.exe' - no change needed"
     }
 } catch {
     Log "WARN:" "Could not verify/reset HKLM Shell: $_"
@@ -106,7 +106,7 @@ try {
             exit 1
         }
     } else {
-        Log "OK:" "Kiosk user '$KioskUser' already exists — skipping creation"
+        Log "OK:" "Kiosk user '$KioskUser' already exists - skipping creation"
     }
 } catch {
     Log "ERROR:" "Failed to verify or create kiosk user '$KioskUser': $_"
@@ -163,10 +163,10 @@ try {
         $ShellLauncherClass.SetCustomShell($strSID, $AgentExe, $null, $null, 0)
         Log "OK:" "WMI custom shell registered for SID $strSID"
     } else {
-        Log "WARN:" "WMI Shell Launcher class not available — will rely on NTUSER.DAT Shell key"
+        Log "WARN:" "WMI Shell Launcher class not available - will rely on NTUSER.DAT Shell key"
     }
 } catch {
-    Log "WARN:" "WMI custom shell config failed (non-fatal, NTUSER.DAT fallback will be used): $_"
+    Log "WARN:" "WMI custom shell config failed (non-fatal, NTUSER.DAT fallback will be used) - $_"
 }
 
 # ─── Helper: Check if user is an Administrator ────────────────────────────────
@@ -208,7 +208,7 @@ try {
         
         $isAdmin = Get-IsUserAdmin $username
         if ($isAdmin -and $username -ne $KioskUser) {
-            Log "INFO:" "User '$username' is an Administrator — leaving on explorer.exe"
+            Log "INFO:" "User '$username' is an Administrator - leaving on explorer.exe"
             continue
         }
         
@@ -234,7 +234,7 @@ try {
         # Grant permissions to the user on their own folder
         try {
             $icaclsOutput = icacls $profilePath /grant "${username}:(OI)(CI)F" /T 2>&1
-            Log "INFO:" "icacls for $username: $icaclsOutput"
+            Log "INFO:" "icacls for $($username) - $icaclsOutput"
         } catch {}
 
         $userSid = $null
@@ -260,14 +260,14 @@ try {
                     $tempHiveName = "${username}Temp"
                     $hivePath = "HKU:\$tempHiveName"
                     $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
-                    Log "INFO:" "reg load for $username: $loadResult"
+                    Log "INFO:" "reg load for $($username) - $loadResult"
                 }
                 
                 # Create the Winlogon key in the user hive if it does not exist
                 New-Item -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                          -Force -ErrorAction SilentlyContinue | Out-Null
                 
-                # Per-user Shell — only standard users get the kiosk shell
+                # Per-user Shell - only standard users get the kiosk shell
                 Set-ItemProperty `
                     -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                     -Name  "Shell" `
@@ -298,7 +298,7 @@ try {
                     [System.GC]::Collect()
                     Start-Sleep -Milliseconds 200
                     $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
-                    Log "INFO:" "reg unload for $username: $unloadResult"
+                    Log "INFO:" "reg unload for $($username) - $unloadResult"
                     Log "OK:" "Standard user '$username' profile hive unloaded successfully"
                 }
             } catch {

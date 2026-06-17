@@ -60,7 +60,7 @@ if (Test-Path $ConfigIni) {
             }
         }
     } catch {
-        Log "WARN:" "Failed to parse $ConfigIni: $_"
+        Log "WARN:" "Failed to parse $($ConfigIni) - $_"
     }
 }
 
@@ -97,6 +97,7 @@ try {
     }
 } catch {
     Log "WARN:" "Scheduled Task removal skipped: $_"
+}
 # ─── STEP 3.5: Restore Explorer Shell & Remove GPO Restrictions for Standard Users ───
 Log "STEP:" "Restoring default Explorer shell and removing GPO policies for standard users..."
 try {
@@ -138,7 +139,7 @@ try {
                     $tempHiveName = "${username}UninstallTemp"
                     $hivePath = "HKU:\$tempHiveName"
                     $loadResult = reg load "HKU\$tempHiveName" $ntuserDat 2>&1
-                    Log "INFO:" "reg load for $username: $loadResult"
+                    Log "INFO:" "reg load for $($username) - $loadResult"
                 }
                 
                 # Delete per-user custom Winlogon Shell if present
@@ -156,7 +157,7 @@ try {
                     [System.GC]::Collect()
                     Start-Sleep -Milliseconds 200
                     $unloadResult = reg unload "HKU\$tempHiveName" 2>&1
-                    Log "INFO:" "reg unload for $username: $unloadResult"
+                    Log "INFO:" "reg unload for $($username) - $unloadResult"
                     Log "OK:" "Standard user '$username' profile hive unloaded successfully"
                 }
             } catch {

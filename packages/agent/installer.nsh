@@ -1,6 +1,21 @@
 ; NetCafe Agent - Custom NSIS Installer Script
 ; nsExec::ExecToLog pipes PowerShell stdout into the NSIS detail log in real time.
 ; PS1 scripts are bundled as extraResources inside the installer package.
+
+Var /GLOBAL psExe
+
+!macro runPowerShell ScriptPath Params LogPath
+  IfFileExists "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe" launch_sysnative launch_system32
+launch_sysnative:
+  StrCpy $psExe "$WINDIR\SysNative\WindowsPowerShell\v1.0\powershell.exe"
+  Goto ps_ready
+launch_system32:
+  StrCpy $psExe "powershell.exe"
+  Goto ps_ready
+ps_ready:
+  nsExec::ExecToLog `"$psExe" -NoProfile -ExecutionPolicy Bypass -Command "& { & '${ScriptPath}' ${Params} *>&1 | Tee-Object -FilePath '${LogPath}' }"`
+!macroend
+
 !macro customHeader
   ShowInstDetails show
   ShowUninstDetails show
@@ -23,7 +38,7 @@
   CreateDirectory "C:\NetCafe"
   CreateDirectory "C:\NetCafe\logs"
   DetailPrint "NetCafe: Running kiosk setup..."
-  nsExec::ExecToLog `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { & '$INSTDIR\resources\kiosk-setup.ps1' '$INSTDIR\NetCafe Agent.exe' *>&1 | Tee-Object -FilePath 'C:\NetCafe\logs\agent-install.log' }"`
+  !insertmacro runPowerShell "$INSTDIR\resources\kiosk-setup.ps1" "'$INSTDIR\NetCafe Agent.exe'" "C:\NetCafe\logs\agent-install.log"
   Pop $0
   DetailPrint "NetCafe: Kiosk setup exited with code $0"
 !macroend
@@ -35,7 +50,7 @@
 
 !macro customUnInstall
   DetailPrint "NetCafe: Running kiosk uninstall..."
-  nsExec::ExecToLog `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { & '$INSTDIR\resources\kiosk-uninstall.ps1' *>&1 | Tee-Object -FilePath 'C:\NetCafe\logs\agent-uninstall.log' }"`
+  !insertmacro runPowerShell "$INSTDIR\resources\kiosk-uninstall.ps1" "" "C:\NetCafe\logs\agent-uninstall.log"
   Pop $0
   DetailPrint "NetCafe: Kiosk uninstall exited with code $0"
 !macroend
