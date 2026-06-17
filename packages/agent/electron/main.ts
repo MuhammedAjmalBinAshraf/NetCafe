@@ -929,8 +929,14 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
-      // Always spawn explorer.exe on Windows — WMI Shell Launcher bypasses HKCU Shell key
-      // so isAgentTheShell() would return false even when agent IS the shell.
+
+      // Unblock hardware input in case it was blocked from a previous session
+      if (process.platform === 'win32') {
+        exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
+        if (psProcess && psProcess.stdin && !psProcess.killed) psProcess.stdin.write('Set-BlockInput $false\n');
+      }
+
+      // Spawn explorer.exe so the desktop shell is available during the session
       if (process.platform === 'win32') {
         exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
           if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
@@ -968,8 +974,14 @@ async function handleServerMessage(msg: any) {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
 
-      // Always spawn explorer.exe on Windows — WMI Shell Launcher bypasses HKCU Shell key
-      // so isAgentTheShell() would return false even when agent IS the shell.
+      // Unblock hardware input in case it was blocked from a previous session
+      if (process.platform === 'win32') {
+        exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
+        if (psProcess && psProcess.stdin && !psProcess.killed) psProcess.stdin.write('Set-BlockInput $false\n');
+      }
+
+      // Spawn explorer.exe so the desktop shell is available during the session.
+      // The CafeKiosk shell (NTUSER.DAT) is the agent — explorer is only active during sessions.
       if (process.platform === 'win32') {
         exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
           if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
@@ -2061,6 +2073,16 @@ app.whenReady().then(async () => {
   setupWindowsFirewall();
   startUdpDiscovery();
 
+  // Safety: always unblock hardware input on startup in case a previous session/crash
+  // left BlockInput(true) active — this is the #1 cause of "keyboard not responding".
+  if (process.platform === 'win32') {
+    logToUI('Startup safety: unblocking hardware input (BlockInput false)...');
+    exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
+    if (psProcess && psProcess.stdin && !psProcess.killed) {
+      psProcess.stdin.write('Set-BlockInput $false\n');
+    }
+  }
+
   // Always terminate explorer.exe on Windows startup when locked
   if (isLocked && process.platform === 'win32') {
     logToUI('Terminating explorer.exe on startup (locked)...');
@@ -2105,9 +2127,17 @@ app.whenReady().then(async () => {
     if (isLocked) {
       createLockWindow();
     }
-    // Automatically apply update and restart after 3 seconds
+    // Stop the watchdog service before installing so it can't restart the old
+    // agent binary while the new installer is writing files (prevents file-lock conflicts).
     setTimeout(() => {
-      autoUpdater.quitAndInstall();
+      if (process.platform === 'win32') {
+        exec('sc stop "NetCafeAgentWatchdog"', () => {
+          // Give the service 2 seconds to stop, then install
+          setTimeout(() => autoUpdater.quitAndInstall(), 2000);
+        });
+      } else {
+        autoUpdater.quitAndInstall();
+      }
     }, 3000);
   });
 

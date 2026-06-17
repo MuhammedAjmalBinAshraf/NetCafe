@@ -27,8 +27,14 @@ ps_ready:
 !define MUI_FINISHPAGE_RUN_TEXT "View Installation Log"
 
 !macro customInit
+  ; ── Stop watchdog service so it cannot restart the agent while we install ──
+  nsExec::ExecToLog 'sc stop "NetCafeAgentWatchdog"'
+  Pop $0
+  Sleep 2000
+  ; ── Kill any running agent process ──
   nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
   Pop $0
+  Sleep 1000
   ; Clean up legacy global scheduled task from older versions
   nsExec::ExecToLog 'schtasks /Delete /TN "NetCafeAgent" /F'
   Pop $0
@@ -44,6 +50,10 @@ ps_ready:
 !macroend
 
 !macro customUnInit
+  ; Stop watchdog service so it does not restart the agent during uninstall
+  nsExec::ExecToLog 'sc stop "NetCafeAgentWatchdog"'
+  Pop $0
+  Sleep 2000
   nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
   Pop $0
 !macroend
