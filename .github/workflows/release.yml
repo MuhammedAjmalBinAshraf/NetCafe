@@ -31,7 +31,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          # Node 20 is required: better-sqlite3 v11 has no prebuilt binaries for Node 24.
+          # When Node 24 is used, it falls back to source compilation which fails due to a
+          # C++ standard mismatch (MSVC overrides C++20→C++17).
+          # FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 (set above) handles action-script deprecation
+          # separately — it applies to actions/checkout, actions/cache etc., not user code.
+          node-version: 20
 
       - name: Cache Electron binaries
         uses: actions/cache@v4
