@@ -101,6 +101,11 @@ try {
 # ─── STEP 3.5: Restore Explorer Shell & Remove GPO Restrictions for Standard Users ───
 Log "STEP:" "Restoring default Explorer shell and removing GPO policies for standard users..."
 try {
+    # Ensure HKEY_USERS (HKU) drive is mounted in PowerShell
+    if (!(Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+        New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+    }
+
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name

@@ -198,6 +198,11 @@ function Get-IsUserAdmin {
 # ─── STEP 6: Configure Standard User Profiles, Shells, and Restrictions ────────
 Log "STEP:" "Configuring shell replacement for all standard users, leaving Administrators on explorer..."
 try {
+    # Ensure HKEY_USERS (HKU) drive is mounted in PowerShell
+    if (!(Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+        New-PSDrive -Name HKU -PSProvider Registry -Root HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+    }
+
     $users = Get-LocalUser
     foreach ($u in $users) {
         $username = $u.Name
@@ -226,16 +231,13 @@ try {
                     Copy-Item -Path $defaultNtuser -Destination "$profilePath\NTUSER.DAT" -Force
                     Log "OK:" "Pre-created profile directory and copied NTUSER.DAT for standard user '$username'"
                 }
+                # Grant permissions to the user on their pre-created folder (non-recursive to prevent hangs)
+                $icaclsOutput = icacls $profilePath /grant "${username}:(OI)(CI)F" 2>&1
+                Log "INFO:" "icacls for $($username) - $icaclsOutput"
             } catch {
                 Log "WARN:" "Could not pre-create profile for '$username': $_"
             }
         }
-        
-        # Grant permissions to the user on their own folder
-        try {
-            $icaclsOutput = icacls $profilePath /grant "${username}:(OI)(CI)F" /T 2>&1
-            Log "INFO:" "icacls for $($username) - $icaclsOutput"
-        } catch {}
 
         $userSid = $null
         try {

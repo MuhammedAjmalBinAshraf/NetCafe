@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.57",
+  "version": "1.0.58",
 
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
