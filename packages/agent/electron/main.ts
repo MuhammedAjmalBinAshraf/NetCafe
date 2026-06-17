@@ -15,6 +15,8 @@ if (!gotTheLock) {
   process.exit(0);
 }
 
+const IS_DEVELOPER_MODE = true;
+
 let mitmProxy: MitmProxy | null = null;
 
 let lockWindow: BrowserWindow | null = null;
@@ -77,6 +79,38 @@ function isDesktopShellRunning(): Promise<boolean> {
   });
 }
 
+function spawnExplorerShell() {
+  if (process.platform !== 'win32') return;
+  
+  if (!isAgentTheShell()) {
+    logToUI('Agent is not the registered shell. Spawning explorer.exe directly...');
+    spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  
+  const originalShell = process.execPath;
+  const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
+  
+  logToUI('Temporarily resetting registry Shell to explorer.exe to force shell-mode...');
+  try {
+    execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
+    logToUI('Spawning explorer.exe...');
+    spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    
+    setTimeout(() => {
+      try {
+        logToUI('Restoring registry Shell override to NetCafe Agent...');
+        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "${originalShell}" /f`);
+        logToUI('Registry Shell override restored successfully.');
+      } catch (err: any) {
+        logToUI(`Error restoring registry Shell override: ${err.message}`);
+      }
+    }, 2000);
+  } catch (err: any) {
+    logToUI(`Error setting registry Shell to explorer: ${err.message}`);
+  }
+}
+
 function saveClientLog() {
   try {
     const now = new Date();
@@ -124,7 +158,19 @@ function logToUI(msg: string) {
   if (lockWindow && !lockWindow.isDestroyed()) {
     lockWindow.webContents.send('agent-log-updated', logEntry);
   }
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    islandWindow.webContents.send('agent-log-updated', logEntry);
+  }
   writeAgentRuntimeLog(msg);
+
+  if (IS_DEVELOPER_MODE && tcpSocket && !tcpSocket.destroyed) {
+    try {
+      tcpSocket.write(JSON.stringify({
+        type: 'agent-log',
+        payload: logEntry
+      }) + '\n');
+    } catch {}
+  }
 }
 
 const configPath = path.join(app.getPath('userData'), 'config.json');
@@ -993,7 +1039,7 @@ async function handleServerMessage(msg: any) {
         isDesktopShellRunning().then((running) => {
           if (!running) {
             logToUI('Spawning explorer.exe to load desktop shell (login-success)...');
-            spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+            spawnExplorerShell();
           } else {
             logToUI('explorer.exe desktop shell already running — skipping spawn (login-success).');
           }
@@ -1038,7 +1084,7 @@ async function handleServerMessage(msg: any) {
         isDesktopShellRunning().then((running) => {
           if (!running) {
             logToUI('Spawning explorer.exe to load desktop shell...');
-            spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+            spawnExplorerShell();
           } else {
             logToUI('explorer.exe desktop shell already running — skipping spawn.');
           }
@@ -2501,8 +2547,14 @@ ipcMain.on('exit-session-request', () => {
   sendToServer({ type: 'client-request-close' });
 });
 
+ipcMain.on('save-client-log', () => {
+  saveClientLog();
+});
+
 function getIslandHtml(sessionData?: any): string {
   const sessionJson = JSON.stringify(sessionData || null);
+  const isDevMode = IS_DEVELOPER_MODE;
+  const initialLogsJson = JSON.stringify(agentLogsCache);
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -2546,7 +2598,8 @@ function getIslandHtml(sessionData?: any): string {
     }
     #dynamic-island-container.card {
       width: 340px;
-      height: 125px;
+      min-height: 125px;
+      height: auto;
       border-radius: 24px;
       padding: 14px;
       align-items: stretch;
@@ -2745,6 +2798,44 @@ function getIslandHtml(sessionData?: any): string {
     .dismiss-btn:hover {
       transform: scale(1.05);
     }
+    .log-console {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      padding: 6px;
+      font-family: monospace;
+      font-size: 9px;
+      max-height: 80px;
+      overflow-y: auto;
+      text-align: left;
+      margin-top: 8px;
+      color: #38bdf8;
+    }
+    .log-line {
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      overflow: hidden;
+    }
+    .island-buttons {
+      display: flex;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .save-log-btn {
+      flex: 1;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 5px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .save-log-btn:hover {
+      background: #2563eb;
+    }
   </style>
 </head>
 <body>
@@ -2778,7 +2869,16 @@ function getIslandHtml(sessionData?: any): string {
             <div class="cost-val" id="card-cost-val">$0.00</div>
           </div>
         </div>
-        <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
+        
+        <!-- Developer Log Panel -->
+        <div id="dev-log-panel" style="display: none;">
+          <div class="log-console" id="island-logs-container"></div>
+        </div>
+
+        <div class="island-buttons">
+          <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
+          <button class="save-log-btn" id="island-save-log-btn" style="display: none;" onclick="saveLog()">Save Log</button>
+        </div>
       </div>
     </div>
     <div class="banner-content">
@@ -2793,6 +2893,8 @@ function getIslandHtml(sessionData?: any): string {
   <script>
     const { ipcRenderer } = require('electron');
     let session = ${sessionJson};
+    const isDevMode = ${isDevMode};
+    const initialLogs = ${initialLogsJson};
     if (session && session.startTime) {
       if (!session.startTime.includes('Z') && !session.startTime.includes('+')) {
         session.startTime = session.startTime.replace(' ', 'T') + 'Z';
@@ -2905,6 +3007,10 @@ function getIslandHtml(sessionData?: any): string {
       ipcRenderer.send('exit-session-request');
     }
 
+    function saveLog() {
+      ipcRenderer.send('save-client-log');
+    }
+
     function dismissBanner() {
       operatorMessage = '';
       updateState();
@@ -2932,6 +3038,21 @@ function getIslandHtml(sessionData?: any): string {
       updateState();
     });
 
+    ipcRenderer.on('agent-log-updated', (event, logEntry) => {
+      if (!isDevMode) return;
+      const logsContainer = document.getElementById('island-logs-container');
+      if (logsContainer) {
+        const line = document.createElement('div');
+        line.className = 'log-line';
+        line.innerText = '[' + logEntry.timestamp + '] ' + logEntry.message;
+        logsContainer.appendChild(line);
+        while (logsContainer.childNodes.length > 20) {
+          logsContainer.removeChild(logsContainer.firstChild);
+        }
+        logsContainer.scrollTop = logsContainer.scrollHeight;
+      }
+    });
+
     const resizeObserver = new ResizeObserver(entries => {
       for (let entry of entries) {
         const { width, height } = entry.contentRect;
@@ -2943,6 +3064,24 @@ function getIslandHtml(sessionData?: any): string {
     setInterval(updateUI, 1000);
     updateUI();
     updateState();
+
+    if (isDevMode) {
+      const devPanel = document.getElementById('dev-log-panel');
+      if (devPanel) devPanel.style.display = 'block';
+      const saveBtn = document.getElementById('island-save-log-btn');
+      if (saveBtn) saveBtn.style.display = 'block';
+      
+      const logsContainer = document.getElementById('island-logs-container');
+      if (logsContainer) {
+        for (const log of initialLogs) {
+          const line = document.createElement('div');
+          line.className = 'log-line';
+          line.innerText = '[' + log.timestamp + '] ' + log.message;
+          logsContainer.appendChild(line);
+        }
+        logsContainer.scrollTop = logsContainer.scrollHeight;
+      }
+    }
   </script>
 </body>
 </html>`;

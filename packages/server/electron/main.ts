@@ -35,6 +35,8 @@ ipcMain.handle = (channel: string, handler: Function) => {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
+const IS_DEVELOPER_MODE = true;
+
 let mainWindow: BrowserWindow | null = null
 
 // Initialize SQLite Database
@@ -731,6 +733,18 @@ function handleClientMessage(socket: net.Socket, data: any) {
       `).run(machineId)
       socket.write(JSON.stringify({ command: 'lock' }) + '\n')
       broadcastMachines()
+    }
+  }
+  else if (data.type === 'agent-log' && IS_DEVELOPER_MODE) {
+    const machineId = clients.get(socket)
+    if (machineId && mainWindow && !mainWindow.isDestroyed() && db) {
+      const machine = db.prepare("SELECT name FROM machines WHERE id = ?").get(machineId)
+      const machineName = machine ? machine.name : `PC-${machineId}`
+      const logEntry = {
+        timestamp: data.payload.timestamp,
+        message: `[${machineName}] ${data.payload.message}`
+      }
+      mainWindow.webContents.send('server-log', logEntry)
     }
   }
 }
