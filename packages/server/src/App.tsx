@@ -174,6 +174,7 @@ export default function App() {
   const [userEmail, setUserEmail] = useState('')
   const [userBalanceMinutes, setUserBalanceMinutes] = useState('0')
   const [userSearchQuery, setUserSearchQuery] = useState('')
+  const [userSearchDate, setUserSearchDate] = useState('')
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([])
   const [visiblePasswords, setVisiblePasswords] = useState<Record<number, boolean>>([])
 
@@ -1173,12 +1174,15 @@ export default function App() {
 
   const filteredUsers = users.filter((u) => {
     const query = userSearchQuery.toLowerCase()
-    return (
+    const matchesQuery = !query || (
       u.username.toLowerCase().includes(query) ||
       (u.display_name && u.display_name.toLowerCase().includes(query)) ||
       (u.phone && u.phone.includes(query)) ||
-      (u.email && u.email.toLowerCase().includes(query))
+      (u.email && u.email.toLowerCase().includes(query)) ||
+      (u.created_at && u.created_at.toLowerCase().includes(query))
     )
+    const matchesDate = !userSearchDate || (u.created_at && u.created_at.includes(userSearchDate))
+    return matchesQuery && matchesDate
   })
 
   return (
@@ -2590,20 +2594,37 @@ Respond strictly in JSON format:
                 </div>
               </div>
 
-              {/* Search Bar */}
-              <div className="flex items-center bg-slate-900/40 border border-slate-900 rounded-lg px-3 py-2 max-w-md">
-                <input
-                  type="text"
-                  placeholder="Search users..."
-                  value={userSearchQuery}
-                  onChange={(e) => setUserSearchQuery(e.target.value)}
-                  className="bg-transparent border-none text-white outline-none w-full text-sm"
-                />
-                {userSearchQuery && (
-                  <button onClick={() => setUserSearchQuery('')} className="text-slate-500 hover:text-slate-300 text-xs font-bold font-mono">
-                    CLEAR
-                  </button>
-                )}
+              {/* Search Bar & Date Filter */}
+              <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+                <div className="flex items-center bg-slate-900/40 border border-slate-900 rounded-lg px-3 py-2 flex-1 max-w-md">
+                  <input
+                    type="text"
+                    placeholder="Search by username, display name, email, phone..."
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    className="bg-transparent border-none text-white outline-none w-full text-sm"
+                  />
+                  {userSearchQuery && (
+                    <button onClick={() => setUserSearchQuery('')} className="text-slate-500 hover:text-slate-300 text-xs font-bold font-mono">
+                      CLEAR
+                    </button>
+                  )}
+                </div>
+                
+                <div className="flex items-center gap-2 bg-slate-900/40 border border-slate-900 rounded-lg px-3 py-1.5 self-start sm:self-auto">
+                  <span className="text-xs text-slate-400 font-semibold uppercase">Created Date:</span>
+                  <input
+                    type="date"
+                    value={userSearchDate}
+                    onChange={(e) => setUserSearchDate(e.target.value)}
+                    className="bg-transparent border-none text-white outline-none text-xs text-slate-200 scheme-dark cursor-pointer"
+                  />
+                  {userSearchDate && (
+                    <button onClick={() => setUserSearchDate('')} className="text-slate-500 hover:text-slate-300 text-xs font-bold font-mono">
+                      CLEAR
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Bulk Import from Excel */}
