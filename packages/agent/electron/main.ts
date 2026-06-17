@@ -60,6 +60,58 @@ function isAgentTheShell(): boolean {
   }
 }
 
+function isDesktopShellRunning(): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (process.platform !== 'win32') {
+      resolve(true);
+      return;
+    }
+    const cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport(\\\"user32.dll\\\")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName); }'; if ([W]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) { exit 1 } else { exit 0 }\"";
+    exec(cmd, (error) => {
+      if (error) {
+        resolve(false);
+      } else {
+        resolve(true);
+      }
+    });
+  });
+}
+
+function saveClientLog() {
+  try {
+    const now = new Date();
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const timestamp = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate()) + '_' + pad(now.getHours()) + '-' + pad(now.getMinutes()) + '-' + pad(now.getSeconds());
+    const filename = 'client log ' + timestamp + '.txt';
+    const destPath = path.join(os.homedir(), filename);
+
+    // Flush any cached logs to the runtime file first
+    writeAgentRuntimeLog('--- Manual log diagnostic save triggered ---');
+
+    if (fs.existsSync(runtimeLogFilePath)) {
+      fs.copyFileSync(runtimeLogFilePath, destPath);
+    } else {
+      // If for some reason the file doesn't exist, create it with the cached logs
+      const cacheData = agentLogsCache.map(e => '[' + e.timestamp + '] ' + e.message).join('\r\n');
+      fs.writeFileSync(destPath, cacheData, 'utf8');
+    }
+
+    dialog.showMessageBoxSync({
+      type: 'info',
+      title: 'Diagnostics Log Saved',
+      message: 'Client log has been successfully saved to:\n\n' + destPath,
+      buttons: ['OK']
+    });
+  } catch (err: any) {
+    dialog.showMessageBoxSync({
+      type: 'error',
+      title: 'Diagnostics Log Error',
+      message: 'Failed to save client log:\n\n' + (err.message || err),
+      buttons: ['OK']
+    });
+  }
+}
+
 function logToUI(msg: string) {
   const logEntry = {
     timestamp: new Date().toISOString().substring(11, 19),
@@ -938,12 +990,12 @@ async function handleServerMessage(msg: any) {
 
       // Spawn explorer.exe so the desktop shell is available during the session
       if (process.platform === 'win32') {
-        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
-          if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
+        isDesktopShellRunning().then((running) => {
+          if (!running) {
             logToUI('Spawning explorer.exe to load desktop shell (login-success)...');
             spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
           } else {
-            logToUI('explorer.exe already running — skipping spawn (login-success).');
+            logToUI('explorer.exe desktop shell already running — skipping spawn (login-success).');
           }
         });
       }
@@ -983,12 +1035,12 @@ async function handleServerMessage(msg: any) {
       // Spawn explorer.exe so the desktop shell is available during the session.
       // The CafeKiosk shell (NTUSER.DAT) is the agent — explorer is only active during sessions.
       if (process.platform === 'win32') {
-        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
-          if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
+        isDesktopShellRunning().then((running) => {
+          if (!running) {
             logToUI('Spawning explorer.exe to load desktop shell...');
             spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
           } else {
-            logToUI('explorer.exe already running — skipping spawn.');
+            logToUI('explorer.exe desktop shell already running — skipping spawn.');
           }
         });
       }
@@ -2150,6 +2202,11 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('get-agent-logs', () => {
     return agentLogsCache;
+  });
+
+  // Ctrl+Alt+Shift+L: Diagnostics Log Saving
+  globalShortcut.register('Control+Alt+Shift+L', () => {
+    saveClientLog();
   });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────
