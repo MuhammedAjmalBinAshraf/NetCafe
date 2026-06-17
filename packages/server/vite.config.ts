@@ -1,19 +1,28 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import renderer from 'vite-plugin-electron-renderer'
 import path from 'path'
 import { createRequire } from 'module'
 
-// vite-plugin-electron v0.28.x has a CJS/ESM interop issue when Vite loads the
-// config in CJS mode during `vite build`. Using createRequire avoids the
-// "(0, import_vite_plugin_electron.default) is not a function" error on CI.
+// vite-plugin-electron v0.28.x and vite-plugin-electron-renderer v0.14.x both
+// have a CJS/ESM interop problem when Vite loads vite.config.ts in CJS mode
+// during `vite build` on CI. The `import X from '...'` syntax results in X
+// being the whole module object instead of the default export.
+// Using createRequire and normalising the export shape fixes this reliably.
 const require = createRequire(import.meta.url)
-const electronPlugin = require('vite-plugin-electron')
-// Handle both { default: fn } and fn shapes (CJS vs ESM interop)
-const electron: typeof import('vite-plugin-electron').default =
-  typeof electronPlugin === 'function'
-    ? electronPlugin
-    : (electronPlugin.default ?? electronPlugin)
+
+function resolveDefault<T>(mod: unknown): T {
+  const m = mod as Record<string, unknown>
+  if (typeof m === 'function') return m as T
+  if (typeof m?.default === 'function') return m.default as T
+  throw new Error(`Cannot resolve default export from module: ${JSON.stringify(Object.keys(m))}`)
+}
+
+const electron = resolveDefault<typeof import('vite-plugin-electron').default>(
+  require('vite-plugin-electron')
+)
+const renderer = resolveDefault<typeof import('vite-plugin-electron-renderer').default>(
+  require('vite-plugin-electron-renderer')
+)
 
 export default defineConfig({
   plugins: [
