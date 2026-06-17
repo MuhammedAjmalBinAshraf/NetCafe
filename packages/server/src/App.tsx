@@ -717,6 +717,12 @@ export default function App() {
     }
   }
 
+  const handleLockMachine = async (machineId: number) => {
+    if (window.ipcRenderer) {
+      await window.ipcRenderer.invoke('lock-machine', machineId)
+    }
+  }
+
   // Global actions
   const handleLockAll = async () => {
     if (window.ipcRenderer) await window.ipcRenderer.invoke('lock-all')
@@ -1063,17 +1069,17 @@ export default function App() {
 
   const handleBackup = async () => {
     if (window.ipcRenderer) {
-      const res = await window.ipcRenderer.invoke('backup-db', 'C:/Users/Student/Desktop/netcafe_backup.db')
-      if (res.success) alert('Database backup saved to Desktop!')
-      else alert('Backup failed: ' + res.error)
+      const res = await window.ipcRenderer.invoke('backup-db')
+      if (res.success) alert('Database backup saved successfully!')
+      else if (res.error !== 'Backup canceled by user') alert('Backup failed: ' + res.error)
     }
   }
 
   const handleRestore = async () => {
-    if (confirm('This will overwrite current DB and restart. Proceed?') && window.ipcRenderer) {
-      const res = await window.ipcRenderer.invoke('restore-db', 'C:/Users/Student/Desktop/netcafe_backup.db')
+    if (confirm('This will overwrite current DB and re-initialize it. Proceed?') && window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('restore-db')
       if (res.success) alert('Database restored successfully!')
-      else alert('Restore failed: ' + res.error)
+      else if (res.error !== 'Restore canceled by user') alert('Restore failed: ' + res.error)
     }
   }
 
@@ -1668,6 +1674,12 @@ export default function App() {
                               className="flex-1 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 rounded"
                             >
                               Message
+                            </button>
+                            <button
+                              onClick={() => handleLockMachine(machine.id)}
+                              className="flex-1 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 text-[10px] font-bold text-slate-300 rounded"
+                            >
+                              Lock
                             </button>
                             <button
                               onClick={() => handleRestart(machine.id)}
@@ -3048,6 +3060,12 @@ Respond strictly in JSON format:
                   <div className="text-xs font-bold uppercase tracking-wider text-slate-400">Remote Actions</div>
                   <div className="flex gap-2">
                     <button
+                      onClick={() => handleLockMachine(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-slate-800/30 hover:bg-slate-700/50 border border-slate-700/40 text-slate-300 hover:text-slate-200 rounded text-xs font-bold transition-all"
+                    >
+                      Lock Screen
+                    </button>
+                    <button
                       onClick={() => handleRestart(selectedDrawerMachine.id)}
                       className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"
                     >
@@ -4075,6 +4093,12 @@ Respond strictly in JSON format:
             <div className="space-y-1.5 pt-1.5 border-t border-slate-850">
               <div className="text-[10px] font-bold uppercase tracking-wider text-slate-450">Control Actions</div>
               <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  onClick={() => handleLockMachine(selectedDrawerMachine.id)}
+                  className="col-span-2 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
+                >
+                  🔒 Lock Screen
+                </button>
                 <button
                   onClick={() => handleRestart(selectedDrawerMachine.id)}
                   className="py-1 px-1.5 bg-blue-900/30 hover:bg-blue-800/50 border border-blue-800/40 text-blue-300 hover:text-blue-200 rounded text-xs font-bold transition-all"

@@ -1,29 +1,34 @@
-# Product Requirements Document
-## NetCafe Manager — v1.0
+# Product Requirements Document — v2 (Authoritative)
+## NetCafe Manager — v1.0 (Actual Implemented State)
+
+> **Note**: This document supersedes `PRD-v1-archived.md`. It was rewritten to reflect what is **actually implemented** in the codebase, not the original plan. All architecture, tech stack, data model, and feature descriptions are sourced directly from code and the `CHANGELOG/archived-v1/` audits.
 
 ---
 
 ## 1. Overview
 
 **Product Name:** NetCafe Manager  
-**Type:** Desktop application (Windows-first)  
-**Architecture:** Electron + React (Admin Server App) + lightweight Node.js Client Agent  
-**Database:** SQLite (local, fully offline)  
+**Type:** Desktop + kiosk application (Windows-primary, Linux-partial)  
+**Architecture:** Electron + React (Admin Server App) + Electron (Kiosk Client Agent) + TCP socket server  
+**Database:** SQLite via `better-sqlite3` (local, fully offline, synchronous)  
 **Inspired by:** iCafé Manager, PanCafé, Antamedia Internet Caffe  
 
-NetCafe Manager is a centralized computer lab / internet café management system. An **Admin App** runs on the operator's PC and controls all client machines on the same LAN. A **Client Agent** runs silently on every client machine, auto-starting at Windows boot, locking the screen until the admin opens a session.
+NetCafe Manager is a centralized computer lab / internet café management system. An **Admin Server App** (Electron + React) runs on the operator's PC and controls all client machines over a LAN TCP socket. A **Client Agent** (Electron) runs on each client machine as the system shell for a restricted local user (`CafeKiosk`), replacing `explorer.exe` to enforce an absolute kiosk lockdown until the admin opens a session.
 
 ---
 
 ## 2. Goals
 
 - Full session lifecycle management: open, pause, extend, close
-- Time-based billing (prepaid & postpaid)
-- Real-time monitoring of all client machines from one dashboard
-- Remote control: lock/unlock, message, screenshot, shutdown/restart
-- Website and application blocking on client machines
-- Sales, revenue, and usage reporting
-- Lightweight client agent that starts in under 3 seconds at boot
+- Time-based billing (prepaid & postpaid), member login support
+- Real-time monitoring of all client machines from a single dashboard
+- Remote control: lock/unlock, message, screenshot, shutdown/restart, hardware input block
+- Bandwidth throttling per machine (Linux-only)
+- AI-powered safety filter (Google Gemini) for search query interception
+- Website and application blocking on client machines (hosts file + MITM proxy)
+- Sales, revenue, and usage reporting; CSV/Excel export and import
+- Lightweight client agent that shows lock screen immediately at boot
+- Zero-touch auto-update for both server and agent
 
 ---
 
@@ -31,15 +36,35 @@ NetCafe Manager is a centralized computer lab / internet café management system
 
 ```
 [Admin PC]
-  └── NetCafe Manager Server App (Electron + React + Express + SQLite)
-        ├── LAN WebSocket server (port 9000)
-        └── Admin Dashboard UI
+  └── NetCafe Server App (Electron 28+ + React 18 + Express + better-sqlite3)
+        ├── TCP Socket Server (port 9000) — accepts raw line-delimited JSON from agents
+        ├── Express Web Server (port 9001) — browser dashboard + IPC-to-HTTP bridge
+        ├── UDP Broadcast (port 9090) — LAN service discovery every 3s
+        ├── SSH Reverse Tunnel → localhost.run (public URL for remote access)
+        └── Admin Dashboard React UI (served via Electron BrowserWindow or port 9001 browser)
 
 [Client PC 1..N]
-  └── NetCafe Agent (Node.js + Electron, auto-start via Windows registry)
-        ├── Connects to server via WebSocket (LAN IP)
-        ├── Locks screen until session opened by admin
-        └── Enforces blocking rules sent by server
+  └── NetCafe Agent (Electron, runs as CafeKiosk shell replacement)
+        ├── TCP socket client → connects to server on port 9000
+        ├── Full-screen lock window (BrowserWindow, alwaysOnTop, no frame, kiosk)
+        ├── MITM HTTPS Proxy (port 8888) — intercepts search queries for AI safety filter
+        ├── Win32 BlockInput — blocks physical keyboard/mouse on lock
+        └── Reports: hostname, IP, MAC, CPU, RAM, active window, screenshot frame
+
+[Windows Kiosk Layer — CafeKiosk account]
+  ├── Shell replacement: explorer.exe → NetCafe Agent.exe (WESL_UserSetting / NTUSER.DAT)
+  ├── Auto-logon: HKLM Winlogon registry keys (AutoAdminLogon=1)
+  ├── Windows Task Scheduler task: NetCafeAgent (on logon, highest privileges)
+  ├── Windows Service: NetCafeAgentWatchdog (node-windows, SYSTEM account, restarts agent)
+  └── GPO lockdown: block Task Manager, registry editor, command prompt, control panel
+
+[Installer — NSIS + PowerShell]
+  └── kiosk-setup.ps1 / kiosk-uninstall.ps1 — automates all of the above
+       ├── Creates/configures CafeKiosk local user account
+       ├── Enables Client-EmbeddedShellLauncher (DISM)
+       ├── Registers shell via WMI WESL_UserSetting or NTUSER.DAT hive
+       ├── Installs watchdog service and scheduled task
+       └── Applies GPO lockdown registry policies
 ```
 
 ---
@@ -47,149 +72,296 @@ NetCafe Manager is a centralized computer lab / internet café management system
 ## 4. Modules & Features
 
 ### 4.1 Dashboard (Admin)
-- Grid view of all connected client machines (PC name, status, time remaining, user)
-- Color-coded status: Available (green), In Use (blue), Paused (yellow), Offline (gray)
-- Live countdown timer per machine
-- Quick-action buttons per machine: Open Session, Pause, Extend, Close, Lock, Message, Screenshot, Restart, Shutdown
-- Global actions: Lock All, Unlock All, Message All, Shutdown All
+- Grid/list/small/large/grouped view modes of all connected client machines
+- Color-coded status cards: Available (green), In Use (blue), Paused (amber), Offline (gray)
+- Live countdown timer per machine (prepaid) or elapsed timer (postpaid)
+- Per-machine quick-action buttons: Open Session, Pause, Extend, Close, **Lock Screen**, Message, Restart, Shutdown
+- Real-time live screen mirror (full-resolution or fullscreen viewport) per machine
+- Remote input control: forward mouse clicks, drags, and keystrokes to client
+- Remote CMD shell console (execute system commands on client from server dashboard)
+- Global actions: Lock All, Message All, Shutdown All
+- Developer System Log Console (collapsible, live server-side events)
+- Reload button to refresh all client machine metrics
 
 ### 4.2 Session Management
-- Open session: select machine → enter customer name (optional) → select plan or custom duration → start
-- Postpaid mode: start session, timer counts up, charge on close
-- Prepaid mode: customer pays first, select duration, timer counts down, auto-locks at zero
-- Extend session: add more time to running session
-- Pause session: freeze timer (e.g. customer takes a break)
-- Close/end session: generate receipt, record payment
+- **Open Session**: select machine → enter customer name or member login → select plan or custom duration → start
+- **Postpaid mode**: timer counts up; charge calculated on close
+- **Prepaid mode**: customer pays first; timer counts down; auto-locks when timer hits zero
+- **Member (User) Login**: member logs in via `username + PIN` on the kiosk lockscreen; session balance drawn from `users.balance_minutes`
+- **Extend session**: add time to an active or paused session
+- **Pause session**: freeze timer; re-lock the screen; session is resumable
+- **Resume session**: unlock machine; resume timer
+- **Close/End session**: generate receipt, record discount, payment method, mark session `completed`
 
 ### 4.3 Billing & Pricing Plans
-- Create unlimited pricing plans: name, rate type (per hour / per minute / flat), price
-- Example: "Standard – ₹20/hour", "Night Pack – ₹50/3hrs", "Student – ₹15/hour"
-- Apply discount or custom amount at session close
+- Create unlimited pricing plans: name, rate type (`per_hour` / `per_minute` / `flat`), price, optional duration
+- Apply discount at session close
 - Payment methods: Cash, UPI (recorded manually)
-- Receipt preview and print
+- Billing calculation: handled server-side, elapsed seconds from `start_time` minus `paused_duration`
 
-### 4.4 Client Agent (installed on every client PC)
-- Silent background process, no visible window during lockscreen
-- Auto-starts at Windows boot via registry key
-- Shows lock screen overlay (full-screen, topmost, cannot be minimized or Alt+F4'd)
-- Lock screen shows: lab name, machine number, "Please contact the operator"
-- On session open: unlock, start allowed apps/browser
-- On session close: lock screen again immediately
-- Receives commands from admin server over LAN WebSocket
-- Reports: machine name, OS, IP, CPU usage, RAM usage every 10 seconds
+### 4.4 Client Agent (Kiosk Shell)
+- Runs as a replacement for `explorer.exe` under the `CafeKiosk` restricted user account
+- No visible window during lock; shows fullscreen `BrowserWindow` lock screen (`alwaysOnTop`, `kiosk: true`, no frame)
+- Lock screen shows: lab name, machine name, operator message, and member login form
+- Lock screen shows: agent version, live agent log overlay panel, and manual update button
+- Lock screen has a **Shutdown** button for operator emergency power-off
+- On session open: unlock window, start MITM proxy, apply blocking rules
+- On session close/pause: re-lock screen, kill Explorer if running, apply Win32 `BlockInput`
+- Manages an HTTPS MITM proxy (port 8888): auto-generates self-signed CA, installs it to Windows Trusted Root store, configures Firefox enterprise policy
+- Intercepts Google, Bing, YouTube, Yahoo search queries and sends to server for Gemini safety evaluation
+- If violation detected: shows Dynamic Island warning (1st offence) or locks screen (2nd+ offence)
+- Reports every 10 seconds: hostname, IP, MAC, UUID, CPU %, RAM %, uptime, active window title, screenshot frame
+- Spawns `explorer.exe` on unlock and kills it on lock for normal windowed experience between sessions
+- On disconnect from server: stays locked; retries connection every 5 seconds
 
-### 4.5 Remote Monitoring
-- Live screenshot of any client machine (captured by agent, sent to server)
-- System info panel: IP, OS version, CPU %, RAM %, uptime
-- Active window / process name (what the user has open)
+### 4.5 Real-time Screen Mirroring & Remote Input
+- Agent captures a JPEG screenshot frame every 800ms and sends via TCP stream
+- Server renders live mirror in a resizable panel or fullscreen viewport on the dashboard
+- Mouse events (click, drag) are scaled to the client resolution and sent as `remote-input` commands
+- Keyboard events are captured and forwarded as `remote-keyboard` commands
+- Remote CMD shell: operator types commands; agent executes via `child_process` and streams output back
+- Hardware Input Lock: server sends `block-input` / `unblock-input` commands; agent calls Win32 `BlockInput(true/false)`
 
-### 4.6 Remote Control
-- Send text message popup to one or all clients
-- Lock / unlock specific machines
+### 4.6 AI Safety Filter (Foreground Filtering)
+- Embedded MITM HTTPS proxy captures search queries in transit
+- Server evaluates query via Google Gemini 2.5 Flash API
+- Response classification: `block` / `allow` / `warn`
+- Violation cascade: 1st = Dynamic Island warning overlay; 2nd+ = screen lock + safety alert record
+- Safety settings configurable from Dashboard:
+  - Enable/Disable AI filter toggle
+  - Gemini API key configuration
+  - Safety categories: pornography, violence, self-harm, illegal acts/hacking
+  - Custom keyword blocklist (instant match, no API required)
+  - Custom AI system context (injected into every Gemini prompt)
+- Safety Alerts tab: view all triggered alerts per machine; clear all button
+
+### 4.7 Remote Monitoring
+- Live screenshot/mirror (800ms frame capture via agent, rendered on server)
+- System info panel per machine: IP, MAC, OS, CPU %, RAM %, uptime, active window
+- Session App Logs: per-session records of which application titles were focused and for how long (`session_app_logs`)
+- Process Events: per-machine records of process start/stop events (`session_process_events`)
+
+### 4.8 Remote Control
+- Send text message popup to one or all clients (rendered as an overlay on the kiosk lock screen)
+- **Lock Screen** (new): directly send lock command to a specific machine (`lock-machine`)
+- Lock all machines simultaneously (`lock-all`)
 - Restart or shutdown machines remotely
-- Log off Windows user session on client
+- Hardware input block (keyboard/mouse) per machine
 
-### 4.7 Website & App Blocking
-- Blocklist management: add/remove domains (e.g. facebook.com, youtube.com)
-- Allowlist management: whitelist specific sites only (strict mode)
-- Enforcement: agent modifies Windows hosts file OR uses a local proxy (configurable)
-- Block specific executable names (e.g. Steam.exe, discord.exe)
-- Rules apply per-session or globally; admin can toggle in real-time
+### 4.9 Website & App Blocking
+- Blocklist management: add/remove domains (e.g., `facebook.com`) or executable names (e.g., `steam.exe`)
+- Mode per rule: `block` (kills process or denies domain) / `allow` (allowlist mode)
+- Toggle rules active/inactive without deleting
+- Rules broadcast to all connected agents at the start of each session
+- MITM proxy enforcement (real-time search query interception) complements traditional hosts file approach
 
-### 4.8 Inventory / Shop (optional in v1, scaffold only)
-- Sell items (drinks, snacks, printing) tied to a session
-- Adds to session bill at close
+### 4.10 Bandwidth Limiting *(Linux agents only)*
+- Operator can set a speed limit per machine (e.g., `2mbit`, `500kbit`)
+- Agent applies Linux `tc` (Traffic Control) queueing rules via `child_process.exec`
+- `remove-bandwidth` command tears down the `tc` qdisc rule
+- **Note**: This feature is a no-op on Windows agents (platform check: `process.platform === 'linux'`)
 
-### 4.9 User / Staff Management
-- Admin account (full access, password protected)
-- Operator account (can open/close sessions, no access to settings/reports)
+### 4.11 Users (Member Accounts)
+- Create, edit, delete member accounts (`username`, `password_hash`, `display_name`, `phone`, `email`, `balance_minutes`)
+- Top-up balance minutes individually or in bulk
+- Bulk create from CSV text area or Excel `.xlsx` file upload
+- Download Excel import template
+- Multi-select checkboxes for batch operations (delete, top-up)
+- Password show/hide toggle in member management UI
+- Members can log in to start a session directly from the kiosk lock screen
+
+### 4.12 Reports & Analytics
+- Today's summary: total sessions, total revenue, average duration
+- Per-machine usage: session count and total revenue
+- Session history table with filterable date range
+- Export session history to CSV
+
+### 4.13 Settings
+- Lab name (displayed on lock screen and receipts)
+- AI Safety Filter configuration (see §4.6)
+- Mobile Remote Control:
+  - LAN URL: `http://[server-ip]:9001`
+  - Public internet URL: auto-generated `localhost.run` SSH tunnel
+  - QR code popup for instant mobile access
+- Database Utilities:
+  - **Backup Database**: opens native Windows Save File dialog → copies `netcafe.db` to selected path
+  - **Restore Database**: opens native Windows Open File dialog → overwrites `netcafe.db`, re-initializes DB
+- Account & Security:
+  - Change admin username (requires current password confirmation)
+  - Change admin password
+  - Change operator override PIN (broadcast to all connected agents)
+- App version badge (server and agent)
+
+### 4.14 Staff / Operator Management
+- Admin account (full access, all settings)
+- Operator account (open/close sessions, no settings/reports access)
 - Login screen at server app launch
+- Operator override PIN sent to all client agents; clients prompt for PIN before entering operator mode
 
-### 4.10 Reports & Analytics
-- Today's summary: sessions count, total revenue, average duration
-- Date-range reports: revenue by day/week/month
-- Per-machine usage report
-- Export to CSV
+### 4.15 Auto-Update
+- Both server and agent use `electron-updater` connected to GitHub Releases (`MuhammedAjmalBinAshraf/NetCafe`)
+- **Server**: manual/interactive update — shows dialog on available update; admin chooses to install or defer
+- **Agent**: fully automatic — checks hourly; downloads silently; triggers `quitAndInstall` with 3-second delay
+- **Channel segregation**: Server reads `latest-server.yml`; Agent reads `latest-agent.yml` — prevents cross-package collisions
 
-### 4.11 Settings
-- Lab name, operator name, logo (shown on lock screen and receipts)
-- Server IP / port configuration
-- Auto-start client agent installer path
-- Backup & restore SQLite database
+### 4.16 Kiosk Setup Installer
+- NSIS-based installer for the agent (`.exe`)
+- Bundles `kiosk-setup.ps1` and `kiosk-uninstall.ps1` as extra resources
+- On first run, PowerShell setup script performs:
+  1. Creates local `CafeKiosk` user (or uses config from `kiosk.ini`)
+  2. Enables `Client-EmbeddedShellLauncher` Windows feature (DISM)
+  3. Registers shell via `WESL_UserSetting` WMI or NTUSER.DAT registry hive injection
+  4. Sets Auto-Logon registry keys (`HKLM\Winlogon`)
+  5. Installs `NetCafeAgentWatchdog` Windows Service via `node-windows`
+  6. Creates `NetCafeAgent` Task Scheduler task (triggered on logon, highest privileges)
+  7. Applies GPO lockdown policies via registry (blocks Task Manager, CMD, etc.)
+  8. Writes `C:\NetCafe\installed.flag` on success
+- All setup/uninstall events timestamped and logged to `C:\NetCafe\logs\agent-install.log` / `agent-uninstall.log`
+- NSIS installer streams PowerShell output live to the installer detail page
 
 ---
 
-## 5. Data Models (SQLite)
+## 5. Data Models (SQLite — `better-sqlite3`)
 
 ### machines
-| Field | Type |
-|---|---|
-| id | INTEGER PK |
-| name | TEXT (e.g. "PC-01") |
-| mac_address | TEXT UNIQUE |
-| ip_address | TEXT |
-| status | TEXT (available/in_use/paused/offline) |
-| notes | TEXT |
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| name | TEXT | e.g. "PC-01" |
+| mac_address | TEXT UNIQUE | Network MAC; prevents duplicate on cloned VMs |
+| uuid | TEXT | Persistent UUID from agent `config.json` (partial unique index) |
+| ip_address | TEXT | |
+| status | TEXT | `available` / `in_use` / `paused` / `offline` |
+| hardware_locked | BOOLEAN | Win32 BlockInput state |
+| violation_count | INTEGER | AI safety violation counter (progressive enforcement) |
+| notes | TEXT | |
 
 ### sessions
-| Field | Type |
-|---|---|
-| id | INTEGER PK |
-| machine_id | INTEGER FK |
-| customer_name | TEXT |
-| plan_id | INTEGER FK |
-| start_time | DATETIME |
-| end_time | DATETIME |
-| paused_duration | INTEGER (seconds) |
-| total_amount | REAL |
-| payment_method | TEXT |
-| mode | TEXT (prepaid/postpaid) |
-| status | TEXT (active/closed/paused) |
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| machine_id | INTEGER FK | |
+| customer_name | TEXT | Guest name or member username |
+| plan_id | INTEGER FK | |
+| start_time | DATETIME | |
+| end_time | DATETIME | Null while active |
+| paused_duration | INTEGER | Seconds |
+| custom_duration | INTEGER | Minute override (for fixed-time plans) |
+| total_amount | REAL | |
+| discount | REAL | Amount discounted at close |
+| payment_method | TEXT | `Cash` / `UPI` |
+| mode | TEXT | `prepaid` / `postpaid` |
+| status | TEXT | `active` / `paused` / `completed` |
 
 ### plans
-| Field | Type |
-|---|---|
-| id | INTEGER PK |
-| name | TEXT |
-| rate_type | TEXT (per_hour/per_minute/flat) |
-| price | REAL |
-| duration_minutes | INTEGER (null if per_hour/minute) |
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| name | TEXT | e.g. "Standard – ₹20/hr" |
+| rate_type | TEXT | `per_hour` / `per_minute` / `flat` |
+| price | REAL | |
+| duration_minutes | INTEGER | Only for `flat` plans |
+
+### users (Member Accounts)
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| username | TEXT UNIQUE | |
+| password_hash | TEXT | Hashed PIN |
+| display_name | TEXT | |
+| phone | TEXT | |
+| email | TEXT | |
+| balance_minutes | INTEGER | Prepaid time balance |
 
 ### block_rules
-| Field | Type |
-|---|---|
-| id | INTEGER PK |
-| type | TEXT (domain/executable) |
-| value | TEXT |
-| mode | TEXT (block/allow) |
-| is_active | BOOLEAN |
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| type | TEXT | `domain` / `executable` |
+| value | TEXT | e.g. "facebook.com" or "steam.exe" |
+| mode | TEXT | `block` / `allow` |
+| is_active | BOOLEAN | |
 
 ### staff
-| Field | Type |
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| username | TEXT | |
+| password_hash | TEXT | |
+| role | TEXT | `admin` / `operator` |
+
+### settings (Key-Value Store)
+| Key | Description |
 |---|---|
-| id | INTEGER PK |
-| username | TEXT |
-| password_hash | TEXT |
-| role | TEXT (admin/operator) |
+| `lab_name` | Display name shown on lock screen |
+| `operator_password` | Operator override PIN (synced to all agents) |
+| `ai_safety_enabled` | `true` / `false` |
+| `gemini_api_key` | Gemini 2.5 Flash API key |
+| `filter_*` | Category filter flags (porn, violence, self_harm, illegal) |
+| `custom_filter_terms` | JSON array of instant-match blocked keywords |
+| `ai_custom_context` | Custom instructions injected into Gemini prompts |
+
+### session_app_logs
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| session_id | INTEGER FK | |
+| machine_id | INTEGER FK | |
+| app_title | TEXT | Focused window title |
+| duration_seconds | INTEGER | |
+| focus_count | INTEGER | |
+| first_seen | DATETIME | |
+| last_seen | DATETIME | |
+
+### session_process_events
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| machine_id | INTEGER FK | |
+| session_id | INTEGER FK | |
+| process_name | TEXT | |
+| event_type | TEXT | `start` / `stop` |
+| timestamp | DATETIME | |
+
+### safety_alerts
+| Field | Type | Notes |
+|---|---|---|
+| id | INTEGER PK | |
+| machine_id | INTEGER FK | |
+| session_id | INTEGER FK | |
+| query | TEXT | Intercepted search query |
+| result | TEXT | `block` / `warn` |
+| reason | TEXT | Gemini explanation |
+| timestamp | DATETIME | |
 
 ---
 
 ## 6. Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Admin App shell | Electron 28+ |
-| Admin UI | React 18 + Vite |
-| UI Component lib | shadcn/ui + Tailwind CSS |
-| Admin backend | Express.js (embedded in Electron main process) |
-| Real-time comms | WebSocket (ws library) |
-| Database | better-sqlite3 (synchronous, embedded) |
-| Client Agent shell | Electron (no UI window, tray icon only) |
-| Client lock screen | Electron BrowserWindow (fullscreen, alwaysOnTop, no frame) |
-| Auto-start (client) | Windows Registry via `node-auto-launch` |
-| Screenshot capture | `screenshot-desktop` npm package |
-| Website blocking | Hosts file manipulation (requires agent run as admin) |
-| Packaging | electron-builder (produces .exe installer) |
+| Layer | Technology | Notes |
+|---|---|---|
+| Admin App shell | Electron 28+ | Main process + IPC + native dialogs |
+| Admin UI | React 18 + Vite | TypeScript, HMR in dev |
+| UI Component lib | shadcn/ui + Tailwind CSS | |
+| Admin backend | Express.js (port 9001) | Embedded in Electron main process |
+| LAN comms | Raw TCP sockets (Node `net` module, port 9000) | Line-delimited JSON; replaced WebSocket |
+| LAN discovery | UDP broadcast (port 9090) | Server announces itself every 3s |
+| Public tunnel | SSH reverse tunnel → localhost.run | Maps port 9001 → public HTTPS URL |
+| Database | better-sqlite3 | Synchronous SQLite; no sql.js/async overhead |
+| Client Agent shell | Electron (lock screen BrowserWindow) | No tray; runs as OS shell replacement |
+| Auto-start (client) | Windows Task Scheduler task (`NetCafeAgent`) | Replaces node-auto-launch |
+| Kiosk lockdown | Windows Shell Launcher (WESL_UserSetting / NTUSER.DAT) | Replaces explorer.exe for CafeKiosk user |
+| Watchdog | node-windows Windows Service (`NetCafeAgentWatchdog`) | SYSTEM account; relaunches agent if killed |
+| MITM Proxy | Node.js `http`/`https` server + self-signed CA | Port 8888; intercepts search queries |
+| Screenshot capture | screenshot-desktop npm package | Sends JPEG frames every 800ms |
+| Hardware input block | Win32 `BlockInput` via `ffi-napi` | Blocks physical mouse/keyboard |
+| Excel import/export | xlsx npm package | User bulk import; template download |
+| Auto-update | electron-updater (GitHub Releases) | Channel-segregated: server / agent |
+| Installer (client) | NSIS + PowerShell scripts | Bundled `kiosk-setup.ps1` / `kiosk-uninstall.ps1` |
+| Installer (server) | electron-builder NSIS | Standard installer for admin app |
+| Packaging (Windows) | electron-builder → `.exe` (NSIS) | |
+| Packaging (Linux) | electron-builder → `AppImage` + `.deb` | Partial support; lockdown features not available |
+| CI/CD | GitHub Actions | Builds and publishes on version tags |
 
 ---
 
@@ -198,70 +370,111 @@ NetCafe Manager is a centralized computer lab / internet café management system
 ```
 netcafe-manager/
 ├── packages/
-│   ├── server/                  # Admin Server Electron App
+│   ├── server/                     # Admin Server Electron App
 │   │   ├── electron/
-│   │   │   ├── main.ts          # Electron main process
-│   │   │   ├── ipc.ts           # IPC handlers
-│   │   │   └── ws-server.ts     # WebSocket server for clients
-│   │   ├── src/                 # React UI
-│   │   │   ├── pages/
-│   │   │   │   ├── Dashboard.tsx
-│   │   │   │   ├── Sessions.tsx
-│   │   │   │   ├── Plans.tsx
-│   │   │   │   ├── Blocking.tsx
-│   │   │   │   ├── Reports.tsx
-│   │   │   │   └── Settings.tsx
-│   │   │   └── components/
-│   │   │       ├── MachineCard.tsx
-│   │   │       ├── SessionDialog.tsx
-│   │   │       └── ReceiptModal.tsx
-│   │   ├── db/
-│   │   │   ├── schema.ts
-│   │   │   └── queries.ts
+│   │   │   ├── main.ts             # Main process, TCP server, Express, IPC handlers
+│   │   │   └── preload.ts          # Context bridge (ipcRenderer.invoke passthrough)
+│   │   ├── src/                    # React UI (all in App.tsx)
+│   │   │   └── App.tsx             # Dashboard, sessions, plans, blocking, users, settings
 │   │   └── package.json
 │   │
-│   └── agent/                   # Client Agent Electron App
+│   └── agent/                      # Client Agent Electron App
 │       ├── electron/
-│       │   ├── main.ts          # Tray icon, WS client, auto-start
-│       │   ├── lockscreen.ts    # Full-screen lock window
-│       │   └── blocking.ts      # Hosts file / process kill
+│       │   ├── main.ts             # Lock screen, TCP client, MITM proxy, watchdog setup
+│       │   └── watchdog.ts         # Windows Service loop (restarts agent if killed)
 │       └── package.json
 │
-├── package.json                 # Monorepo root (npm workspaces)
-└── README.md
+├── landing-website/                # Static marketing website (separate)
+├── CHANGELOG/
+│   ├── README.md                   # Next changelog placeholder
+│   └── archived-v1/               # Feature changelogs from v1 development
+├── PRD.md                          # This document (authoritative, current)
+├── PRD-v1-archived.md              # Original planning document (preserved)
+├── package.json                    # Monorepo root (npm workspaces)
+└── .github/workflows/              # GitHub Actions CI/CD
+    ├── build-server.yml
+    └── build-agent.yml
 ```
 
 ---
 
 ## 8. Non-Functional Requirements
 
-- **Offline first:** entire system works with no internet, LAN only
-- **Boot time:** client agent must show lock screen within 3 seconds of Windows startup
-- **Scalability:** must handle 60+ simultaneous client connections on LAN
-- **Security:** admin app is password-protected; client agent cannot be closed by end user
-- **Resilience:** if server goes offline, client agent stays in locked state until reconnected
-- **Persistence:** all session data persists in SQLite; no data loss on app restart
+- **Offline first**: entire system works with no internet (LAN only); public tunnel and AI filter are optional
+- **Boot time**: client agent lock screen appears immediately on CafeKiosk auto-logon (Task Scheduler on logon trigger)
+- **Scalability**: handles 60+ simultaneous client connections over LAN TCP
+- **Security**:
+  - Admin app is password-protected (staff table, bcrypt-equivalent hashing)
+  - Client agent runs as the OS shell — cannot be closed by the restricted user
+  - Win32 `BlockInput` prevents hardware bypass during lockdown
+  - `NetCafeAgentWatchdog` SYSTEM service relaunches agent if killed
+  - GPO lockdown disables Task Manager, registry editor, CMD, control panel for CafeKiosk user
+- **Resilience**: if server goes offline, client stays locked; retries connection every 5 seconds
+- **Persistence**: all session data in SQLite; no data loss on app restart; database backup/restore via native file dialog
 
 ---
 
-## 9. Out of Scope for v1
+## 9. Removed / Obsolete Design Decisions
 
-- Online/cloud sync
-- Multi-branch support
-- Mobile admin app
+The following design decisions from the original PRD (`PRD-v1-archived.md`) were **reversed or abandoned** during implementation:
+
+| Original Plan | Actual Implementation | Reason |
+|---|---|---|
+| WebSocket (`ws` library) for LAN comms | Raw TCP sockets (Node `net`) | Lower overhead, no HTTP handshake, simpler headless client |
+| `node-auto-launch` for client auto-start | Windows Task Scheduler task (`NetCafeAgent`) | Elevated privileges required at logon; auto-launch library insufficient |
+| Hosts file manipulation for site blocking | MITM HTTPS proxy + CA injection | Hosts file doesn't intercept HTTPS; MITM catches all search queries in flight |
+| `sql.js` (browser SQLite) | `better-sqlite3` | Synchronous API; proper filesystem DB; required for Electron main process |
+| WebSocket section in `ws-server.ts` (planned) | TCP server in `main.ts` (single file) | Simplified architecture; no separate file needed |
+| `get-operator-password` IPC handler | **Removed** | Retrieving plaintext passwords is insecure; only `set-operator-password` is needed |
+| `writeInstallLog` function in agent | **Removed** | Never called; PowerShell scripts handle all install-phase logging |
+
+---
+
+## 10. Platform Support Matrix
+
+| Feature | Windows | Linux |
+|---|---|---|
+| TCP socket server/client | ✅ | ✅ |
+| Lock screen (Electron BrowserWindow) | ✅ | ✅ |
+| Shell replacement (explorer.exe → agent) | ✅ Win32 only | ❌ Not implemented |
+| Auto-logon registry | ✅ Win32 only | ❌ Not applicable |
+| Watchdog Windows Service (node-windows) | ✅ Win32 only | ❌ Not applicable |
+| Task Scheduler auto-start | ✅ Win32 only | ❌ Not implemented |
+| GPO lockdown policies | ✅ Win32 only | ❌ Not applicable |
+| Win32 BlockInput (hardware lock) | ✅ Win32 only | ❌ Not implemented |
+| MITM HTTPS proxy + CA injection | ✅ | ✅ (partial) |
+| Bandwidth limiting | ❌ No-op | ✅ Linux `tc` |
+| Auto-update (electron-updater) | ✅ | ✅ |
+| Screenshot capture | ✅ | ✅ |
+
+---
+
+## 11. Out of Scope for v1
+
+- Online/cloud sync or multi-branch support
+- Mobile admin app (native iOS/Android)
 - CCTV integration
 - Fingerprint / RFID login
-- Automated website categorization (parental controls)
+- Automated website categorization (parental controls beyond Gemini filter)
+- Windows QoS-based bandwidth throttling (Linux `tc` is the only current implementation)
+- Full Linux kiosk lockdown (shell replacement, watchdog, GPO equivalent)
 
 ---
 
-## 10. Success Criteria for v1
+## 12. Success Criteria for v1
 
-- [ ] Admin can see all machines in real-time on dashboard
-- [ ] Admin can open, pause, extend, and close sessions
-- [ ] Client machines lock/unlock in response to admin commands within 1 second
-- [ ] Billing correctly calculates time-based charges
-- [ ] Website blocking (hosts file) works on client machines
-- [ ] Reports show today's revenue and session count
-- [ ] Client agent auto-starts at Windows boot and cannot be killed by a regular user
-- [ ] Installer (.exe) produced for both server app and client agent
+- [x] Admin can see all machines in real-time on dashboard
+- [x] Admin can open, pause, extend, and close sessions
+- [x] Client machines lock/unlock in response to admin commands
+- [x] Billing correctly calculates time-based charges (prepaid and postpaid)
+- [x] Members can log in from the kiosk lock screen using stored balance
+- [x] AI safety filter intercepts and evaluates search queries in real time
+- [x] Admin can remotely view live screen mirror and control mouse/keyboard
+- [x] Admin can send OS commands via remote CMD shell console
+- [x] Reports show today's revenue, session count, and usage per machine
+- [x] Client agent auto-starts at Windows boot as kiosk shell (cannot be killed by standard user)
+- [x] Watchdog service relaunches agent if terminated
+- [x] Installer (`.exe`) automates all OS-level kiosk configuration
+- [x] Both server and agent auto-update via GitHub Releases
+- [x] Admin can backup and restore the SQLite database using native file dialogs
+- [x] Admin can bulk-import member accounts from CSV or Excel

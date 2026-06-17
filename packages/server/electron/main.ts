@@ -1177,9 +1177,6 @@ ipcMain.handle('change-staff-username', (_, currentUsername, password, newUserna
   return { success: true }
 })
 
-ipcMain.handle('get-operator-password', () => {
-  return (db.prepare("SELECT value FROM settings WHERE key = 'operator_password'").get() as any)?.value || 'admin'
-})
 
 ipcMain.handle('set-operator-password', (_, currentPassword, newPassword) => {
   const stored = (db.prepare("SELECT value FROM settings WHERE key = 'operator_password'").get() as any)?.value || 'admin'
@@ -1483,8 +1480,20 @@ ipcMain.handle('clear-safety-alerts', () => {
 
 ipcMain.handle('backup-db', async (_, targetPath) => {
   try {
-    fs.copyFileSync(dbPath, targetPath)
-    return { success: true }
+    let finalPath = targetPath
+    if (!finalPath) {
+      const { filePath, canceled } = await dialog.showSaveDialog({
+        title: 'Backup Database',
+        defaultPath: 'netcafe_backup.db',
+        filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite'] }]
+      })
+      if (canceled || !filePath) {
+        return { success: false, error: 'Backup canceled by user' }
+      }
+      finalPath = filePath
+    }
+    fs.copyFileSync(dbPath, finalPath)
+    return { success: true, filePath: finalPath }
   } catch (e: any) {
     return { success: false, error: e.message }
   }
@@ -1492,8 +1501,20 @@ ipcMain.handle('backup-db', async (_, targetPath) => {
 
 ipcMain.handle('restore-db', async (_, sourcePath) => {
   try {
+    let finalPath = sourcePath
+    if (!finalPath) {
+      const { filePaths, canceled } = await dialog.showOpenDialog({
+        title: 'Restore Database',
+        filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite'] }],
+        properties: ['openFile']
+      })
+      if (canceled || !filePaths || filePaths.length === 0) {
+        return { success: false, error: 'Restore canceled by user' }
+      }
+      finalPath = filePaths[0]
+    }
     db.close()
-    fs.copyFileSync(sourcePath, dbPath)
+    fs.copyFileSync(finalPath, dbPath)
     setupDatabase()
     broadcastMachines()
     return { success: true }

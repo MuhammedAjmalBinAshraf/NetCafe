@@ -75,21 +75,6 @@ function logToUI(msg: string) {
   writeAgentRuntimeLog(msg);
 }
 
-const logFilePath = "C:\\NetCafe\\logs\\agent-install.log";
-
-function writeInstallLog(msg: string) {
-  try {
-    const dir = path.dirname(logFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    const timestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    fs.appendFileSync(logFilePath, `[${timestamp}] ${msg}\r\n`, 'utf8');
-  } catch (e) {
-    console.error('Failed to write install log:', e);
-  }
-}
-
 const configPath = path.join(app.getPath('userData'), 'config.json');
 let serverUrl = '127.0.0.1:9000';   // display string (host:port)
 let serverHost = '127.0.0.1';
@@ -146,10 +131,9 @@ function loadConfig() {
 
 // ─── Lock enforcement: re-focus every 500ms ───────────────────────────────────
 function startLockEnforcement() {
-  if (!isAgentTheShell()) {
-    logToUI('Agent is not the shell of the current user. Skipping lock enforcement.');
-    return;
-  }
+  // NOTE: Do NOT guard with isAgentTheShell() — WMI Shell Launcher bypasses the
+  // HKCU Winlogon\Shell registry key entirely, causing isAgentTheShell() to return
+  // false even when the agent IS the kiosk shell. Always enforce lock on Windows.
   if (lockEnforceInterval) return;
   lockEnforceInterval = setInterval(() => {
     if (isLocked && lockWindow && !lockWindow.isDestroyed()) {
@@ -945,6 +929,19 @@ async function handleServerMessage(msg: any) {
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
+      // Always spawn explorer.exe on Windows — WMI Shell Launcher bypasses HKCU Shell key
+      // so isAgentTheShell() would return false even when agent IS the shell.
+      if (process.platform === 'win32') {
+        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
+          if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
+            logToUI('Spawning explorer.exe to load desktop shell (login-success)...');
+            spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+          } else {
+            logToUI('explorer.exe already running — skipping spawn (login-success).');
+          }
+        });
+      }
+
       // Create and show dynamic island
       createIslandWindow({
         startTime: new Date().toISOString(),
@@ -971,12 +968,15 @@ async function handleServerMessage(msg: any) {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
 
-      // Spawn explorer.exe on unlock to show desktop shell (if agent is the shell)
-      if (isAgentTheShell()) {
-        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (err, stdout) => {
-          if (stdout && !stdout.includes('explorer.exe')) {
+      // Always spawn explorer.exe on Windows — WMI Shell Launcher bypasses HKCU Shell key
+      // so isAgentTheShell() would return false even when agent IS the shell.
+      if (process.platform === 'win32') {
+        exec('tasklist /FI "IMAGENAME eq explorer.exe"', (_err, stdout) => {
+          if (!stdout || !stdout.toLowerCase().includes('explorer.exe')) {
             logToUI('Spawning explorer.exe to load desktop shell...');
             spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+          } else {
+            logToUI('explorer.exe already running — skipping spawn.');
           }
         });
       }
@@ -1005,8 +1005,8 @@ async function handleServerMessage(msg: any) {
       }
       destroyIslandWindow();
 
-      // Kill explorer.exe on lock (if agent is the shell)
-      if (isAgentTheShell()) {
+      // Always kill explorer.exe on Windows when locking
+      if (process.platform === 'win32') {
         logToUI('Terminating explorer.exe to lock desktop shell...');
         exec('taskkill /F /IM explorer.exe', () => {});
       }
@@ -1563,8 +1563,8 @@ function connectToServer() {
       startLockEnforcement();
     }
 
-    // Kill explorer.exe on server disconnect lock (if agent is the shell)
-    if (isAgentTheShell()) {
+    // Always kill explorer.exe on Windows when locking on server disconnect
+    if (process.platform === 'win32') {
       logToUI('Terminating explorer.exe on server disconnect lock...');
       exec('taskkill /F /IM explorer.exe', () => {});
     }
@@ -2061,8 +2061,8 @@ app.whenReady().then(async () => {
   setupWindowsFirewall();
   startUdpDiscovery();
 
-  // Terminate explorer.exe on startup if locked (if agent is the shell)
-  if (isLocked && isAgentTheShell()) {
+  // Always terminate explorer.exe on Windows startup when locked
+  if (isLocked && process.platform === 'win32') {
     logToUI('Terminating explorer.exe on startup (locked)...');
     exec('taskkill /F /IM explorer.exe', () => {});
   }
