@@ -2348,7 +2348,7 @@ Respond strictly in JSON format:
                       value={apiKeyInput}
                       onChange={(e) => setApiKeyInput(e.target.value)}
                     />
-                    <p className="text-[10px] text-slate-500">Requires a valid Gemini API key to check safety (uses gemini-2.5-flash).</p>
+                    <p className="text-[10px] text-slate-500">Requires a valid Gemini API key to check safety (uses gemini-1.5-flash).</p>
                   </div>
 
                   {/* Safety Categories */}
@@ -2748,9 +2748,12 @@ Respond strictly in JSON format:
                   <button
                     onClick={async () => {
                       if (!window.ipcRenderer) return
-                      const b64 = await window.ipcRenderer.invoke('download-user-template')
-                      const url = `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${b64}`
-                      const a = document.createElement('a'); a.href = url; a.download = 'netcafe_users_template.xlsx'; a.click()
+                      const result = await window.ipcRenderer.invoke('download-user-template')
+                      if (result.success) {
+                        setXlsxImportStatus(`✅ Template saved to ${result.filePath}`)
+                      } else if (result.error) {
+                        setXlsxImportStatus(`❌ Failed to save template: ${result.error}`)
+                      }
                     }}
                     className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded text-xs font-semibold flex items-center gap-1.5 transition-all"
                   >

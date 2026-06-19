@@ -1750,17 +1750,30 @@ ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
   }
 })
 
-ipcMain.handle('download-user-template', () => {
-  // Return a sample xlsx as base64 for the user to download with updated columns
-  const wb = XLSX.utils.book_new()
-  const ws = XLSX.utils.aoa_to_sheet([
-    ['ad.no', 'name', 'class', 'username', 'password', 'email', 'phone'],
-    ['1001', 'John Doe', '10-A', 'john_doe', 'pass123', 'john@example.com', '9876543210'],
-    ['1002', 'Jane Smith', '10-B', 'jane_smith', 'pass456', 'jane@example.com', '9123456789'],
-  ])
-  XLSX.utils.book_append_sheet(wb, ws, 'Users')
-  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
-  return Buffer.from(buf).toString('base64')
+ipcMain.handle('download-user-template', async () => {
+  try {
+    const { filePath, canceled } = await dialog.showSaveDialog({
+      title: 'Save User Template',
+      defaultPath: 'netcafe_users_template.xlsx',
+      filters: [{ name: 'Excel Spreadsheet', extensions: ['xlsx'] }]
+    })
+    if (canceled || !filePath) {
+      return { success: false, canceled: true }
+    }
+
+    const wb = XLSX.utils.book_new()
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['ad.no', 'name', 'class', 'username', 'password', 'email', 'phone'],
+      ['1001', 'John Doe', '10-A', 'john_doe', 'pass123', 'john@example.com', '9876543210'],
+      ['1002', 'Jane Smith', '10-B', 'jane_smith', 'pass456', 'jane@example.com', '9123456789'],
+    ])
+    XLSX.utils.book_append_sheet(wb, ws, 'Users')
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
+    fs.writeFileSync(filePath, buf)
+    return { success: true, filePath }
+  } catch (e: any) {
+    return { success: false, error: e.message }
+  }
 })
 
 // ─── Machine Management IPC Handlers ──────────────────────────────────────────
@@ -1875,7 +1888,7 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");
@@ -1904,6 +1917,11 @@ async function evaluateQuerySafety(
 
   emitLog?.('info', `LAYER 2: Sending to Gemini (${topics.length} categories active)${customContext.trim() ? ' + custom context' : ''}`)
   
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort();
+  }, 4000);
+
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -1911,8 +1929,10 @@ async function evaluateQuerySafety(
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: "application/json" }
-      })
+      }),
+      signal: controller.signal
     });
+    clearTimeout(timeoutId);
     emitLog?.('info', `LAYER 2: Gemini responded (HTTP ${res.status})`)
     if (res.ok) {
       const data: any = await res.json();
@@ -1925,6 +1945,7 @@ async function evaluateQuerySafety(
       throw new Error(`HTTP ${res.status}: ${errText}`);
     }
   } catch (e: any) {
+    clearTimeout(timeoutId);
     console.error('Gemini API call failed:', e);
     throw e;
   }

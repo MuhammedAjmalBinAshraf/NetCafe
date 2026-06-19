@@ -2232,6 +2232,13 @@ app.whenReady().then(async () => {
     exec(cmd, (err, stdout, stderr) => {
       if (err) {
         logToUI(`Task Scheduler registration failed: ${err.message}`);
+        // Fallback to standard login item settings
+        app.setLoginItemSettings({
+          openAtLogin: true,
+          name: 'NetCafe Agent',
+          path: process.execPath,
+        });
+        logToUI('Fallback: Registered standard login item (openAtLogin: true).');
       } else {
         logToUI('Task Scheduler auto-start (instant launch) registered successfully.');
       }
@@ -2647,29 +2654,38 @@ function getIslandHtml(sessionData?: any): string {
 <html>
 <head>
   <meta charset="UTF-8">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       margin: 0;
       padding: 20px;
       overflow: hidden;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: transparent;
       display: flex;
       justify-content: center;
       user-select: none;
     }
     #dynamic-island-container {
-      background: rgba(10, 10, 10, 0.95);
+      background: rgba(15, 15, 15, 0.75);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
       color: white;
-      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08);
-      transition: all 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 
+        0 20px 40px rgba(0, 0, 0, 0.4), 
+        0 0 0 1px rgba(255, 255, 255, 0.1),
+        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+      transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
       overflow: hidden;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.06);
     }
     #dynamic-island-container.notch {
       width: 80px;
@@ -2677,42 +2693,51 @@ function getIslandHtml(sessionData?: any): string {
       border-radius: 4px;
       background: rgba(0, 0, 0, 0.98);
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
+      border: none;
     }
     #dynamic-island-container.compact {
-      width: 170px;
-      height: 32px;
-      border-radius: 16px;
-      padding: 0 12px;
+      width: 180px;
+      height: 36px;
+      border-radius: 18px;
+      padding: 0 14px;
     }
     #dynamic-island-container.card {
-      width: 340px;
-      min-height: 125px;
+      width: 350px;
+      min-height: 130px;
       height: auto;
       border-radius: 24px;
-      padding: 14px;
+      padding: 16px;
       align-items: stretch;
     }
     #dynamic-island-container.banner {
       width: 400px;
-      height: 95px;
-      border-radius: 22px;
-      padding: 14px;
-      background: rgba(185, 28, 28, 0.96);
-      box-shadow: 0 10px 25px rgba(185, 28, 28, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.15);
+      height: 100px;
+      border-radius: 24px;
+      padding: 16px;
+      background: rgba(220, 38, 38, 0.8);
+      box-shadow: 
+        0 20px 40px rgba(220, 38, 38, 0.25), 
+        0 0 0 1px rgba(255, 255, 255, 0.2),
+        inset 0 1px 1px rgba(255, 255, 255, 0.2);
       align-items: stretch;
+      border: 1px solid rgba(255, 255, 255, 0.15);
     }
     #dynamic-island-container.evaluating {
-      width: 190px;
-      height: 32px;
-      border-radius: 16px;
-      padding: 0 12px;
-      background: rgba(15, 23, 42, 0.98);
-      box-shadow: 0 4px 12px rgba(56, 189, 248, 0.3), 0 0 0 1px rgba(56, 189, 248, 0.2);
+      width: 200px;
+      height: 36px;
+      border-radius: 18px;
+      padding: 0 14px;
+      background: rgba(15, 23, 42, 0.8);
+      box-shadow: 
+        0 8px 24px rgba(56, 189, 248, 0.2), 
+        0 0 0 1px rgba(56, 189, 248, 0.3),
+        inset 0 1px 1px rgba(255, 255, 255, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.2);
     }
     .notch-content, .compact-content, .card-content, .banner-content, .evaluating-content {
       display: none;
       opacity: 0;
-      transition: opacity 0.2s ease;
+      transition: opacity 0.25s ease-out;
       width: 100%;
       height: 100%;
     }
@@ -2736,7 +2761,7 @@ function getIslandHtml(sessionData?: any): string {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 14px;
       opacity: 1;
     }
     #dynamic-island-container.evaluating .evaluating-content {
@@ -2746,8 +2771,8 @@ function getIslandHtml(sessionData?: any): string {
       opacity: 1;
     }
     .spinner {
-      width: 12px;
-      height: 12px;
+      width: 14px;
+      height: 14px;
       border: 2px solid rgba(56, 189, 248, 0.2);
       border-top-color: #38bdf8;
       border-radius: 50%;
@@ -2759,29 +2784,31 @@ function getIslandHtml(sessionData?: any): string {
     .compact-pill-layout {
       display: flex;
       align-items: center;
-      gap: 6px;
+      gap: 8px;
       font-size: 13px;
       font-weight: 600;
       color: rgba(255, 255, 255, 0.95);
+      letter-spacing: -0.1px;
     }
     .status-dot {
-      width: 6px;
-      height: 6px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
-      background: #22c55e;
-      box-shadow: 0 0 8px #22c55e;
-      animation: pulse 2s infinite;
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981, 0 0 20px rgba(16, 185, 129, 0.5);
+      animation: pulse-glowing 2s infinite;
     }
-    @keyframes pulse {
-      0% { transform: scale(1); opacity: 1; }
-      50% { transform: scale(1.25); opacity: 0.6; }
-      100% { transform: scale(1); opacity: 1; }
+    @keyframes pulse-glowing {
+      0% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px #10b981; }
+      50% { transform: scale(1.3); opacity: 0.7; box-shadow: 0 0 16px #10b981, 0 0 24px rgba(16, 185, 129, 0.6); }
+      100% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px #10b981; }
     }
     .card-grid {
       display: flex;
       flex-direction: column;
       height: 100%;
       justify-content: space-between;
+      gap: 10px;
     }
     .card-header {
       display: flex;
@@ -2791,33 +2818,36 @@ function getIslandHtml(sessionData?: any): string {
     .cust-name {
       font-weight: 700;
       font-size: 14px;
-      letter-spacing: -0.2px;
+      letter-spacing: -0.3px;
+      color: rgba(255, 255, 255, 0.95);
     }
     .mode-badge {
       font-size: 10px;
       font-weight: 700;
-      padding: 2px 6px;
-      border-radius: 8px;
-      background: rgba(255, 255, 255, 0.15);
+      padding: 3px 8px;
+      border-radius: 9999px;
+      background: rgba(255, 255, 255, 0.12);
       text-transform: uppercase;
+      letter-spacing: 0.4px;
     }
     .card-body {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 4px;
+      margin-top: 2px;
     }
     .card-info {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
     }
     .info-label {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.6);
+      color: rgba(255, 255, 255, 0.55);
+      font-weight: 500;
     }
     .info-val {
-      font-weight: 600;
+      font-weight: 700;
       color: white;
       font-variant-numeric: tabular-nums;
     }
@@ -2826,42 +2856,53 @@ function getIslandHtml(sessionData?: any): string {
     }
     .cost-label {
       font-size: 10px;
-      color: rgba(255, 255, 255, 0.6);
+      color: rgba(255, 255, 255, 0.55);
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
     }
     .cost-val {
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 800;
-      color: #4ade80;
+      color: #34d399;
+      text-shadow: 0 0 12px rgba(52, 211, 153, 0.3);
     }
     .exit-btn {
       width: 100%;
-      background: #ef4444;
+      background: linear-gradient(135deg, #ef4444, #dc2626);
       color: white;
       border: none;
-      border-radius: 8px;
-      padding: 5px;
-      font-size: 11px;
+      border-radius: 9999px;
+      padding: 8px 16px;
+      font-size: 12px;
       font-weight: 700;
       cursor: pointer;
-      transition: background 0.2s ease;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+      font-family: inherit;
     }
     .exit-btn:hover {
-      background: #dc2626;
+      background: linear-gradient(135deg, #dc2626, #b91c1c);
+      transform: translateY(-1.5px);
+      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
+    }
+    .exit-btn:active {
+      transform: translateY(0);
     }
     .banner-body {
       flex: 1;
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      gap: 3px;
       overflow: hidden;
       text-align: left;
     }
     .banner-title {
       font-size: 11px;
-      font-weight: 700;
+      font-weight: 800;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: rgba(255, 255, 255, 0.8);
+      letter-spacing: 0.8px;
+      color: rgba(255, 255, 255, 0.9);
     }
     .banner-text {
       font-size: 13px;
@@ -2873,27 +2914,34 @@ function getIslandHtml(sessionData?: any): string {
     }
     .dismiss-btn {
       background: white;
-      color: #b91c1c;
+      color: #dc2626;
       border: none;
-      border-radius: 8px;
-      padding: 6px 12px;
-      font-size: 11px;
-      font-weight: 700;
+      border-radius: 9999px;
+      padding: 8px 18px;
+      font-size: 12px;
+      font-weight: 800;
       cursor: pointer;
-      transition: transform 0.15s ease;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
       align-self: center;
+      font-family: inherit;
     }
     .dismiss-btn:hover {
-      transform: scale(1.05);
+      background: #f8fafc;
+      transform: translateY(-1.5px) scale(1.02);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+    }
+    .dismiss-btn:active {
+      transform: translateY(0) scale(1);
     }
     .log-console {
-      background: rgba(0, 0, 0, 0.4);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 6px;
-      padding: 6px;
-      font-family: monospace;
-      font-size: 9px;
-      max-height: 80px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 12px;
+      padding: 8px;
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 10px;
+      max-height: 85px;
       overflow-y: auto;
       text-align: left;
       margin-top: 8px;
@@ -2903,26 +2951,35 @@ function getIslandHtml(sessionData?: any): string {
       white-space: nowrap;
       text-overflow: ellipsis;
       overflow: hidden;
+      margin-bottom: 2px;
+      opacity: 0.85;
     }
     .island-buttons {
       display: flex;
-      gap: 6px;
-      margin-top: 6px;
+      gap: 8px;
+      margin-top: 8px;
     }
     .save-log-btn {
       flex: 1;
-      background: #3b82f6;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
       color: white;
       border: none;
-      border-radius: 8px;
-      padding: 5px;
-      font-size: 11px;
+      border-radius: 9999px;
+      padding: 8px 16px;
+      font-size: 12px;
       font-weight: 700;
       cursor: pointer;
-      transition: background 0.2s ease;
+      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
+      font-family: inherit;
     }
     .save-log-btn:hover {
-      background: #2563eb;
+      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      transform: translateY(-1.5px);
+      box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+    }
+    .save-log-btn:active {
+      transform: translateY(0);
     }
   </style>
 </head>
