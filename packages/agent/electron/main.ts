@@ -247,6 +247,9 @@ function startLockEnforcement() {
       lockWindow.setAlwaysOnTop(true, 'screen-saver', 1);
       lockWindow.focus();
       lockWindow.moveTop();
+      // Re-enforce fullscreen/kiosk in case F11 or any other event toggled it off
+      if (!lockWindow.isFullScreen()) lockWindow.setFullScreen(true);
+      if (!lockWindow.isKiosk()) lockWindow.setKiosk(true);
     }
   }, 500);
 }
@@ -276,6 +279,15 @@ function createLockWindow() {
   });
 
   lockWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+
+  // ─── Block F11 at the Chromium input pipeline level (defense-in-depth) ──────
+  // globalShortcut handles OS-level interception; before-input-event handles
+  // any F11 that reaches the renderer process (e.g. from remote-desktop scenarios).
+  lockWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F11') {
+      event.preventDefault();
+    }
+  });
 
   const html = `<!DOCTYPE html>
 <html>
@@ -540,9 +552,29 @@ function createLockWindow() {
     .settings-close:hover {
       color: white;
     }
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    #unlockLoading {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: radial-gradient(ellipse at top, #0f172a 0%, #020617 60%);
+      z-index: 99999;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      animation: fadeIn 0.4s ease-out;
+    }
   </style>
 </head>
 <body>
+  <div id="unlockLoading">
+    <div style="width: 50px; height: 50px; border: 3px solid rgba(59,130,246,0.1); border-top: 3px solid #3b82f6; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    <div style="margin-top: 1.5rem; font-size: 1.1rem; font-weight: 700; background: linear-gradient(135deg, #e2e8f0, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Preparing Desktop...</div>
+    <div style="margin-top: 0.5rem; font-size: 0.8rem; color: #64748b;">Loading user shell and configuration</div>
+  </div>
   <div class="container">
     <div class="logo">🔒</div>
     <h1>NetCafe Terminal</h1>
@@ -978,6 +1010,13 @@ function createLockWindow() {
         appendLog(log);
       });
 
+      ipcRenderer.on('show-unlock-loading', () => {
+        const loadingEl = document.getElementById('unlockLoading');
+        if (loadingEl) {
+          loadingEl.style.display = 'flex';
+        }
+      });
+
       const modalSaveLogBtn = document.getElementById('modalSaveLogBtn');
       const modalSaveLogStatus = document.getElementById('modalSaveLogStatus');
       if (modalSaveLogBtn && modalSaveLogStatus) {
@@ -1051,6 +1090,24 @@ function sendToServer(data: any) {
   }
 }
 
+function unlockAndCloseWindow() {
+  if (lockWindow && !lockWindow.isDestroyed()) {
+    logToUI('Transitioning lock screen to loading state...');
+    try {
+      lockWindow.webContents.send('show-unlock-loading');
+    } catch (e: any) {
+      logToUI(`Failed to send show-unlock-loading: ${e.message}`);
+    }
+    setTimeout(() => {
+      if (lockWindow && !lockWindow.isDestroyed()) {
+        logToUI('Destroying lock screen window after desktop load delay.');
+        lockWindow.destroy();
+        lockWindow = null;
+      }
+    }, 3000);
+  }
+}
+
 // ─── Server message handler ────────────────────────────────────────────────────
 async function handleServerMessage(msg: any) {
   try {
@@ -1075,9 +1132,7 @@ async function handleServerMessage(msg: any) {
       isLocked = false;
       stopLockEnforcement();
       if (lockWindow) {
-        logToUI(`Destroying lock screen window.`);
-        lockWindow.destroy();
-        lockWindow = null;
+        unlockAndCloseWindow();
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
@@ -1126,9 +1181,7 @@ async function handleServerMessage(msg: any) {
       currentUser = msg.user || null;
       stopLockEnforcement();
       if (lockWindow) {
-        logToUI(`Destroying lock screen window.`);
-        lockWindow.destroy();
-        lockWindow = null;
+        unlockAndCloseWindow();
       } else {
         logToUI(`Lock screen window not present or already destroyed.`);
       }
@@ -2351,6 +2404,15 @@ app.whenReady().then(async () => {
   });
 
   // ─── Block common keyboard bypass shortcuts ────────────────────────────────
+  // F11: Toggle fullscreen — MUST be blocked to prevent lock screen from exiting kiosk mode
+  globalShortcut.register('F11', () => {
+    // Always suppress F11 — re-enforce fullscreen on the lock window if locked
+    if (isLocked && lockWindow && !lockWindow.isDestroyed()) {
+      lockWindow.setFullScreen(true);
+      lockWindow.setKiosk(true);
+    }
+    return false;
+  });
   // F12: Developer tools
   globalShortcut.register('F12', () => {
     if (isLocked) return false;
