@@ -2743,7 +2743,7 @@ Respond strictly in JSON format:
                     <h3 className="text-sm font-bold text-white flex items-center gap-2">
                       <FileSpreadsheet size={16} className="text-emerald-400" /> Bulk Import from Excel
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">Upload an .xlsx file with columns: username, password, email, phone</p>
+                    <p className="text-xs text-slate-500 mt-0.5">Upload an .xlsx file with columns: ad.no, name, class, username, password, email, phone</p>
                   </div>
                   <button
                     onClick={async () => {
