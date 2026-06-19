@@ -69,13 +69,13 @@ function isDesktopShellRunning(): Promise<boolean> {
       resolve(true);
       return;
     }
-    const cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \"Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport(\\\"user32.dll\\\")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName); }'; if ([W]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) { exit 1 } else { exit 0 }\"";
-    exec(cmd, (error) => {
-      if (error) {
+    exec('tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>nul', { timeout: 3000 }, (err, stdout) => {
+      if (err) {
         resolve(false);
-      } else {
-        resolve(true);
+        return;
       }
+      const running = stdout.toLowerCase().includes('explorer.exe');
+      resolve(running);
     });
   });
 }
@@ -1455,7 +1455,7 @@ function getActiveWindowTitle(): Promise<string> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
       const psCmd = `powershell -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\"user32.dll\\")] public static extern IntPtr GetForegroundWindow(); }'; $fg = [Win32]::GetForegroundWindow(); (Get-Process | Where-Object { $_.MainWindowHandle -eq $fg }).MainWindowTitle"`;
-      exec(psCmd, (err, stdout) => {
+      exec(psCmd, { timeout: 2500 }, (err, stdout) => {
         if (err) {
           resolve('System');
         } else {
@@ -1463,7 +1463,7 @@ function getActiveWindowTitle(): Promise<string> {
         }
       });
     } else {
-      exec('xdotool getactivewindow getwindowname', (err, stdout) => {
+      exec('xdotool getactivewindow getwindowname', { timeout: 2500 }, (err, stdout) => {
         if (err || !stdout) {
           resolve('Desktop / Shell');
         } else {
@@ -1479,7 +1479,7 @@ let processListInitialized = false;
 
 async function getProcessChanges(): Promise<{ started: string[]; closed: string[] }> {
   return new Promise((resolve) => {
-    exec('tasklist /FO CSV /NH 2>nul', (err, stdout) => {
+    exec('tasklist /FO CSV /NH 2>nul', { timeout: 4000 }, (err, stdout) => {
       if (err) return resolve({ started: [], closed: [] });
       const current = new Set<string>();
       for (const line of stdout.split('\n')) {
