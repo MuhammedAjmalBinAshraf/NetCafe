@@ -77,9 +77,17 @@ function setupDatabase() {
       phone TEXT,
       email TEXT,
       balance_minutes INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      ad_no TEXT,
+      class TEXT
     );
   `)
+  try {
+    db.exec("ALTER TABLE users ADD COLUMN ad_no TEXT;")
+  } catch {}
+  try {
+    db.exec("ALTER TABLE users ADD COLUMN class TEXT;")
+  } catch {}
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN custom_duration INTEGER;")
   } catch {}
@@ -1619,24 +1627,24 @@ ipcMain.handle('capture-screenshot', async (_, machineId) => {
 
 // ─── User Account Management IPC Handlers ─────────────────────────────────────
 ipcMain.handle('get-users', () => {
-  return db.prepare('SELECT id, username, password, display_name, phone, email, balance_minutes, created_at FROM users ORDER BY created_at DESC').all()
+  return db.prepare('SELECT id, username, password, display_name, phone, email, balance_minutes, created_at, ad_no, class FROM users ORDER BY created_at DESC').all()
 })
 
-ipcMain.handle('create-user', (_, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number) => {
+ipcMain.handle('create-user', (_, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number, adNo: string, className: string) => {
   try {
-    const info = db.prepare('INSERT INTO users (username, password, display_name, phone, email, balance_minutes) VALUES (?, ?, ?, ?, ?, ?)').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0)
+    const info = db.prepare('INSERT INTO users (username, password, display_name, phone, email, balance_minutes, ad_no, class) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0, adNo || null, className || null)
     return { success: true, id: info.lastInsertRowid }
   } catch (e: any) {
     return { success: false, error: e.message }
   }
 })
 
-ipcMain.handle('update-user', (_, id: number, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number) => {
+ipcMain.handle('update-user', (_, id: number, username: string, password: string, displayName: string, phone: string, email: string, balanceMinutes: number, adNo: string, className: string) => {
   try {
     if (password && password.trim() !== '') {
-      db.prepare('UPDATE users SET username = ?, password = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ? WHERE id = ?').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0, id)
+      db.prepare('UPDATE users SET username = ?, password = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ?, ad_no = ?, class = ? WHERE id = ?').run(username, password, displayName || null, phone || null, email || null, balanceMinutes || 0, adNo || null, className || null, id)
     } else {
-      db.prepare('UPDATE users SET username = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ? WHERE id = ?').run(username, displayName || null, phone || null, email || null, balanceMinutes || 0, id)
+      db.prepare('UPDATE users SET username = ?, display_name = ?, phone = ?, email = ?, balance_minutes = ?, ad_no = ?, class = ? WHERE id = ?').run(username, displayName || null, phone || null, email || null, balanceMinutes || 0, adNo || null, className || null, id)
     }
     return { success: true }
   } catch (e: any) {
@@ -1708,11 +1716,14 @@ ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
     const results = { success: 0, skipped: 0, errors: [] as string[] }
 
     for (const row of rows) {
-      // Support columns: username/Username/name, password/Password, email/Email, phone/Phone
-      const username = (row.username || row.Username || row.name || row.Name || '').toString().trim()
-      const password = (row.password || row.Password || '').toString().trim()
-      const email = (row.email || row.Email || '').toString().trim()
-      const phone = (row.phone || row.Phone || row.mobile || row.Mobile || '').toString().trim()
+      // Find values for the specific columns or case-insensitive/variation fallback
+      const adNo = (row['ad.no'] || row['ad_no'] || row['ad no'] || row['Ad.No'] || row['Ad. No'] || row['AD.NO'] || '').toString().trim()
+      const name = (row['name'] || row['Name'] || row['display_name'] || row['displayName'] || '').toString().trim()
+      const className = (row['class'] || row['Class'] || '').toString().trim()
+      const username = (row['username'] || row['Username'] || '').toString().trim()
+      const password = (row['password'] || row['Password'] || '').toString().trim()
+      const email = (row['email'] || row['Email'] || '').toString().trim()
+      const phone = (row['phone'] || row['Phone'] || row['mobile'] || row['Mobile'] || '').toString().trim()
 
       if (!username) {
         results.skipped++
@@ -1725,8 +1736,8 @@ ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
           results.skipped++
           continue
         }
-        db.prepare('INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)')
-          .run(username, password || 'changeme', email, phone)
+        db.prepare('INSERT INTO users (username, password, display_name, email, phone, ad_no, class) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .run(username, password || 'changeme', name || username, email, phone, adNo, className)
         results.success++
       } catch (e: any) {
         results.errors.push(`${username}: ${e.message}`)
@@ -1740,12 +1751,12 @@ ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
 })
 
 ipcMain.handle('download-user-template', () => {
-  // Return a sample xlsx as base64 for the user to download
+  // Return a sample xlsx as base64 for the user to download with updated columns
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.aoa_to_sheet([
-    ['username', 'password', 'email', 'phone'],
-    ['john_doe', 'pass123', 'john@example.com', '9876543210'],
-    ['jane_smith', 'pass456', 'jane@example.com', '9123456789'],
+    ['ad.no', 'name', 'class', 'username', 'password', 'email', 'phone'],
+    ['1001', 'John Doe', '10-A', 'john_doe', 'pass123', 'john@example.com', '9876543210'],
+    ['1002', 'Jane Smith', '10-B', 'jane_smith', 'pass456', 'jane@example.com', '9123456789'],
   ])
   XLSX.utils.book_append_sheet(wb, ws, 'Users')
   const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' })
@@ -1987,4 +1998,36 @@ ipcMain.handle('get-session-app-logs', (_, sessionId) => {
 ipcMain.handle('get-session-process-events', (_, sessionId) => {
   if (!db) return []
   return db.prepare('SELECT * FROM session_process_events WHERE session_id = ? ORDER BY id DESC LIMIT 500').all(sessionId)
+})
+
+ipcMain.handle('get-all-activity-logs', () => {
+  if (!db) return []
+  try {
+    return db.prepare(`
+      SELECT 
+        sal.id,
+        sal.session_id,
+        sal.app_title,
+        sal.duration_seconds,
+        sal.focus_count,
+        sal.first_seen,
+        sal.last_seen,
+        s.customer_name,
+        s.start_time,
+        s.machine_id,
+        m.name as machine_name,
+        u.class,
+        u.ad_no,
+        u.username
+      FROM session_app_logs sal
+      JOIN sessions s ON sal.session_id = s.id
+      LEFT JOIN machines m ON s.machine_id = m.id
+      LEFT JOIN users u ON (u.username = s.customer_name OR u.display_name = s.customer_name)
+      ORDER BY sal.last_seen DESC
+      LIMIT 2000
+    `).all()
+  } catch (e: any) {
+    console.error('get-all-activity-logs failed:', e)
+    return []
+  }
 })

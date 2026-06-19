@@ -4,7 +4,7 @@ import net from 'net';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
-import { exec, execSync, spawn } from 'child_process';
+import { exec, execSync, spawn, execFileSync } from 'child_process';
 import dgram from 'dgram';
 import { MitmProxy } from './mitm-proxy';
 
@@ -22,6 +22,7 @@ let mitmProxy: MitmProxy | null = null;
 let lockWindow: BrowserWindow | null = null;
 let tcpSocket: net.Socket | null = null;
 let isConnecting = false;
+let isTcpConnected = false;
 let isLocked = true;
 let isAppQuitting = false;
 let activeBlockRules: any[] = [];
@@ -111,7 +112,7 @@ function spawnExplorerShell() {
   }
 }
 
-function saveClientLog() {
+function performSaveClientLog(): { success: boolean; path?: string; error?: string } {
   try {
     const now = new Date();
     const pad = (n: number) => n.toString().padStart(2, '0');
@@ -129,18 +130,26 @@ function saveClientLog() {
       const cacheData = agentLogsCache.map(e => '[' + e.timestamp + '] ' + e.message).join('\r\n');
       fs.writeFileSync(destPath, cacheData, 'utf8');
     }
+    return { success: true, path: destPath };
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
+}
 
+function saveClientLog() {
+  const result = performSaveClientLog();
+  if (result.success) {
     dialog.showMessageBoxSync({
       type: 'info',
       title: 'Diagnostics Log Saved',
-      message: 'Client log has been successfully saved to:\n\n' + destPath,
+      message: 'Client log has been successfully saved to:\n\n' + result.path,
       buttons: ['OK']
     });
-  } catch (err: any) {
+  } else {
     dialog.showMessageBoxSync({
       type: 'error',
       title: 'Diagnostics Log Error',
-      message: 'Failed to save client log:\n\n' + (err.message || err),
+      message: 'Failed to save client log:\n\n' + result.error,
       buttons: ['OK']
     });
   }
@@ -163,7 +172,7 @@ function logToUI(msg: string) {
   }
   writeAgentRuntimeLog(msg);
 
-  if (IS_DEVELOPER_MODE && tcpSocket && !tcpSocket.destroyed) {
+  if (IS_DEVELOPER_MODE && isTcpConnected && tcpSocket && !tcpSocket.destroyed && tcpSocket.writable) {
     try {
       tcpSocket.write(JSON.stringify({
         type: 'agent-log',
@@ -653,10 +662,16 @@ function createLockWindow() {
 
         <!-- Agent Logs Section -->
         <div style="margin-top:0.5rem;padding:0.75rem;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.06);border-radius:10px;">
-          <div id="logToggle" style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;cursor:pointer;display:flex;justify-content:space-between;align-items:center;">
-            <span>📋 Real-time Agent Logs</span>
-            <span id="logArrow">▼</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <div id="logToggle" style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;cursor:pointer;display:flex;align-items:center;gap:0.25rem;">
+              <span>📋 Real-time Agent Logs</span>
+              <span id="logArrow">▼</span>
+            </div>
+            <button id="modalSaveLogBtn" title="Save log to disk" style="background:rgba(59,130,246,0.15);border:1px solid rgba(59,130,246,0.3);border-radius:6px;color:#60a5fa;padding:0.25rem 0.5rem;font-family:'Inter', sans-serif;font-size:0.68rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:0.25rem;transition:all 0.15s;">
+              <span>💾</span> <span>Save Log</span>
+            </button>
           </div>
+          <div id="modalSaveLogStatus" style="margin-top:0.4rem;padding:0.4rem;border-radius:6px;font-size:0.7rem;font-weight:600;display:none;word-break:break-all;"></div>
           <div id="logConsole" style="display:none;background:#020617;border:1px solid rgba(255,255,255,0.05);border-radius:8px;padding:0.5rem;height:125px;overflow-y:auto;font-family:monospace;font-size:0.68rem;color:#cbd5e1;line-height:1.4;word-break:break-all;margin-top:0.5rem;"></div>
         </div>
       </div>
@@ -962,6 +977,41 @@ function createLockWindow() {
       ipcRenderer.on('agent-log-updated', (_, log) => {
         appendLog(log);
       });
+
+      const modalSaveLogBtn = document.getElementById('modalSaveLogBtn');
+      const modalSaveLogStatus = document.getElementById('modalSaveLogStatus');
+      if (modalSaveLogBtn && modalSaveLogStatus) {
+        modalSaveLogBtn.addEventListener('click', async () => {
+          modalSaveLogBtn.disabled = true;
+          modalSaveLogBtn.style.opacity = '0.5';
+          modalSaveLogStatus.style.display = 'none';
+          try {
+            const result = await ipcRenderer.invoke('ui-save-client-log');
+            if (result.success) {
+              modalSaveLogStatus.style.background = 'rgba(16,185,129,0.12)';
+              modalSaveLogStatus.style.color = '#6ee7b7';
+              modalSaveLogStatus.style.border = '1px solid rgba(16,185,129,0.2)';
+              modalSaveLogStatus.textContent = '✓ Log saved successfully!';
+            } else {
+              modalSaveLogStatus.style.background = 'rgba(239,68,68,0.12)';
+              modalSaveLogStatus.style.color = '#fca5a5';
+              modalSaveLogStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+              modalSaveLogStatus.textContent = '✗ Failed: ' + result.error;
+            }
+            modalSaveLogStatus.style.display = 'block';
+            setTimeout(() => { modalSaveLogStatus.style.display = 'none'; }, 5000);
+          } catch (e) {
+            modalSaveLogStatus.style.background = 'rgba(239,68,68,0.12)';
+            modalSaveLogStatus.style.color = '#fca5a5';
+            modalSaveLogStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+            modalSaveLogStatus.textContent = '✗ Error: ' + e.message;
+            modalSaveLogStatus.style.display = 'block';
+          } finally {
+            modalSaveLogBtn.disabled = false;
+            modalSaveLogBtn.style.opacity = '1';
+          }
+        });
+      }
     })();
   </script>
 </body>
@@ -992,8 +1042,12 @@ function createLockWindow() {
 
 // ─── TCP send helper ───────────────────────────────────────────────────────────
 function sendToServer(data: any) {
-  if (tcpSocket && !tcpSocket.destroyed) {
-    tcpSocket.write(JSON.stringify(data) + '\n');
+  if (isTcpConnected && tcpSocket && !tcpSocket.destroyed && tcpSocket.writable) {
+    try {
+      tcpSocket.write(JSON.stringify(data) + '\n');
+    } catch (e: any) {
+      console.error('sendToServer write failed:', e.message);
+    }
   }
 }
 
@@ -1030,8 +1084,15 @@ async function handleServerMessage(msg: any) {
 
       // Unblock hardware input in case it was blocked from a previous session
       if (process.platform === 'win32') {
-        exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
-        if (psProcess && psProcess.stdin && !psProcess.killed) psProcess.stdin.write('Set-BlockInput $false\n');
+        spawn('powershell.exe', [
+          '-NoProfile',
+          '-WindowStyle', 'Hidden',
+          '-Command',
+          'Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public class B{[DllImport("user32.dll")]public static extern bool BlockInput(bool f);}\';[B]::BlockInput($false)'
+        ]);
+        if (psProcess && psProcess.stdin && !psProcess.killed) {
+          psProcess.stdin.write('Set-BlockInput $false\n');
+        }
       }
 
       // Spawn explorer.exe so the desktop shell is available during the session
@@ -1074,8 +1135,15 @@ async function handleServerMessage(msg: any) {
 
       // Unblock hardware input in case it was blocked from a previous session
       if (process.platform === 'win32') {
-        exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
-        if (psProcess && psProcess.stdin && !psProcess.killed) psProcess.stdin.write('Set-BlockInput $false\n');
+        spawn('powershell.exe', [
+          '-NoProfile',
+          '-WindowStyle', 'Hidden',
+          '-Command',
+          'Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public class B{[DllImport("user32.dll")]public static extern bool BlockInput(bool f);}\';[B]::BlockInput($false)'
+        ]);
+        if (psProcess && psProcess.stdin && !psProcess.killed) {
+          psProcess.stdin.write('Set-BlockInput $false\n');
+        }
       }
 
       // Spawn explorer.exe so the desktop shell is available during the session.
@@ -1118,7 +1186,7 @@ async function handleServerMessage(msg: any) {
       // Always kill explorer.exe on Windows when locking
       if (process.platform === 'win32') {
         logToUI('Terminating explorer.exe to lock desktop shell...');
-        exec('taskkill /F /IM explorer.exe', () => {});
+        spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
       }
     } else if (msg.command === 'message') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
@@ -1136,15 +1204,15 @@ async function handleServerMessage(msg: any) {
       }
     } else if (msg.command === 'poweroff') {
       if (process.platform === 'win32') {
-        exec('shutdown /s /f /t 0');
+        spawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
       } else {
-        exec('shutdown -h now');
+        spawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
       }
     } else if (msg.command === 'restart') {
       if (process.platform === 'win32') {
-        exec('shutdown /r /f /t 0');
+        spawn('shutdown.exe', ['/r', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
       } else {
-        exec('reboot');
+        spawn('reboot', [], { detached: true, stdio: 'ignore' });
       }
     } else if (msg.command === 'limit-bandwidth') {
       const rate = msg.payload?.rate || '2mbit';
@@ -1207,10 +1275,12 @@ async function handleServerMessage(msg: any) {
           psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
         }
         // Secondary: direct spawn to guarantee effect (BlockInput needs calling thread to have input)
-        const cmd = block
-          ? `powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($true)"`
-          : `powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`;
-        exec(cmd, () => {});
+        spawn('powershell.exe', [
+          '-NoProfile',
+          '-WindowStyle', 'Hidden',
+          '-Command',
+          `Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport("user32.dll")]public static extern bool BlockInput(bool f);}\';[B]::BlockInput($${block ? 'true' : 'false'})`
+        ]);
         logToUI(`Hardware inputs ${block ? 'BLOCKED' : 'UNBLOCKED'}`);
       }
     } else if (msg.command === 'update-operator-password') {
@@ -1277,6 +1347,7 @@ ipcMain.handle('save-agent-config', (_event, newServerUrl: string, newMachineId:
         tcpSocket.destroy();
       } catch {}
       tcpSocket = null;
+      isTcpConnected = false;
     }
     isConnecting = false;
     connectToServer();
@@ -1307,9 +1378,9 @@ ipcMain.handle('restore-shell', () => {
 ipcMain.handle('system-shutdown', () => {
   logToUI('System shutdown requested via lockscreen.');
   if (process.platform === 'win32') {
-    exec('shutdown /s /t 0', () => {});
+    spawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
   } else {
-    exec('shutdown -h now', () => {});
+    spawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
   }
   return { success: true };
 });
@@ -1476,7 +1547,7 @@ function enforceAppBlocking(executables: string[]) {
   if (executables.length === 0) return;
   if (process.platform === 'win32') {
     executables.forEach((exe) => {
-      exec(`taskkill /F /IM ${exe}`, () => {});
+      spawn('taskkill.exe', ['/F', '/IM', exe]);
     });
   } else {
     executables.forEach((exe) => {
@@ -1611,6 +1682,7 @@ function connectToServer() {
   logToUI(`Attempting to connect to server at tcp://${serverHost}:${serverPort}...`);
   socket.connect(serverPort, serverHost, () => {
     isConnecting = false;
+    isTcpConnected = true;
     logToUI(`Connected to server successfully!`);
     const mac = getMACAddress() || machineId;
     sendToServer({ 
@@ -1642,9 +1714,10 @@ function connectToServer() {
   });
 
   socket.on('close', () => {
-    logToUI('Disconnected from server. Retrying in 5 seconds...');
-    tcpSocket = null;
+    isTcpConnected = false;
     isConnecting = false;
+    tcpSocket = null;
+    logToUI('Disconnected from server. Retrying in 5 seconds...');
     stopScreenMirroring();
     
     // Resolve all pending query checks to true
@@ -1659,7 +1732,12 @@ function connectToServer() {
     }
     // Extra safety unblock via direct spawn
     if (process.platform === 'win32') {
-      exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
+      spawn('powershell.exe', [
+        '-NoProfile',
+        '-WindowStyle', 'Hidden',
+        '-Command',
+        'Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public class B{[DllImport("user32.dll")]public static extern bool BlockInput(bool f);}\';[B]::BlockInput($false)'
+      ]);
     }
     
     // Enforce lock immediately upon server disconnection
@@ -1676,7 +1754,7 @@ function connectToServer() {
     // Always kill explorer.exe on Windows when locking on server disconnect
     if (process.platform === 'win32') {
       logToUI('Terminating explorer.exe on server disconnect lock...');
-      exec('taskkill /F /IM explorer.exe', () => {});
+      spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
     }
     
     setTimeout(connectToServer, 5000);
@@ -1684,6 +1762,7 @@ function connectToServer() {
 
   socket.on('error', (err: any) => {
     isConnecting = false;
+    isTcpConnected = false;
     let explanation = '';
     if (err.code === 'ETIMEDOUT') {
       explanation = ' (Connection timed out. Check Windows Firewall on the Server PC and verify port 9000 TCP is allowed/open.)';
@@ -1787,6 +1866,7 @@ function startUdpDiscovery() {
               tcpSocket.removeAllListeners('close'); 
               tcpSocket.destroy(); 
               tcpSocket = null; 
+              isTcpConnected = false;
             } catch {}
           }
           isConnecting = false;
@@ -2175,7 +2255,12 @@ app.whenReady().then(async () => {
   // left BlockInput(true) active — this is the #1 cause of "keyboard not responding".
   if (process.platform === 'win32') {
     logToUI('Startup safety: unblocking hardware input (BlockInput false)...');
-    exec(`powershell -NoProfile -WindowStyle Hidden -Command "Add-Type -TypeDefinition 'using System;using System.Runtime.InteropServices;public class B{[DllImport(\\"user32.dll\\")]public static extern bool BlockInput(bool f);}';[B]::BlockInput($false)"`, () => {});
+    spawn('powershell.exe', [
+      '-NoProfile',
+      '-WindowStyle', 'Hidden',
+      '-Command',
+      'Add-Type -TypeDefinition \'using System;using System.Runtime.InteropServices;public class B{[DllImport("user32.dll")]public static extern bool BlockInput(bool f);}\';[B]::BlockInput($false)'
+    ]);
     if (psProcess && psProcess.stdin && !psProcess.killed) {
       psProcess.stdin.write('Set-BlockInput $false\n');
     }
@@ -2184,7 +2269,7 @@ app.whenReady().then(async () => {
   // Always terminate explorer.exe on Windows startup when locked
   if (isLocked && process.platform === 'win32') {
     logToUI('Terminating explorer.exe on startup (locked)...');
-    exec('taskkill /F /IM explorer.exe', () => {});
+    spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
   }
 
   createLockWindow();
@@ -2229,8 +2314,8 @@ app.whenReady().then(async () => {
     // agent binary while the new installer is writing files (prevents file-lock conflicts).
     setTimeout(() => {
       if (process.platform === 'win32') {
-        exec('sc stop "NetCafeAgentWatchdog"', () => {
-          // Give the service 2 seconds to stop, then install
+        const scProc = spawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
+        scProc.on('close', () => {
           setTimeout(() => autoUpdater.quitAndInstall(), 2000);
         });
       } else {
@@ -2248,6 +2333,9 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle('get-agent-logs', () => {
     return agentLogsCache;
+  });
+  ipcMain.handle('ui-save-client-log', () => {
+    return performSaveClientLog();
   });
 
   // Ctrl+Alt+Shift+L: Diagnostics Log Saving

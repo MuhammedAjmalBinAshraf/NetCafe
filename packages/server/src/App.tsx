@@ -5,7 +5,7 @@ import {
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
-  ChevronDown, ChevronUp, Eye, EyeOff
+  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -35,6 +35,8 @@ interface User {
   email: string | null
   balance_minutes: number
   created_at: string
+  ad_no: string | null
+  class: string | null
 }
 
 export default function App() {
@@ -55,7 +57,7 @@ export default function App() {
   })
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
@@ -141,6 +143,27 @@ export default function App() {
   const logsEndRef = useRef<HTMLDivElement>(null)
   const fullscreenContainerRef = useRef<HTMLDivElement>(null)
 
+  // Copy Logs feedback
+  const [isCopied, setIsCopied] = useState(false)
+  const handleCopyLogs = () => {
+    const text = systemLogs.map(log => `[${log.timestamp}] ${log.message}`).join('\n')
+    navigator.clipboard.writeText(text)
+    setIsCopied(true)
+    setTimeout(() => setIsCopied(false), 2000)
+  }
+
+  // Sessions History Search/Filters
+  const [sessionSearchQuery, setSessionSearchQuery] = useState('')
+  const [sessionSearchDate, setSessionSearchDate] = useState('')
+
+  // Special Activity Log Menu states
+  const [allActivityLogs, setAllActivityLogs] = useState<any[]>([])
+  const [activitySearchName, setActivitySearchName] = useState('')
+  const [activitySearchClass, setActivitySearchClass] = useState('')
+  const [activitySearchDate, setActivitySearchDate] = useState('')
+  const [activitySearchProgram, setActivitySearchProgram] = useState('')
+
+
   // Pricing plans CRUD states
   const [isPlanModalOpen, setIsPlanModalOpen] = useState(false)
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null)
@@ -172,6 +195,8 @@ export default function App() {
   const [userDisplayName, setUserDisplayName] = useState('')
   const [userPhone, setUserPhone] = useState('')
   const [userEmail, setUserEmail] = useState('')
+  const [userAdNo, setUserAdNo] = useState('')
+  const [userClass, setUserClass] = useState('')
   const [userBalanceMinutes, setUserBalanceMinutes] = useState('0')
   const [userSearchQuery, setUserSearchQuery] = useState('')
   const [userSearchDate, setUserSearchDate] = useState('')
@@ -396,6 +421,8 @@ export default function App() {
         window.ipcRenderer.invoke('get-settings').then(setSettings)
       } else if (activeTab === 'users') {
         window.ipcRenderer.invoke('get-users').then(setUsers)
+      } else if (activeTab === 'activity_log') {
+        window.ipcRenderer.invoke('get-all-activity-logs').then(setAllActivityLogs)
       }
     }
   }, [activeTab, isAuthenticated])
@@ -444,6 +471,8 @@ export default function App() {
     setUserDisplayName('')
     setUserPhone('')
     setUserEmail('')
+    setUserAdNo('')
+    setUserClass('')
     setUserBalanceMinutes('0')
     setIsUserModalOpen(true)
   }
@@ -455,6 +484,8 @@ export default function App() {
     setUserDisplayName(user.display_name || '')
     setUserPhone(user.phone || '')
     setUserEmail(user.email || '')
+    setUserAdNo(user.ad_no || '')
+    setUserClass(user.class || '')
     setUserBalanceMinutes(user.balance_minutes.toString())
     setIsUserModalOpen(true)
   }
@@ -472,7 +503,9 @@ export default function App() {
         userDisplayName,
         userPhone,
         userEmail,
-        balance
+        balance,
+        userAdNo,
+        userClass
       )
       if (res.success) {
         setIsUserModalOpen(false)
@@ -492,7 +525,9 @@ export default function App() {
         userDisplayName,
         userPhone,
         userEmail,
-        balance
+        balance,
+        userAdNo,
+        userClass
       )
       if (res.success) {
         setIsUserModalOpen(false)
@@ -1179,6 +1214,8 @@ export default function App() {
       (u.display_name && u.display_name.toLowerCase().includes(query)) ||
       (u.phone && u.phone.includes(query)) ||
       (u.email && u.email.toLowerCase().includes(query)) ||
+      (u.ad_no && u.ad_no.toLowerCase().includes(query)) ||
+      (u.class && u.class.toLowerCase().includes(query)) ||
       (u.created_at && u.created_at.toLowerCase().includes(query))
     )
     const matchesDate = !userSearchDate || (u.created_at && u.created_at.includes(userSearchDate))
@@ -1283,6 +1320,14 @@ export default function App() {
               }`}
             >
               <History size={18} /> Sessions History
+            </button>
+            <button
+              onClick={() => { setActiveTab('activity_log'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'activity_log' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <Activity size={18} /> Activity Log
             </button>
             <button
               onClick={() => { setActiveTab('plans'); setSelectedDrawerMachine(null) }}
@@ -1715,7 +1760,18 @@ export default function App() {
                     <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
                     <h3 className="text-xs font-bold text-white uppercase tracking-wider">Developer System Log Console</h3>
                   </div>
-                  <span className="text-slate-400 text-[10px] uppercase font-bold">{isLogsOpen ? 'Hide ▲' : 'Show ▼'}</span>
+                  <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={handleCopyLogs}
+                      className="px-2 py-0.5 bg-slate-800 hover:bg-slate-750 text-slate-350 hover:text-white rounded text-[10px] uppercase font-bold tracking-wider transition-all flex items-center gap-1 border border-slate-700"
+                    >
+                      {isCopied ? <CheckCircle size={10} className="text-green-450" /> : <Copy size={10} />}
+                      {isCopied ? 'Copied!' : 'Copy Logs'}
+                    </button>
+                    <span className="text-slate-400 text-[10px] uppercase font-bold cursor-pointer" onClick={() => setIsLogsOpen(!isLogsOpen)}>
+                      {isLogsOpen ? 'Hide ▲' : 'Show ▼'}
+                    </span>
+                  </div>
                 </div>
                 {isLogsOpen && (
                   <div className="p-4 bg-slate-950/80 font-mono text-[11px] text-slate-300 max-h-[160px] overflow-y-auto space-y-1">
@@ -1737,55 +1793,108 @@ export default function App() {
           )}
 
           {/* TAB: Sessions History */}
-          {activeTab === 'sessions' && (
-            <div className="space-y-6">
-              <div className="flex justify-between items-center pb-4 border-b border-slate-900">
-                <h2 className="text-xl font-bold">Session logs & receipts</h2>
-                <div className="text-sm text-slate-400">Total sessions recorded: {reportsData.sessionsHistory?.length || 0}</div>
-              </div>
-              <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
-                      <th className="p-4">ID</th>
-                      <th className="p-4">PC</th>
-                      <th className="p-4">Customer</th>
-                      <th className="p-4">Mode</th>
-                      <th className="p-4">Start Time</th>
-                      <th className="p-4">End Time</th>
-                      <th className="p-4 text-right">Discount</th>
-                      <th className="p-4 text-right">Amount</th>
-                      <th className="p-4">Payment</th>
-                      <th className="p-4">Activity</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-900 text-slate-200">
-                    {reportsData.sessionsHistory?.map((sess: any) => (
-                      <tr key={sess.id} className="hover:bg-slate-900/30 transition-colors">
-                        <td className="p-4 font-mono font-bold text-slate-400">#{sess.id}</td>
-                        <td className="p-4 font-semibold text-white">{sess.machine_name || `PC-${sess.machine_id}`}</td>
-                        <td className="p-4">{sess.customer_name}</td>
-                        <td className="p-4"><span className="text-[10px] font-bold uppercase bg-slate-800 px-2 py-0.5 rounded text-slate-300">{sess.mode}</span></td>
-                        <td className="p-4 font-mono text-xs">{sess.start_time}</td>
-                        <td className="p-4 font-mono text-xs">{sess.end_time || <span className="text-blue-400 font-bold">Active</span>}</td>
-                        <td className="p-4 text-right text-red-400 font-semibold">${(sess.discount || 0).toFixed(2)}</td>
-                        <td className="p-4 text-right font-bold text-white">${(sess.total_amount || 0).toFixed(2)}</td>
-                        <td className="p-4 text-xs font-semibold text-slate-300">{sess.payment_method || '-'}</td>
-                        <td className="p-4">
-                          <button
-                            onClick={() => handleViewAppLog(sess)}
-                            className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-750 text-slate-300 hover:text-white rounded text-xs font-semibold transition-all flex items-center gap-1.5"
-                          >
-                            <Activity size={11} className="text-blue-400" /> View Log
-                          </button>
-                        </td>
+          {activeTab === 'sessions' && (() => {
+            const filteredSessions = (reportsData.sessionsHistory || []).filter((sess: any) => {
+              const query = sessionSearchQuery.toLowerCase()
+              const matchesSearch = !query || 
+                (sess.id && sess.id.toString().includes(query)) ||
+                (sess.customer_name && sess.customer_name.toLowerCase().includes(query)) ||
+                (sess.machine_name && sess.machine_name.toLowerCase().includes(query)) ||
+                (sess.mode && sess.mode.toLowerCase().includes(query)) ||
+                (sess.payment_method && sess.payment_method.toLowerCase().includes(query)) ||
+                (sess.plan_name && sess.plan_name.toLowerCase().includes(query))
+
+              const matchesDate = !sessionSearchDate || (sess.start_time && sess.start_time.includes(sessionSearchDate))
+              return matchesSearch && matchesDate
+            })
+
+            return (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center pb-4 border-b border-slate-900">
+                  <h2 className="text-xl font-bold">Session logs & receipts</h2>
+                  <div className="text-sm text-slate-400">Total sessions recorded: {reportsData.sessionsHistory?.length || 0}</div>
+                </div>
+
+                {/* Filters */}
+                <div className="flex flex-col sm:flex-row gap-4 bg-slate-950/40 p-4 rounded-xl border border-slate-900">
+                  <div className="flex-1 relative">
+                    <Search className="absolute left-3 top-2.5 text-slate-550" size={16} />
+                    <input
+                      type="text"
+                      placeholder="Search sessions by customer, machine, mode, plan..."
+                      value={sessionSearchQuery}
+                      onChange={(e) => setSessionSearchQuery(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg py-2 pl-10 pr-4 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                  <div className="w-full sm:w-48">
+                    <input
+                      type="date"
+                      value={sessionSearchDate}
+                      onChange={(e) => setSessionSearchDate(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg py-2 px-3 text-sm text-slate-250 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                  {(sessionSearchQuery || sessionSearchDate) && (
+                    <button
+                      onClick={() => { setSessionSearchQuery(''); setSessionSearchDate('') }}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors"
+                    >
+                      Clear Filters
+                    </button>
+                  )}
+                </div>
+
+                <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
+                        <th className="p-4">ID</th>
+                        <th className="p-4">PC</th>
+                        <th className="p-4">Customer</th>
+                        <th className="p-4">Mode</th>
+                        <th className="p-4">Start Time</th>
+                        <th className="p-4">End Time</th>
+                        <th className="p-4 text-right">Discount</th>
+                        <th className="p-4 text-right">Amount</th>
+                        <th className="p-4">Payment</th>
+                        <th className="p-4">Activity</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-slate-900 text-slate-200">
+                      {filteredSessions.length === 0 ? (
+                        <tr>
+                          <td colSpan={10} className="p-8 text-center text-slate-500 italic">No matching sessions found.</td>
+                        </tr>
+                      ) : (
+                        filteredSessions.map((sess: any) => (
+                          <tr key={sess.id} className="hover:bg-slate-900/30 transition-colors">
+                            <td className="p-4 font-mono font-bold text-slate-400">#{sess.id}</td>
+                            <td className="p-4 font-semibold text-white">{sess.machine_name || `PC-${sess.machine_id}`}</td>
+                            <td className="p-4">{sess.customer_name}</td>
+                            <td className="p-4"><span className="text-[10px] font-bold uppercase bg-slate-800 px-2 py-0.5 rounded text-slate-300">{sess.mode}</span></td>
+                            <td className="p-4 font-mono text-xs">{sess.start_time}</td>
+                            <td className="p-4 font-mono text-xs">{sess.end_time || <span className="text-blue-400 font-bold">Active</span>}</td>
+                            <td className="p-4 text-right text-red-400 font-semibold">${(sess.discount || 0).toFixed(2)}</td>
+                            <td className="p-4 text-right font-bold text-white">${(sess.total_amount || 0).toFixed(2)}</td>
+                            <td className="p-4 text-xs font-semibold text-slate-300">{sess.payment_method || '-'}</td>
+                            <td className="p-4">
+                              <button
+                                onClick={() => handleViewAppLog(sess)}
+                                className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-750 text-slate-300 hover:text-white rounded text-xs font-semibold transition-all flex items-center gap-1.5"
+                              >
+                                <Activity size={11} className="text-blue-400" /> View Log
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            )
+          })()}
 
           {/* TAB: Pricing Plans */}
           {activeTab === 'plans' && (
@@ -2754,6 +2863,8 @@ Respond strictly in JSON format:
                           />
                         </th>
                         <th className="p-4">Username</th>
+                        <th className="p-4">Ad. No</th>
+                        <th className="p-4">Class</th>
                         <th className="p-4">Password</th>
                         <th className="p-4">Display Name</th>
                         <th className="p-4">Balance</th>
@@ -2765,7 +2876,7 @@ Respond strictly in JSON format:
                     <tbody className="divide-y divide-slate-900 text-sm text-slate-300">
                       {filteredUsers.length === 0 ? (
                         <tr>
-                          <td colSpan={8} className="p-8 text-center text-slate-500">
+                          <td colSpan={10} className="p-8 text-center text-slate-500">
                             No users found.
                           </td>
                         </tr>
@@ -2792,6 +2903,8 @@ Respond strictly in JSON format:
                               />
                             </td>
                             <td className="p-4 font-bold text-white">{user.username}</td>
+                            <td className="p-4">{user.ad_no || <span className="text-slate-600 italic">—</span>}</td>
+                            <td className="p-4">{user.class || <span className="text-slate-600 italic">—</span>}</td>
                             <td className="p-4 font-mono text-xs">
                               <div className="flex items-center gap-2">
                                 <span>{visiblePasswords[user.id] ? user.password : '••••••••'}</span>
@@ -2855,6 +2968,216 @@ Respond strictly in JSON format:
               </div>
             </div>
           )}
+
+          {/* TAB: Activity Log */}
+          {activeTab === 'activity_log' && (() => {
+            const filteredLogs = allActivityLogs.filter((log: any) => {
+              const nameQuery = activitySearchName.toLowerCase().trim()
+              const classQuery = activitySearchClass.toLowerCase().trim()
+              const dateQuery = activitySearchDate.trim()
+              const progQuery = activitySearchProgram.toLowerCase().trim()
+
+              const matchesName = !nameQuery || 
+                (log.customer_name && log.customer_name.toLowerCase().includes(nameQuery)) ||
+                (log.username && log.username.toLowerCase().includes(nameQuery))
+
+              const matchesClass = !classQuery || 
+                (log.class && log.class.toLowerCase().includes(classQuery))
+
+              const matchesDate = !dateQuery || 
+                (log.last_seen && log.last_seen.includes(dateQuery)) ||
+                (log.first_seen && log.first_seen.includes(dateQuery))
+
+              const matchesProgram = !progQuery || 
+                (log.app_title && log.app_title.toLowerCase().includes(progQuery))
+
+              return matchesName && matchesClass && matchesDate && matchesProgram
+            })
+
+            return (
+              <div className="space-y-6">
+                <div className="flex justify-between items-center pb-4 border-b border-slate-900">
+                  <div>
+                    <h2 className="text-xl font-bold text-white">Lab Activity Logs</h2>
+                    <p className="text-slate-400 text-sm mt-1">Monitor active application usage and user events across all machines.</p>
+                  </div>
+                  <div className="text-sm text-slate-400">Total activities tracked: {allActivityLogs.length}</div>
+                </div>
+
+                {/* Filters Row */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-950/40 p-4 rounded-xl border border-slate-900">
+                  {/* Name Filter */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase text-slate-400">Student Name</label>
+                    <div className="relative">
+                      <Search className="absolute left-3 top-2.5 text-slate-500" size={14} />
+                      <input
+                        type="text"
+                        placeholder="Search student..."
+                        value={activitySearchName}
+                        onChange={(e) => setActivitySearchName(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 pl-9 pr-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Class Filter */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase text-slate-400">Class</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 10-A, 11-B..."
+                      value={activitySearchClass}
+                      onChange={(e) => setActivitySearchClass(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  {/* Date Filter */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase text-slate-400">Date</label>
+                    <input
+                      type="date"
+                      value={activitySearchDate}
+                      onChange={(e) => setActivitySearchDate(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-3 text-xs text-slate-200 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+
+                  {/* Program / Event Filter */}
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold uppercase text-slate-400">Program / Event</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="e.g. Chrome, Youtube, VS Code..."
+                        value={activitySearchProgram}
+                        onChange={(e) => setActivitySearchProgram(e.target.value)}
+                        className="flex-1 bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                      <button
+                        onClick={() => setActivitySearchProgram('youtube')}
+                        className="px-2 py-1.5 bg-red-950/40 hover:bg-red-900/30 border border-red-900/30 hover:border-red-800 text-red-400 rounded-lg text-xs font-bold transition-all"
+                        title="Quick filter Youtube events"
+                      >
+                        YouTube
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Filters / Clear Row */}
+                <div className="flex justify-between items-center text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500">Quick Filters:</span>
+                    <button
+                      onClick={() => setActivitySearchProgram('chrome')}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded text-slate-350 hover:text-white transition-colors"
+                    >
+                      Chrome
+                    </button>
+                    <button
+                      onClick={() => setActivitySearchProgram('code')}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-850 border border-slate-800 rounded text-slate-350 hover:text-white transition-colors"
+                    >
+                      VS Code
+                    </button>
+                    <button
+                      onClick={() => setActivitySearchProgram('cmd')}
+                      className="px-2.5 py-1 bg-slate-900 hover:bg-slate-855 border border-slate-800 rounded text-slate-355 hover:text-white transition-colors"
+                    >
+                      CMD / Terminal
+                    </button>
+                  </div>
+                  {(activitySearchName || activitySearchClass || activitySearchDate || activitySearchProgram) && (
+                    <button
+                      onClick={() => {
+                        setActivitySearchName('')
+                        setActivitySearchClass('')
+                        setActivitySearchDate('')
+                        setActivitySearchProgram('')
+                      }}
+                      className="text-blue-400 hover:text-blue-300 font-bold transition-colors"
+                    >
+                      Clear All Filters
+                    </button>
+                  )}
+                </div>
+
+                {/* Table */}
+                <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden shadow-lg">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 uppercase tracking-wider font-semibold">
+                          <th className="p-3">Last Seen</th>
+                          <th className="p-3">PC</th>
+                          <th className="p-3">Student Name</th>
+                          <th className="p-3">Class</th>
+                          <th className="p-3">Ad.No</th>
+                          <th className="p-3">Active Program / Event</th>
+                          <th className="p-3 text-right">Duration</th>
+                          <th className="p-3 text-center">Foci</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-900 text-slate-200 font-medium">
+                        {filteredLogs.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="p-8 text-center text-slate-500 italic">No activity logs matching these filters.</td>
+                          </tr>
+                        ) : (
+                          filteredLogs.map((log: any) => {
+                            const isYoutube = log.app_title && log.app_title.toLowerCase().includes('youtube')
+                            return (
+                              <tr key={log.id} className="hover:bg-slate-900/30 transition-colors">
+                                <td className="p-3 font-mono text-slate-400">
+                                  {log.last_seen ? new Date(log.last_seen).toLocaleString() : 'N/A'}
+                                </td>
+                                <td className="p-3 font-semibold text-white">
+                                  {log.machine_name || `PC-${log.machine_id}`}
+                                </td>
+                                <td className="p-3 text-slate-100 font-semibold">
+                                  {log.customer_name || 'Guest'}
+                                </td>
+                                <td className="p-3">
+                                  {log.class ? (
+                                    <span className="bg-blue-950/60 text-blue-400 px-2 py-0.5 rounded border border-blue-900/50">
+                                      {log.class}
+                                    </span>
+                                  ) : (
+                                    <span className="text-slate-600 italic">—</span>
+                                  )}
+                                </td>
+                                <td className="p-3 font-mono text-slate-400">
+                                  {log.ad_no || <span className="text-slate-600 italic">—</span>}
+                                </td>
+                                <td className="p-3">
+                                  <div className="flex items-center gap-1.5 max-w-[280px] truncate">
+                                    {isYoutube ? (
+                                      <span className="flex-shrink-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" title="YouTube video active" />
+                                    ) : null}
+                                    <span className={isYoutube ? "text-red-400 font-bold" : "text-white"}>
+                                      {log.app_title}
+                                    </span>
+                                  </div>
+                                </td>
+                                <td className="p-3 text-right font-mono font-bold text-slate-200">
+                                  {log.duration_seconds ? `${Math.round(log.duration_seconds / 60)}m ${log.duration_seconds % 60}s` : '0s'}
+                                </td>
+                                <td className="p-3 text-center font-mono text-slate-400">
+                                  {log.focus_count || 1}
+                                </td>
+                              </tr>
+                            )
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
 
         </main>
 
@@ -3513,6 +3836,14 @@ Respond strictly in JSON format:
                 <History size={18} /> Sessions History
               </button>
               <button
+                onClick={() => { setActiveTab('activity_log'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'activity_log' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <Activity size={18} /> Activity Log
+              </button>
+              <button
                 onClick={() => { setActiveTab('plans'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
                   activeTab === 'plans' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
@@ -3715,6 +4046,29 @@ Respond strictly in JSON format:
                   onChange={(e) => setUserDisplayName(e.target.value)}
                   className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
                 />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Admission No</label>
+                  <input
+                    type="text"
+                    placeholder="Admission No"
+                    value={userAdNo}
+                    onChange={(e) => setUserAdNo(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Class</label>
+                  <input
+                    type="text"
+                    placeholder="Class"
+                    value={userClass}
+                    onChange={(e) => setUserClass(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
