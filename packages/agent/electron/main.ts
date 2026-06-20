@@ -2723,115 +2723,133 @@ function getIslandHtml(sessionData?: any): string {
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       margin: 0;
-      padding: 20px;
+      padding: 10px;
       overflow: hidden;
       font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: transparent;
       display: flex;
       justify-content: center;
+      align-items: flex-start;
       user-select: none;
+      width: 100vw;
+      height: 100vh;
+    }
+    .island-bezel-wrapper {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 5px;
     }
     #dynamic-island-container {
-      background: rgba(15, 15, 15, 0.75);
-      backdrop-filter: blur(20px) saturate(180%);
-      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      background: #000000;
       color: white;
       box-shadow: 
-        0 20px 40px rgba(0, 0, 0, 0.4), 
-        0 0 0 1px rgba(255, 255, 255, 0.1),
+        0 20px 40px rgba(0, 0, 0, 0.6), 
+        0 0 0 1px rgba(255, 255, 255, 0.12),
         inset 0 1px 1px rgba(255, 255, 255, 0.1);
-      transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-      overflow: hidden;
+      /* Organic Apple-replica spring-morphing physics */
+      transition: all 600ms linear(0, 0.402, 0.729, 0.949, 1.054, 1.077, 1.057, 1.025, 0.999, 0.988, 0.992, 0.998, 1);
+      overflow: hidden; /* Strict content masking and clipping */
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      border: 1px solid rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.08);
     }
+    #detached-dot-container {
+      background: #000000;
+      box-shadow: 
+        0 20px 40px rgba(0, 0, 0, 0.6), 
+        0 0 0 1px rgba(255, 255, 255, 0.12);
+      transition: all 600ms linear(0, 0.402, 0.729, 0.949, 1.054, 1.077, 1.057, 1.025, 0.999, 0.988, 0.992, 0.998, 1);
+      overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 50%;
+    }
+    
+    /* Container class dimensions */
     #dynamic-island-container.notch {
       width: 80px;
       height: 8px;
       border-radius: 4px;
-      background: rgba(0, 0, 0, 0.98);
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.8);
+      background: #000000;
       border: none;
+      box-shadow: none;
     }
     #dynamic-island-container.compact {
       width: 180px;
-      height: 36px;
-      border-radius: 18px;
+      height: 37px;
+      border-radius: 19px;
       padding: 0 14px;
+    }
+    #dynamic-island-container.split {
+      width: 125px;
+      height: 37px;
+      border-radius: 19px;
+      padding: 0 14px;
+    }
+    #dynamic-island-container.evaluating {
+      width: 220px;
+      height: 37px;
+      border-radius: 19px;
+      padding: 0 14px;
+      border: 1.5px solid rgba(56, 189, 248, 0.4);
+      box-shadow: 0 8px 24px rgba(56, 189, 248, 0.15);
     }
     #dynamic-island-container.card {
       width: 350px;
-      min-height: 130px;
+      min-height: 140px;
       height: auto;
-      border-radius: 24px;
+      border-radius: 28px;
       padding: 16px;
       align-items: stretch;
     }
     #dynamic-island-container.banner {
       width: 400px;
-      height: 100px;
-      border-radius: 24px;
+      height: 96px;
+      border-radius: 26px;
       padding: 16px;
-      background: rgba(220, 38, 38, 0.8);
-      box-shadow: 
-        0 20px 40px rgba(220, 38, 38, 0.25), 
-        0 0 0 1px rgba(255, 255, 255, 0.2),
-        inset 0 1px 1px rgba(255, 255, 255, 0.2);
+      background: #000000;
+      border: 1.5px solid rgba(239, 68, 68, 0.35);
+      box-shadow: 0 12px 30px rgba(239, 68, 68, 0.15);
       align-items: stretch;
-      border: 1px solid rgba(255, 255, 255, 0.15);
     }
-    #dynamic-island-container.evaluating {
-      width: 200px;
-      height: 36px;
-      border-radius: 18px;
-      padding: 0 14px;
-      background: rgba(15, 23, 42, 0.8);
-      box-shadow: 
-        0 8px 24px rgba(56, 189, 248, 0.2), 
-        0 0 0 1px rgba(56, 189, 248, 0.3),
-        inset 0 1px 1px rgba(255, 255, 255, 0.1);
-      border: 1px solid rgba(56, 189, 248, 0.2);
-    }
-    .notch-content, .compact-content, .card-content, .banner-content, .evaluating-content {
-      display: none;
+
+    /* Detached Dot classes for Split State */
+    #detached-dot-container.inactive {
+      width: 0;
+      height: 0;
       opacity: 0;
-      transition: opacity 0.25s ease-out;
+      transform: scale(0);
+      border: none;
+    }
+    #detached-dot-container.active {
+      width: 37px;
+      height: 37px;
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    /* Content Sequencer */
+    .content-sequencer {
+      opacity: 0;
+      transition: opacity 150ms ease-out;
       width: 100%;
       height: 100%;
+      display: none;
     }
-    #dynamic-island-container.notch .notch-content {
-      display: block;
-      opacity: 1;
-    }
-    #dynamic-island-container.compact .compact-content {
+    .content-sequencer.visible {
       display: flex;
-      align-items: center;
-      justify-content: center;
       opacity: 1;
+      transition: opacity 250ms ease-in;
     }
-    #dynamic-island-container.card .card-content {
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      opacity: 1;
-    }
-    #dynamic-island-container.banner .banner-content {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 14px;
-      opacity: 1;
-    }
-    #dynamic-island-container.evaluating .evaluating-content {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      opacity: 1;
-    }
+
     .spinner {
       width: 14px;
       height: 14px;
@@ -2846,11 +2864,13 @@ function getIslandHtml(sessionData?: any): string {
     .compact-pill-layout {
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
       font-size: 13px;
       font-weight: 600;
       color: rgba(255, 255, 255, 0.95);
       letter-spacing: -0.1px;
+      width: 100%;
     }
     .status-dot {
       width: 7px;
@@ -2865,12 +2885,24 @@ function getIslandHtml(sessionData?: any): string {
       50% { transform: scale(1.3); opacity: 0.7; box-shadow: 0 0 16px #10b981, 0 0 24px rgba(16, 185, 129, 0.6); }
       100% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px #10b981; }
     }
+    .warning-dot-split {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #f59e0b;
+      box-shadow: 0 0 8px #f59e0b;
+      animation: pulse-warn 1s infinite;
+    }
+    @keyframes pulse-warn {
+      0%, 100% { opacity: 0.3; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
+    }
     .card-grid {
       display: flex;
       flex-direction: column;
       height: 100%;
       justify-content: space-between;
-      gap: 10px;
+      gap: 12px;
     }
     .card-header {
       display: flex;
@@ -2939,7 +2971,7 @@ function getIslandHtml(sessionData?: any): string {
       font-size: 12px;
       font-weight: 700;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
       font-family: inherit;
     }
@@ -2960,11 +2992,11 @@ function getIslandHtml(sessionData?: any): string {
       text-align: left;
     }
     .banner-title {
-      font-size: 11px;
+      font-size: 10px;
       font-weight: 800;
       text-transform: uppercase;
       letter-spacing: 0.8px;
-      color: rgba(255, 255, 255, 0.9);
+      color: #f87171;
     }
     .banner-text {
       font-size: 13px;
@@ -2975,26 +3007,24 @@ function getIslandHtml(sessionData?: any): string {
       color: white;
     }
     .dismiss-btn {
-      background: white;
-      color: #dc2626;
-      border: none;
+      background: rgba(255, 255, 255, 0.15);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.1);
       border-radius: 9999px;
-      padding: 8px 18px;
-      font-size: 12px;
-      font-weight: 800;
+      padding: 6px 16px;
+      font-size: 11px;
+      font-weight: 700;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       align-self: center;
       font-family: inherit;
     }
     .dismiss-btn:hover {
-      background: #f8fafc;
-      transform: translateY(-1.5px) scale(1.02);
-      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+      background: rgba(255, 255, 255, 0.25);
+      transform: translateY(-1.5px);
     }
     .dismiss-btn:active {
-      transform: translateY(0) scale(1);
+      transform: translateY(0);
     }
     .log-console {
       background: rgba(0, 0, 0, 0.5);
@@ -3031,7 +3061,7 @@ function getIslandHtml(sessionData?: any): string {
       font-size: 12px;
       font-weight: 700;
       cursor: pointer;
-      transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
       font-family: inherit;
     }
@@ -3046,54 +3076,79 @@ function getIslandHtml(sessionData?: any): string {
   </style>
 </head>
 <body>
-  <div id="dynamic-island-container" class="compact">
-    <div class="notch-content"></div>
-    <div class="evaluating-content">
-      <div class="compact-pill-layout" style="color: #38bdf8; gap: 8px;">
-        <div class="spinner"></div>
-        <span>Checking safety...</span>
+  <div class="island-bezel-wrapper" id="island-bezel-wrapper">
+    <div id="dynamic-island-container" class="compact">
+      <!-- NOTCH CONTENT -->
+      <div class="content-sequencer" id="notch-content-panel"></div>
+      
+      <!-- EVALUATING CONTENT -->
+      <div class="content-sequencer" id="evaluating-content-panel">
+        <div class="compact-pill-layout" style="color: #38bdf8;">
+          <div class="spinner"></div>
+          <span>Checking safety...</span>
+        </div>
       </div>
-    </div>
-    <div class="compact-content">
-      <div class="compact-pill-layout">
-        <div class="status-dot"></div>
-        <span id="compact-time">00:00:00</span>
+      
+      <!-- COMPACT CONTENT -->
+      <div class="content-sequencer visible" id="compact-content-panel">
+        <div class="compact-pill-layout">
+          <div class="status-dot"></div>
+          <span id="compact-time">00:00:00</span>
+        </div>
       </div>
-    </div>
-    <div class="card-content">
-      <div class="card-grid">
-        <div class="card-header">
-          <span class="cust-name" id="card-username">Walk-in</span>
-          <span class="mode-badge" id="card-mode">Prepaid</span>
-        </div>
-        <div class="card-body">
-          <div class="card-info">
-            <div class="info-label">Remaining: <span id="card-time" class="info-val">00:00:00</span></div>
-            <div class="info-label">Started: <span id="card-start" class="info-val">00:00</span></div>
-          </div>
-          <div class="card-cost">
-            <div class="cost-label">Accrued</div>
-            <div class="cost-val" id="card-cost-val">$0.00</div>
-          </div>
-        </div>
-        
-        <!-- Developer Log Panel -->
-        <div id="dev-log-panel" style="display: none;">
-          <div class="log-console" id="island-logs-container"></div>
-        </div>
 
-        <div class="island-buttons">
-          <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
-          <button class="save-log-btn" id="island-save-log-btn" style="display: none;" onclick="saveLog()">Save Log</button>
+      <!-- SPLIT STATE MAIN CAPSULE CONTENT -->
+      <div class="content-sequencer" id="split-content-panel">
+        <div class="compact-pill-layout" style="color: #f59e0b;">
+          <span id="split-time">00:00:00</span>
         </div>
       </div>
-    </div>
-    <div class="banner-content">
-      <div class="banner-body">
-        <div class="banner-title">Alert from Operator</div>
-        <div class="banner-text" id="banner-message-text">Message placeholder</div>
+      
+      <!-- CARD CONTENT -->
+      <div class="content-sequencer" id="card-content-panel">
+        <div class="card-grid">
+          <div class="card-header">
+            <span class="cust-name" id="card-username">Walk-in</span>
+            <span class="mode-badge" id="card-mode">Prepaid</span>
+          </div>
+          <div class="card-body">
+            <div class="card-info">
+              <div class="info-label">Remaining: <span id="card-time" class="info-val">00:00:00</span></div>
+              <div class="info-label">Started: <span id="card-start" class="info-val">00:00</span></div>
+            </div>
+            <div class="card-cost">
+              <div class="cost-label">Accrued</div>
+              <div class="cost-val" id="card-cost-val">$0.00</div>
+            </div>
+          </div>
+          
+          <!-- Developer Log Panel -->
+          <div id="dev-log-panel" style="display: none;">
+            <div class="log-console" id="island-logs-container"></div>
+          </div>
+  
+          <div class="island-buttons">
+            <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
+            <button class="save-log-btn" id="island-save-log-btn" style="display: none;" onclick="saveLog()">Save Log</button>
+          </div>
+        </div>
       </div>
-      <button class="dismiss-btn" onclick="dismissBanner()">OK</button>
+      
+      <!-- BANNER CONTENT -->
+      <div class="content-sequencer" id="banner-content-panel">
+        <div class="banner-body">
+          <div class="banner-title" id="banner-message-title">Alert from Operator</div>
+          <div class="banner-text" id="banner-message-text">Message placeholder</div>
+        </div>
+        <button class="dismiss-btn" onclick="dismissBanner()">OK</button>
+      </div>
+    </div>
+
+    <!-- DETACHED DOT PILL FOR SPLIT STATE -->
+    <div id="detached-dot-container" class="inactive">
+      <div class="content-sequencer" id="split-dot-content" style="align-items: center; justify-content: center;">
+        <div class="warning-dot-split"></div>
+      </div>
     </div>
   </div>
 
@@ -3111,8 +3166,11 @@ function getIslandHtml(sessionData?: any): string {
     let isFullscreen = false;
     let operatorMessage = '';
     let isEvaluating = false;
+    let currentState = 'compact';
+    let bannerTimer = null;
 
     const container = document.getElementById('dynamic-island-container');
+    const wrapper = document.getElementById('island-bezel-wrapper');
 
     container.addEventListener('mouseenter', () => {
       if (operatorMessage || isEvaluating) return;
@@ -3128,21 +3186,71 @@ function getIslandHtml(sessionData?: any): string {
     document.addEventListener('mousemove', (e) => {
       const rect = container.getBoundingClientRect();
       const isInside = (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
-      ipcRenderer.send('island-mouse', !isInside);
+      // Include detached dot in mouse interaction bounds if split state is active
+      const detached = document.getElementById('detached-dot-container');
+      let isInsideDetached = false;
+      if (currentState === 'split') {
+        const dRect = detached.getBoundingClientRect();
+        isInsideDetached = (e.clientX >= dRect.left && e.clientX <= dRect.right && e.clientY >= dRect.top && e.clientY <= dRect.bottom);
+      }
+      ipcRenderer.send('island-mouse', !(isInside || isInsideDetached));
     });
 
+    function getRemainingSec() {
+      if (!session || session.mode !== 'prepaid') return Infinity;
+      const now = Date.now();
+      const startMs = new Date(session.startTime).getTime();
+      const elapsedSec = Math.max(0, Math.floor((now - startMs) / 1000));
+      const totalDurationSec = (session.durationMinutes || 0) * 60;
+      return Math.max(0, totalDurationSec - elapsedSec);
+    }
+
     function updateState() {
+      let newState = 'compact';
       if (operatorMessage) {
-        container.className = 'banner';
+        newState = 'banner';
       } else if (isEvaluating) {
-        container.className = 'evaluating';
+        newState = 'evaluating';
       } else if (isHovered) {
-        container.className = 'card';
+        newState = 'card';
       } else if (isFullscreen) {
-        container.className = 'notch';
+        newState = 'notch';
+      } else if (session && session.mode === 'prepaid' && getRemainingSec() < 300) {
+        // Less than 5 minutes remaining -> split state warnings
+        newState = 'split';
       } else {
-        container.className = 'compact';
+        newState = 'compact';
       }
+
+      if (newState === currentState) return;
+
+      // Phase 1: Fade out old content immediately (150ms opacity transition)
+      const contents = document.querySelectorAll('.content-sequencer');
+      contents.forEach(el => el.classList.remove('visible'));
+
+      // Phase 2: Start morphing container dimensions (600ms transition)
+      currentState = newState;
+      container.className = currentState;
+      
+      const detached = document.getElementById('detached-dot-container');
+      if (currentState === 'split') {
+        detached.className = 'active';
+      } else {
+        detached.className = 'inactive';
+      }
+
+      // Phase 3: Wait 400ms (morph is mostly complete) before fading in new content
+      setTimeout(() => {
+        if (currentState === newState) {
+          const newContent = document.getElementById(currentState + '-content-panel');
+          if (newContent) newContent.classList.add('visible');
+          
+          if (currentState === 'split') {
+            const dotContent = document.getElementById('split-dot-content');
+            if (dotContent) dotContent.classList.add('visible');
+          }
+        }
+      }, 400);
     }
 
     function formatTime(seconds) {
@@ -3165,10 +3273,9 @@ function getIslandHtml(sessionData?: any): string {
       
       let timeStr = '';
       let costStr = '$0.00';
+      const remainingSec = getRemainingSec();
       
       if (session.mode === 'prepaid') {
-        const totalDurationSec = (session.durationMinutes || 0) * 60;
-        const remainingSec = Math.max(0, totalDurationSec - elapsedSec);
         timeStr = formatTime(remainingSec);
         costStr = session.planPrice ? '$' + Number(session.planPrice).toFixed(2) : '$0.00';
         
@@ -3186,6 +3293,9 @@ function getIslandHtml(sessionData?: any): string {
       
       const compactTimeEl = document.getElementById('compact-time');
       if (compactTimeEl) compactTimeEl.innerText = timeStr;
+
+      const splitTimeEl = document.getElementById('split-time');
+      if (splitTimeEl) splitTimeEl.innerText = timeStr;
       
       const cardTimeEl = document.getElementById('card-time');
       if (cardTimeEl) cardTimeEl.innerText = timeStr;
@@ -3208,6 +3318,9 @@ function getIslandHtml(sessionData?: any): string {
       const username = session.user || 'Guest';
       const cardUserEl = document.getElementById('card-username');
       if (cardUserEl) cardUserEl.innerText = username;
+
+      // Automatically re-evaluate state if low time triggered split state
+      updateState();
     }
 
     function requestExitSession() {
@@ -3220,6 +3333,10 @@ function getIslandHtml(sessionData?: any): string {
 
     function dismissBanner() {
       operatorMessage = '';
+      if (bannerTimer) {
+        clearTimeout(bannerTimer);
+        bannerTimer = null;
+      }
       updateState();
     }
 
@@ -3240,9 +3357,25 @@ function getIslandHtml(sessionData?: any): string {
 
     ipcRenderer.on('show-message', (event, msg) => {
       operatorMessage = msg;
+      
+      // Check if it's a safety guard warning message
+      const isWarning = msg.includes('Safety Violation Warning') || msg.includes('not allowed');
+      const titleEl = document.getElementById('banner-message-title');
+      if (titleEl) {
+        titleEl.innerText = isWarning ? 'Safety Warning' : 'Alert from Operator';
+        titleEl.style.color = isWarning ? '#ef4444' : '#60a5fa';
+      }
+
       const msgEl = document.getElementById('banner-message-text');
       if (msgEl) msgEl.innerText = msg;
+      
       updateState();
+
+      // Automatically dismiss operator message banners after 2.5 seconds as per spec
+      if (bannerTimer) clearTimeout(bannerTimer);
+      bannerTimer = setTimeout(() => {
+        dismissBanner();
+      }, 2500);
     });
 
     ipcRenderer.on('agent-log-updated', (event, logEntry) => {
@@ -3260,13 +3393,14 @@ function getIslandHtml(sessionData?: any): string {
       }
     });
 
+    // Observe wrapper instead of container to account for split dot width!
     const resizeObserver = new ResizeObserver(entries => {
       for (let entry of entries) {
         const { width, height } = entry.contentRect;
-        ipcRenderer.send('resize-island', { width: Math.ceil(width) + 40, height: Math.ceil(height) + 40 });
+        ipcRenderer.send('resize-island', { width: Math.ceil(width) + 30, height: Math.ceil(height) + 30 });
       }
     });
-    resizeObserver.observe(container);
+    resizeObserver.observe(wrapper);
 
     setInterval(updateUI, 1000);
     updateUI();

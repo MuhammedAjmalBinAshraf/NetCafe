@@ -404,16 +404,22 @@ function handleClientMessage(socket: net.Socket, data: any) {
         const apiKey = db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get()?.value
         
         if (safetyEnabled && apiKey && apiKey.trim()) {
-          const title = data.payload.activeWindow || ''
+          const title = (data.payload.activeWindow || '').trim()
           let query = ''
-          if (title.endsWith(' - Google Search')) {
-            query = title.substring(0, title.length - ' - Google Search'.length)
-          } else if (title.endsWith(' - YouTube')) {
-            query = title.substring(0, title.length - ' - YouTube'.length)
-          } else if (title.endsWith(' - Bing')) {
-            query = title.substring(0, title.length - ' - Bing'.length)
-          } else if (title.includes(' - Yahoo Search') || title.includes('| Yahoo Search Results')) {
-            query = title.replace(' - Yahoo Search', '').replace('| Yahoo Search Results', '').trim()
+          
+          const googleMatch = title.match(/^(.*?)(?: - Google Search)(?: - (?:Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi|Safari|Internet Explorer))?$/i)
+          const youtubeMatch = title.match(/^(.*?)(?: - YouTube)(?: - (?:Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi|Safari|Internet Explorer))?$/i)
+          const bingMatch = title.match(/^(.*?)(?: - Bing)(?: - (?:Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi|Safari|Internet Explorer))?$/i)
+          const yahooMatch = title.match(/^(.*?)(?: - Yahoo Search| \| Yahoo Search Results)(?: - (?:Google Chrome|Microsoft Edge|Mozilla Firefox|Brave|Opera|Vivaldi|Safari|Internet Explorer))?$/i)
+
+          if (googleMatch) {
+            query = googleMatch[1].trim()
+          } else if (youtubeMatch) {
+            query = youtubeMatch[1].trim()
+          } else if (bingMatch) {
+            query = bingMatch[1].trim()
+          } else if (yahooMatch) {
+            query = yahooMatch[1].trim()
           }
 
           if (query && query.trim()) {
@@ -1099,6 +1105,44 @@ function startPublicTunnel() {
   });
 }
 
+function startPrepaidSessionMonitor() {
+  setInterval(() => {
+    if (!db) return
+    try {
+      const expiredSessions = db.prepare(`
+        SELECT s.id as session_id, s.machine_id, s.customer_name, 
+               COALESCE(p.duration_minutes, s.custom_duration) as duration_minutes,
+               (strftime('%s', 'now') - strftime('%s', s.start_time)) as elapsed_seconds
+        FROM sessions s
+        LEFT JOIN plans p ON s.plan_id = p.id
+        WHERE s.status = 'active' AND s.mode = 'prepaid' AND s.end_time IS NULL
+      `).all() as any[]
+
+      for (const sess of expiredSessions) {
+        const durationSec = (sess.duration_minutes || 0) * 60
+        if (sess.elapsed_seconds >= durationSec) {
+          logToUI(`[Monitor] Prepaid session expired for user "${sess.customer_name}" on machine ID ${sess.machine_id}. Automatically locking terminal.`)
+          
+          db.prepare(`
+            UPDATE sessions 
+            SET end_time = datetime('now'), 
+                status = 'completed' 
+            WHERE id = ?
+          `).run(sess.session_id)
+          
+          db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(sess.machine_id)
+          
+          sendCommandToMachine(sess.machine_id, { command: 'lock' })
+          sendCommandToMachine(sess.machine_id, { command: 'message', payload: "Your prepaid session has ended. Please visit the front desk to extend your time." })
+          broadcastMachines()
+        }
+      }
+    } catch (err: any) {
+      console.error('Prepaid session monitor error:', err)
+    }
+  }, 2000)
+}
+
 app.whenReady().then(async () => {
   setupDatabase()
   
@@ -1121,6 +1165,7 @@ app.whenReady().then(async () => {
   startUdpBroadcast()
   startWebServer()
   startPublicTunnel()
+  startPrepaidSessionMonitor()
 
   // Auto Updater logic for Server
   autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
