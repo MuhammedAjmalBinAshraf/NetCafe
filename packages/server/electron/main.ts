@@ -1969,7 +1969,7 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");

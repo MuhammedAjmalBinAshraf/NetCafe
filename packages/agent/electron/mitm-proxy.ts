@@ -123,6 +123,107 @@ function getBlockPageHtml(query: string): string {
 </html>`;
 }
 
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+function getCheckingPageHtml(query: string): string {
+  const escQ = escapeHtml(query);
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Checking Security...</title>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      overflow: hidden;
+    }
+    .card {
+      background: rgba(22, 30, 49, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 20px;
+      padding: 35px;
+      max-width: 440px;
+      width: 90%;
+      box-shadow: 0 15px 35px rgba(0, 0, 0, 0.5), inset 0 1px 1px rgba(255, 255, 255, 0.1);
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .spinner {
+      position: relative;
+      width: 50px;
+      height: 50px;
+      margin-bottom: 20px;
+    }
+    .double-bounce1, .double-bounce2 {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background-color: #3b82f6;
+      opacity: 0.6;
+      position: absolute;
+      top: 0;
+      left: 0;
+      animation: sk-bounce 2.0s infinite ease-in-out;
+    }
+    .double-bounce2 {
+      animation-delay: -1.0s;
+      background-color: #60a5fa;
+    }
+    @keyframes sk-bounce {
+      0%, 100% { transform: scale(0.0); }
+      50% { transform: scale(1.0); }
+    }
+    h1 {
+      font-size: 19px;
+      margin: 0 0 10px 0;
+      color: #60a5fa;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+    }
+    p {
+      font-size: 13.5px;
+      line-height: 1.5;
+      color: #94a3b8;
+      margin: 0 0 15px 0;
+    }
+    .query-tag {
+      background: rgba(59, 130, 246, 0.1);
+      border: 1px solid rgba(59, 130, 246, 0.25);
+      border-radius: 8px;
+      padding: 6px 12px;
+      font-family: monospace;
+      font-size: 12.5px;
+      color: #93c5fd;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="spinner">
+      <div class="double-bounce1"></div>
+      <div class="double-bounce2"></div>
+    </div>
+    <h1>Checking Security</h1>
+    <p>Evaluating safety rules for your search query.</p>
+    <div class="query-tag">"${escQ}"</div>
+  </div>
+</body>
+</html>`;
+}
+
 export class MitmProxy {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private caKey!: any;
@@ -132,6 +233,23 @@ export class MitmProxy {
   private certCache = new Map<string, { key: string; cert: string }>();
   private server!: http.Server;
   private running = false;
+  private recentlyAllowed = new Map<string, number>();
+
+  private isRecentlyAllowed(query: string): boolean {
+    const now = Date.now();
+    const expiry = this.recentlyAllowed.get(query.toLowerCase());
+    if (expiry && now < expiry) {
+      return true;
+    }
+    if (expiry && now >= expiry) {
+      this.recentlyAllowed.delete(query.toLowerCase());
+    }
+    return false;
+  }
+
+  private addRecentlyAllowed(query: string): void {
+    this.recentlyAllowed.set(query.toLowerCase(), Date.now() + 15000);
+  }
 
   constructor(
     private readonly dataDir: string,
@@ -389,31 +507,98 @@ export class MitmProxy {
           if (match) {
             const query = extractSearchQuery(hostname, match[1]);
             if (query) {
-              this.log(`[Proxy] 🔍 HTTPS query intercepted (${hostname}): "${query}"`);
-              clientTls.pause();
-              try {
-                const allowed = await this.onQuery(query);
-                if (!allowed) {
-                  const blockHtml = getBlockPageHtml(query);
-                  const httpResponse = [
-                    'HTTP/1.1 200 OK',
-                    'Content-Type: text/html; charset=utf-8',
-                    `Content-Length: ${Buffer.byteLength(blockHtml)}`,
-                    'Connection: close',
-                    '',
-                    blockHtml
-                  ].join('\r\n');
+              if (this.isRecentlyAllowed(query)) {
+                this.log(`[Proxy] Query "${query}" is recently allowed. Bypassing check.`);
+              } else {
+                this.log(`[Proxy] 🔍 HTTPS query intercepted (${hostname}): "${query}". Showing check screen...`);
+                clientTls.pause();
+                
+                const checkHtml = getCheckingPageHtml(query);
+                const initialResponse = [
+                  'HTTP/1.1 200 OK',
+                  'Content-Type: text/html; charset=utf-8',
+                  'Connection: close',
+                  '',
+                  checkHtml.replace('</body>\n</html>', '') // strip closing tags to write redirect script later
+                ].join('\r\n');
+                
+                try {
                   if (!clientTls.destroyed) {
-                    clientTls.write(httpResponse);
-                    clientTls.end();
+                    clientTls.write(initialResponse);
                   }
+                } catch (e: any) {
+                  this.log(`[Proxy] Error writing initial response: ${e.message}`);
                   realSocket.end();
+                  clientTls.resume();
                   return;
                 }
-              } catch (err: any) {
-                this.log(`[Proxy] Safety check error: ${err.message}. Allowing query for safety fallback.`);
-              } finally {
-                clientTls.resume();
+                
+                (async () => {
+                  try {
+                    const allowed = await this.onQuery(query);
+                    if (allowed) {
+                      this.addRecentlyAllowed(query);
+                      const redirectUrl = `https://${hostname}${match[1]}`;
+                      const successScript = `
+                        <script>
+                          window.location.replace(${JSON.stringify(redirectUrl)});
+                        </script>
+                        </body>
+                        </html>
+                      `;
+                      try {
+                        if (!clientTls.destroyed) {
+                          clientTls.write(successScript);
+                          clientTls.end();
+                        }
+                      } catch {}
+                    } else {
+                      const blockHtmlInner = `
+                        <div class="card" style="border-color: #ef4444;">
+                          <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>
+                          <h1 style="color: #f87171;">Search Query Blocked</h1>
+                          <p>The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.</p>
+                          <div class="query-tag" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25); color: #f87171;">"${escapeHtml(query)}"</div>
+                          <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+                        </div>
+                      `;
+                      const failScript = `
+                        <script>
+                          document.body.innerHTML = ${JSON.stringify(blockHtmlInner)};
+                        </script>
+                        </body>
+                        </html>
+                      `;
+                      try {
+                        if (!clientTls.destroyed) {
+                          clientTls.write(failScript);
+                          clientTls.end();
+                        }
+                      } catch {}
+                    }
+                  } catch (err: any) {
+                    this.log(`[Proxy] Safety check error: ${err.message}. Allowing query for safety fallback.`);
+                    this.addRecentlyAllowed(query);
+                    const redirectUrl = `https://${hostname}${match[1]}`;
+                    const fallbackScript = `
+                      <script>
+                        window.location.replace(${JSON.stringify(redirectUrl)});
+                      </script>
+                      </body>
+                      </html>
+                    `;
+                    try {
+                      if (!clientTls.destroyed) {
+                        clientTls.write(fallbackScript);
+                        clientTls.end();
+                      }
+                    } catch {}
+                  } finally {
+                    try { realSocket.end(); } catch {}
+                    clientTls.resume();
+                  }
+                })();
+                return;
               }
             }
           }
