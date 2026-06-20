@@ -1,87 +1,87 @@
 {
-    "name":  "agent",
-    "version":  "1.0.74",
-    "main":  "dist/main.js",
-    "description":  "NetCafe Agent application",
-    "author":  "Muhammed Ajmal Bin Ashraf \u003cajmalmohammed13166@gmail.com\u003e",
-    "homepage":  "https://github.com/MuhammedAjmalBinAshraf/NetCafe",
-    "repository":  {
-                       "type":  "git",
-                       "url":  "git+https://github.com/MuhammedAjmalBinAshraf/NetCafe.git"
-                   },
-    "scripts":  {
-                    "start":  "electron .",
-                    "build":  "tsc",
-                    "build:win":  "tsc \u0026\u0026 electron-builder --win -p never",
-                    "build:linux":  "tsc \u0026\u0026 electron-builder --linux -p never",
-                    "build:win:ci":  "tsc \u0026\u0026 electron-builder --win -p always",
-                    "build:linux:ci":  "tsc \u0026\u0026 electron-builder --linux -p always"
-                },
-    "dependencies":  {
-                         "ws":  "^8.16.0",
-                         "electron-updater":  "^6.1.8",
-                         "node-forge":  "^1.3.1",
-                         "node-windows":  "^1.0.0-beta.8"
-                     },
-    "devDependencies":  {
-                            "electron":  "^30.0.0",
-                            "electron-builder":  "^24.13.3",
-                            "typescript":  "^5.4.5",
-                            "@types/ws":  "^8.5.10",
-                            "@types/node":  "^20.12.7",
-                            "@types/node-forge":  "^1.3.11"
-                        },
-    "build":  {
-                  "appId":  "com.netcafe.agent",
-                  "productName":  "NetCafe Agent",
-                  "directories":  {
-                                      "output":  "release"
-                                  },
-                  "files":  [
-                                "dist/**/*"
-                            ],
-                  "win":  {
-                              "requestedExecutionLevel":  "requireAdministrator",
-                              "target":  [
-                                             {
-                                                 "target":  "nsis",
-                                                 "arch":  [
-                                                              "x64"
-                                                          ]
-                                             }
-                                         ]
-                          },
-                  "nsis":  {
-                               "oneClick":  false,
-                               "allowToChangeInstallationDirectory":  true,
-                               "runAfterFinish":  false,
-                               "include":  "installer.nsh"
-                           },
-                  "extraResources":  [
-                                         {
-                                             "from":  "kiosk-setup.ps1",
-                                             "to":  "kiosk-setup.ps1"
-                                         },
-                                         {
-                                             "from":  "kiosk-uninstall.ps1",
-                                             "to":  "kiosk-uninstall.ps1"
-                                         }
-                                     ],
-                  "asarUnpack":  [
-                                     "node_modules/node-windows/**/*"
-                                 ],
-                  "linux":  {
-                                "target":  [
-                                               "AppImage",
-                                               "deb"
-                                           ],
-                                "category":  "Utility"
-                            },
-                  "publish":  {
-                                  "provider":  "github",
-                                  "owner":  "MuhammedAjmalBinAshraf",
-                                  "repo":  "NetCafe",
-                                  "channel":  "latest-agent"
-                              }
-              }
+  "name": "agent",
+  "version": "1.0.75",
+  "main": "dist/main.js",
+  "description": "NetCafe Agent application",
+  "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
+  "homepage": "https://github.com/MuhammedAjmalBinAshraf/NetCafe",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MuhammedAjmalBinAshraf/NetCafe.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "build": "tsc",
+    "build:win": "tsc && electron-builder --win -p never",
+    "build:linux": "tsc && electron-builder --linux -p never",
+    "build:win:ci": "tsc && electron-builder --win -p always",
+    "build:linux:ci": "tsc && electron-builder --linux -p always"
+  },
+  "dependencies": {
+    "ws": "^8.16.0",
+    "electron-updater": "^6.1.8",
+    "node-forge": "^1.3.1",
+    "node-windows": "^1.0.0-beta.8"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.4.5",
+    "@types/ws": "^8.5.10",
+    "@types/node": "^20.12.7",
+    "@types/node-forge": "^1.3.11"
+  },
+  "build": {
+    "appId": "com.netcafe.agent",
+    "productName": "NetCafe Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*"
+    ],
+    "win": {
+      "requestedExecutionLevel": "requireAdministrator",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": false,
+      "include": "installer.nsh"
+    },
+    "extraResources": [
+      {
+        "from": "kiosk-setup.ps1",
+        "to": "kiosk-setup.ps1"
+      },
+      {
+        "from": "kiosk-uninstall.ps1",
+        "to": "kiosk-uninstall.ps1"
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/node-windows/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "MuhammedAjmalBinAshraf",
+      "repo": "NetCafe",
+      "channel": "latest-agent"
+    }
+  }
 }

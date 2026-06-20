@@ -598,8 +598,8 @@ function createLockWindow() {
 
 
     <div class="footer" style="display:flex;justify-content:space-between;align-items:center;margin-top:1.25rem;">
-      <button id="shutdownBtn" title="Shutdown PC" style="background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.25);border-radius:8px;color:#fca5a5;padding:0.35rem 0.65rem;font-family:'Inter', sans-serif;font-size:0.75rem;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:0.35rem;transition:background 0.15s, border-color 0.15s;" onmouseover="this.style.background='rgba(239,68,68,0.2)'" onmouseout="this.style.background='rgba(239,68,68,0.1)'">
-        <span>⏻</span> <span>Shutdown</span>
+      <button id="shutdownBtn" title="Shutdown/Restart is disabled" style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);border-radius:8px;color:#64748b;padding:0.35rem 0.65rem;font-family:'Inter', sans-serif;font-size:0.75rem;font-weight:700;cursor:not-allowed;display:flex;align-items:center;gap:0.35rem;">
+        <span>⏻</span> <span>Shutdown (Disabled)</span>
       </button>
       <span style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.25);color:#60a5fa;padding:0.2rem 0.75rem;border-radius:9999px;font-size:0.68rem;font-weight:600;letter-spacing:0.04em;">v${app.getVersion()}</span>
     </div>
@@ -760,14 +760,11 @@ function createLockWindow() {
       // ── Shutdown Button Logic ────────────────────────────────────────────────
       const shutdownBtn = document.getElementById('shutdownBtn');
       if (shutdownBtn) {
-        shutdownBtn.addEventListener('click', async () => {
-          const confirmShutdown = confirm('Are you sure you want to shut down this PC?');
-          if (confirmShutdown) {
-            try {
-              await ipcRenderer.invoke('system-shutdown');
-            } catch (err) {
-              alert('Failed to execute shutdown command.');
-            }
+        shutdownBtn.addEventListener('click', () => {
+          alert('Shutdown and Restart options are disabled on this terminal. Please use Member Login.');
+          const usernameEl = document.getElementById('username');
+          if (usernameEl) {
+            usernameEl.focus();
           }
         });
       }
@@ -1350,6 +1347,14 @@ async function handleServerMessage(msg: any) {
         } catch (e: any) {
           logToUI(`Failed to persist operator password: ${e.message}`);
         }
+      }
+    } else if (msg.command === 'trigger-update') {
+      // Server requested a software update check — trigger auto-updater
+      logToUI('Server triggered remote update check. Running autoUpdater...');
+      try {
+        autoUpdater.checkForUpdates().catch((err: any) => logToUI(`Remote update check failed: ${err.message}`));
+      } catch (e: any) {
+        logToUI(`autoUpdater.checkForUpdates error: ${e.message}`);
       }
     }
   } catch (e) {
@@ -1992,7 +1997,8 @@ async function handleActiveWindowChanged(newTitle: string) {
         resolution,
         timestamp: new Date().toISOString(),
         processesStarted: processChanges.started,
-        processesClosed: processChanges.closed
+        processesClosed: processChanges.closed,
+        version: app.getVersion()
       }
     });
   }
@@ -2499,7 +2505,8 @@ app.whenReady().then(async () => {
           resolution,
           timestamp: new Date().toISOString(),
           processesStarted: processChanges.started,
-          processesClosed: processChanges.closed
+          processesClosed: processChanges.closed,
+          version: app.getVersion()
         }
       });
     }
@@ -2718,711 +2725,329 @@ function getIslandHtml(sessionData?: any): string {
   <meta charset="UTF-8">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
-      margin: 0;
-      padding: 10px;
+      margin: 0; padding: 8px 12px;
       overflow: hidden;
-      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       background: transparent;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      user-select: none;
-      width: 100vw;
-      height: 100vh;
+      display: flex; justify-content: center; align-items: flex-start;
+      user-select: none; width: 100vw; height: 100vh;
     }
-    .island-bezel-wrapper {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      padding: 5px;
-    }
-    #dynamic-island-container {
-      background: #000000;
-      color: white;
-      box-shadow: 
-        0 20px 40px rgba(0, 0, 0, 0.6), 
-        0 0 0 1px rgba(255, 255, 255, 0.12),
-        inset 0 1px 1px rgba(255, 255, 255, 0.1);
-      /* Organic Apple-replica spring-morphing physics */
-      transition: all 600ms linear(0, 0.402, 0.729, 0.949, 1.054, 1.077, 1.057, 1.025, 0.999, 0.988, 0.992, 0.998, 1);
-      overflow: hidden; /* Strict content masking and clipping */
-      box-sizing: border-box;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-    }
-    #detached-dot-container {
-      background: #000000;
-      box-shadow: 
-        0 20px 40px rgba(0, 0, 0, 0.6), 
-        0 0 0 1px rgba(255, 255, 255, 0.12);
-      transition: all 600ms linear(0, 0.402, 0.729, 0.949, 1.054, 1.077, 1.057, 1.025, 0.999, 0.988, 0.992, 0.998, 1);
-      overflow: hidden;
-      box-sizing: border-box;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 50%;
-    }
-    
-    /* Container class dimensions */
-    #dynamic-island-container.notch {
-      width: 80px;
-      height: 8px;
-      border-radius: 4px;
-      background: #000000;
-      border: none;
-      box-shadow: none;
-    }
-    #dynamic-island-container.compact {
-      width: 180px;
-      height: 37px;
-      border-radius: 19px;
-      padding: 0 14px;
-    }
-    #dynamic-island-container.split {
-      width: 125px;
-      height: 37px;
-      border-radius: 19px;
-      padding: 0 14px;
-    }
-    #dynamic-island-container.evaluating {
-      width: 220px;
-      height: 37px;
-      border-radius: 19px;
-      padding: 0 14px;
-      border: 1.5px solid rgba(56, 189, 248, 0.4);
-      box-shadow: 0 8px 24px rgba(56, 189, 248, 0.15);
-    }
-    #dynamic-island-container.card {
-      width: 350px;
-      min-height: 140px;
-      height: auto;
-      border-radius: 28px;
-      padding: 16px;
-      align-items: stretch;
-    }
-    #dynamic-island-container.banner {
-      width: 400px;
-      height: 96px;
-      border-radius: 26px;
-      padding: 16px;
-      background: #000000;
-      border: 1.5px solid rgba(239, 68, 68, 0.35);
-      box-shadow: 0 12px 30px rgba(239, 68, 68, 0.15);
-      align-items: stretch;
-    }
+    .island-row { display: flex; align-items: flex-start; justify-content: center; gap: 10px; }
 
-    /* Detached Dot classes for Split State */
-    #detached-dot-container.inactive {
-      width: 0;
-      height: 0;
-      opacity: 0;
-      transform: scale(0);
-      border: none;
+    #island {
+      background: #000; color: #fff;
+      overflow: hidden; display: flex; align-items: center; justify-content: center;
+      border: 1px solid rgba(255,255,255,0.09);
+      box-shadow: 0 0 0 0.5px rgba(255,255,255,0.06) inset, 0 16px 40px rgba(0,0,0,0.72), 0 2px 8px rgba(0,0,0,0.5);
+      transition:
+        width  560ms cubic-bezier(0.34,1.56,0.64,1),
+        height 560ms cubic-bezier(0.34,1.56,0.64,1),
+        border-radius 560ms cubic-bezier(0.34,1.56,0.64,1),
+        border 250ms ease, box-shadow 300ms ease;
+      will-change: width, height, border-radius;
+      position: relative;
     }
-    #detached-dot-container.active {
-      width: 37px;
-      height: 37px;
-      opacity: 1;
-      transform: scale(1);
+    #dot {
+      background: #000; border: 1px solid rgba(255,255,255,0.09); border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.6);
+      transition: width 500ms cubic-bezier(0.34,1.56,0.64,1), height 500ms cubic-bezier(0.34,1.56,0.64,1),
+        opacity 300ms ease, transform 500ms cubic-bezier(0.34,1.56,0.64,1);
+      overflow: hidden; flex-shrink: 0;
     }
+    #dot.hidden  { width:0; height:0; opacity:0; transform:scale(0.3); border:none; box-shadow:none; }
+    #dot.visible { width:37px; height:37px; opacity:1; transform:scale(1); }
 
-    /* Content Sequencer */
-    .content-sequencer {
-      opacity: 0;
-      transition: opacity 150ms ease-out;
-      width: 100%;
-      height: 100%;
-      display: none;
-    }
-    .content-sequencer.visible {
-      display: flex;
-      opacity: 1;
-      transition: opacity 250ms ease-in;
-    }
+    /* State dimensions */
+    #island.s-notch   { width:90px;  height:8px;   border-radius:4px;   border:none; box-shadow:none; background:#070707; }
+    #island.s-compact { width:186px; height:36px;  border-radius:999px; }
+    #island.s-split   { width:122px; height:36px;  border-radius:999px; }
+    #island.s-check   { width:232px; height:36px;  border-radius:999px;
+      border:1.5px solid rgba(56,189,248,0.35);
+      box-shadow:0 0 0 0.5px rgba(255,255,255,0.06) inset,0 0 22px rgba(56,189,248,0.2),0 16px 40px rgba(0,0,0,0.72); }
+    #island.s-card    { width:342px; height:175px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:8px; }
+    #island.s-banner  { width:372px; height:78px;  border-radius:22px; padding:0 16px;
+      border:1.5px solid rgba(239,68,68,0.3);
+      box-shadow:0 0 0 0.5px rgba(255,255,255,0.06) inset,0 0 24px rgba(239,68,68,0.15),0 16px 40px rgba(0,0,0,0.72); }
 
-    .spinner {
-      width: 14px;
-      height: 14px;
-      border: 2px solid rgba(56, 189, 248, 0.2);
-      border-top-color: #38bdf8;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
+    .panel {
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      opacity:0; pointer-events:none;
+      transition:opacity 140ms ease-out;
+      width:100%; height:100%;
     }
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-    .compact-pill-layout {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      font-size: 13px;
-      font-weight: 600;
-      color: rgba(255, 255, 255, 0.95);
-      letter-spacing: -0.1px;
-      width: 100%;
-    }
-    .status-dot {
-      width: 7px;
-      height: 7px;
-      border-radius: 50%;
-      background: #10b981;
-      box-shadow: 0 0 10px #10b981, 0 0 20px rgba(16, 185, 129, 0.5);
-      animation: pulse-glowing 2s infinite;
-    }
-    @keyframes pulse-glowing {
-      0% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px #10b981; }
-      50% { transform: scale(1.3); opacity: 0.7; box-shadow: 0 0 16px #10b981, 0 0 24px rgba(16, 185, 129, 0.6); }
-      100% { transform: scale(1); opacity: 1; box-shadow: 0 0 10px #10b981; }
-    }
-    .warning-dot-split {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #f59e0b;
-      box-shadow: 0 0 8px #f59e0b;
-      animation: pulse-warn 1s infinite;
-    }
-    @keyframes pulse-warn {
-      0%, 100% { opacity: 0.3; transform: scale(0.9); }
-      50% { opacity: 1; transform: scale(1.2); }
-    }
-    .card-grid {
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .card-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-    .cust-name {
-      font-weight: 700;
-      font-size: 14px;
-      letter-spacing: -0.3px;
-      color: rgba(255, 255, 255, 0.95);
-    }
-    .mode-badge {
-      font-size: 10px;
-      font-weight: 700;
-      padding: 3px 8px;
-      border-radius: 9999px;
-      background: rgba(255, 255, 255, 0.12);
-      text-transform: uppercase;
-      letter-spacing: 0.4px;
-    }
-    .card-body {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-top: 2px;
-    }
-    .card-info {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-    }
-    .info-label {
-      font-size: 11px;
-      color: rgba(255, 255, 255, 0.55);
-      font-weight: 500;
-    }
-    .info-val {
-      font-weight: 700;
-      color: white;
-      font-variant-numeric: tabular-nums;
-    }
-    .card-cost {
-      text-align: right;
-    }
-    .cost-label {
-      font-size: 10px;
-      color: rgba(255, 255, 255, 0.55);
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.3px;
-    }
-    .cost-val {
-      font-size: 16px;
-      font-weight: 800;
-      color: #34d399;
-      text-shadow: 0 0 12px rgba(52, 211, 153, 0.3);
-    }
-    .exit-btn {
-      width: 100%;
-      background: linear-gradient(135deg, #ef4444, #dc2626);
-      color: white;
-      border: none;
-      border-radius: 9999px;
-      padding: 8px 16px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
-      font-family: inherit;
-    }
-    .exit-btn:hover {
-      background: linear-gradient(135deg, #dc2626, #b91c1c);
-      transform: translateY(-1.5px);
-      box-shadow: 0 6px 16px rgba(239, 68, 68, 0.4);
-    }
-    .exit-btn:active {
-      transform: translateY(0);
-    }
-    .banner-body {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      overflow: hidden;
-      text-align: left;
-    }
-    .banner-title {
-      font-size: 10px;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      color: #f87171;
-    }
-    .banner-text {
-      font-size: 13px;
-      font-weight: 600;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      overflow: hidden;
-      color: white;
-    }
-    .dismiss-btn {
-      background: rgba(255, 255, 255, 0.15);
-      color: white;
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 9999px;
-      padding: 6px 16px;
-      font-size: 11px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      align-self: center;
-      font-family: inherit;
-    }
-    .dismiss-btn:hover {
-      background: rgba(255, 255, 255, 0.25);
-      transform: translateY(-1.5px);
-    }
-    .dismiss-btn:active {
-      transform: translateY(0);
-    }
-    .log-console {
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      border-radius: 12px;
-      padding: 8px;
-      font-family: 'JetBrains Mono', 'Fira Code', monospace;
-      font-size: 10px;
-      max-height: 85px;
-      overflow-y: auto;
-      text-align: left;
-      margin-top: 8px;
-      color: #38bdf8;
-    }
-    .log-line {
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      overflow: hidden;
-      margin-bottom: 2px;
-      opacity: 0.85;
-    }
-    .island-buttons {
-      display: flex;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .save-log-btn {
-      flex: 1;
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
-      color: white;
-      border: none;
-      border-radius: 9999px;
-      padding: 8px 16px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.25);
-      font-family: inherit;
-    }
-    .save-log-btn:hover {
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
-      transform: translateY(-1.5px);
-      box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
-    }
-    .save-log-btn:active {
-      transform: translateY(0);
-    }
+    .panel.show { opacity:1; pointer-events:auto; transition:opacity 240ms ease-in; }
+    #panel-card   { align-items:stretch; flex-direction:column; gap:8px; padding:14px 16px; justify-content:flex-start; }
+    #panel-banner { flex-direction:row; gap:12px; padding:0 16px; }
+
+    /* Compact */
+    .pill-row { display:flex; align-items:center; justify-content:center; gap:7px;
+      font-size:13px; font-weight:600; letter-spacing:-0.15px; color:rgba(255,255,255,0.93); width:100%; padding:0 12px; }
+    .live-dot { width:7px; height:7px; border-radius:50%; background:#10b981;
+      box-shadow:0 0 8px rgba(16,185,129,0.8); flex-shrink:0;
+      animation:blink 2.2s ease-in-out infinite; }
+    @keyframes blink { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(0.82);} }
+    .time-txt { font-variant-numeric:tabular-nums; font-weight:700; font-size:13px; letter-spacing:0.3px; color:#fff; }
+
+    /* Checking */
+    .check-row { display:flex; align-items:center; justify-content:center; gap:8px;
+      color:#38bdf8; font-size:12px; font-weight:600; width:100%; padding:0 14px; }
+    .spinner { width:13px; height:13px; border:2px solid rgba(56,189,248,0.25); border-top-color:#38bdf8;
+      border-radius:50%; animation:spin 0.75s linear infinite; flex-shrink:0; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+
+    /* Split dot */
+    .warn-pulse { width:10px; height:10px; border-radius:50%; background:#f59e0b;
+      box-shadow:0 0 8px rgba(245,158,11,0.9); animation:wp 0.9s ease-in-out infinite; }
+    @keyframes wp { 0%,100%{transform:scale(1);opacity:1;} 50%{transform:scale(1.3);opacity:0.6;} }
+
+    /* Card */
+    .card-header { display:flex; justify-content:space-between; align-items:center; }
+    .card-name   { font-size:14px; font-weight:700; letter-spacing:-0.3px; color:#fff; }
+    .card-badge  { font-size:9.5px; font-weight:700; padding:2.5px 9px; border-radius:999px;
+      text-transform:uppercase; letter-spacing:0.5px; background:rgba(255,255,255,0.1); color:rgba(255,255,255,0.8); }
+    .card-body   { display:flex; justify-content:space-between; align-items:flex-end; flex:1; }
+    .card-info   { display:flex; flex-direction:column; gap:2px; }
+    .card-label  { font-size:10.5px; color:rgba(255,255,255,0.42); font-weight:500; }
+    .card-val    { font-size:13px; font-weight:700; color:#fff; font-variant-numeric:tabular-nums; }
+    .cost-col    { text-align:right; }
+    .cost-label  { font-size:9.5px; color:rgba(255,255,255,0.38); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }
+    .cost-val    { font-size:18px; font-weight:800; color:#34d399; text-shadow:0 0 14px rgba(52,211,153,0.35); }
+    .exit-btn    {
+      width:100%; background:linear-gradient(135deg,#ef4444,#dc2626);
+      color:#ffffff; border:none; border-radius:999px; padding:9px 0;
+      font-size:12.5px; font-weight:700; cursor:pointer; letter-spacing:0.1px;
+      box-shadow:0 4px 12px rgba(239,68,68,0.3); font-family:inherit;
+      transition:all 0.18s ease; flex-shrink:0; display:block; text-align:center; line-height:1; }
+    .exit-btn:hover  { background:linear-gradient(135deg,#dc2626,#b91c1c); transform:translateY(-1px); box-shadow:0 6px 18px rgba(239,68,68,0.45); }
+    .exit-btn:active { transform:translateY(0); }
+    .dev-log { background:rgba(0,0,0,0.55); border:1px solid rgba(255,255,255,0.07); border-radius:9px; padding:5px 8px;
+      font-family:monospace; font-size:9.5px; max-height:64px; overflow-y:auto; color:#38bdf8; flex-shrink:0; }
+    .log-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:1.5px; opacity:0.85; }
+
+    /* Banner */
+    .banner-icon { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:17px; background:rgba(239,68,68,0.15); }
+    .banner-tcol { flex:1; overflow:hidden; }
+    .banner-ttl  { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.8px; color:#f87171; }
+    .banner-msg  { font-size:12.5px; font-weight:600; color:#fff; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; margin-top:1px; }
+    .dismiss-btn { background:rgba(255,255,255,0.12); color:#fff; border:1px solid rgba(255,255,255,0.1);
+      border-radius:999px; padding:6px 14px; font-size:11px; font-weight:700; cursor:pointer;
+      font-family:inherit; flex-shrink:0; transition:background 0.15s ease; }
+    .dismiss-btn:hover { background:rgba(255,255,255,0.22); }
   </style>
 </head>
 <body>
-  <div class="island-bezel-wrapper" id="island-bezel-wrapper">
-    <div id="dynamic-island-container" class="compact">
-      <!-- NOTCH CONTENT -->
-      <div class="content-sequencer" id="notch-content-panel"></div>
-      
-      <!-- EVALUATING CONTENT -->
-      <div class="content-sequencer" id="evaluating-content-panel">
-        <div class="compact-pill-layout" style="color: #38bdf8;">
+  <div class="island-row" id="row">
+    <div id="island" class="s-compact">
+      <div class="panel show" id="panel-compact">
+        <div class="pill-row">
+          <div class="live-dot"></div>
+          <span class="time-txt" id="compact-time">00:00:00</span>
+        </div>
+      </div>
+      <div class="panel" id="panel-check">
+        <div class="check-row">
           <div class="spinner"></div>
           <span>Checking safety...</span>
         </div>
       </div>
-      
-      <!-- COMPACT CONTENT -->
-      <div class="content-sequencer visible" id="compact-content-panel">
-        <div class="compact-pill-layout">
-          <div class="status-dot"></div>
-          <span id="compact-time">00:00:00</span>
+      <div class="panel" id="panel-split">
+        <div class="pill-row" style="color:#f59e0b;justify-content:center;">
+          <span class="time-txt" id="split-time">00:00:00</span>
         </div>
       </div>
-
-      <!-- SPLIT STATE MAIN CAPSULE CONTENT -->
-      <div class="content-sequencer" id="split-content-panel">
-        <div class="compact-pill-layout" style="color: #f59e0b;">
-          <span id="split-time">00:00:00</span>
+      <div class="panel" id="panel-card">
+        <div class="card-header">
+          <span class="card-name" id="card-name">Walk-in</span>
+          <span class="card-badge" id="card-badge">Prepaid</span>
         </div>
+        <div class="card-body">
+          <div class="card-info">
+            <span class="card-label" id="card-tlabel">Remaining</span>
+            <span class="card-val"   id="card-time">00:00:00</span>
+            <span class="card-label" style="margin-top:4px;">Started</span>
+            <span class="card-val"   id="card-start">--:--</span>
+          </div>
+          <div class="cost-col">
+            <div class="cost-label">Accrued</div>
+            <div class="cost-val" id="card-cost">$0.00</div>
+          </div>
+        </div>
+        <div id="dev-log-wrap" style="display:none;">
+          <div class="dev-log" id="dev-log"></div>
+        </div>
+        <button class="exit-btn" onclick="onExit()">Exit Session</button>
       </div>
-      
-      <!-- CARD CONTENT -->
-      <div class="content-sequencer" id="card-content-panel">
-        <div class="card-grid">
-          <div class="card-header">
-            <span class="cust-name" id="card-username">Walk-in</span>
-            <span class="mode-badge" id="card-mode">Prepaid</span>
-          </div>
-          <div class="card-body">
-            <div class="card-info">
-              <div class="info-label">Remaining: <span id="card-time" class="info-val">00:00:00</span></div>
-              <div class="info-label">Started: <span id="card-start" class="info-val">00:00</span></div>
-            </div>
-            <div class="card-cost">
-              <div class="cost-label">Accrued</div>
-              <div class="cost-val" id="card-cost-val">$0.00</div>
-            </div>
-          </div>
-          
-          <!-- Developer Log Panel -->
-          <div id="dev-log-panel" style="display: none;">
-            <div class="log-console" id="island-logs-container"></div>
-          </div>
-  
-          <div class="island-buttons">
-            <button class="exit-btn" onclick="requestExitSession()">Exit Session</button>
-            <button class="save-log-btn" id="island-save-log-btn" style="display: none;" onclick="saveLog()">Save Log</button>
-          </div>
+      <div class="panel" id="panel-banner">
+        <div class="banner-icon">🚨</div>
+        <div class="banner-tcol">
+          <div class="banner-ttl" id="banner-ttl">Alert</div>
+          <div class="banner-msg" id="banner-msg">Message placeholder</div>
         </div>
-      </div>
-      
-      <!-- BANNER CONTENT -->
-      <div class="content-sequencer" id="banner-content-panel">
-        <div class="banner-body">
-          <div class="banner-title" id="banner-message-title">Alert from Operator</div>
-          <div class="banner-text" id="banner-message-text">Message placeholder</div>
-        </div>
-        <button class="dismiss-btn" onclick="dismissBanner()">OK</button>
+        <button class="dismiss-btn" onclick="onDismiss()">OK</button>
       </div>
     </div>
-
-    <!-- DETACHED DOT PILL FOR SPLIT STATE -->
-    <div id="detached-dot-container" class="inactive">
-      <div class="content-sequencer" id="split-dot-content" style="align-items: center; justify-content: center;">
-        <div class="warning-dot-split"></div>
-      </div>
+    <div id="dot" class="hidden">
+      <div class="warn-pulse"></div>
     </div>
   </div>
 
   <script>
     const { ipcRenderer } = require('electron');
+
     let session = ${sessionJson};
     const isDevMode = ${isDevMode};
     const initialLogs = ${initialLogsJson};
-    if (session && session.startTime) {
-      if (!session.startTime.includes('Z') && !session.startTime.includes('+')) {
-        session.startTime = session.startTime.replace(' ', 'T') + 'Z';
-      }
+
+    function normalise(s) {
+      if (!s || !s.startTime) return s;
+      let t = String(s.startTime).trim().replace(' ', 'T');
+      if (!/[Zz]|[+\\-]\\d{2}:?\\d{2}$/.test(t)) t += 'Z';
+      s.startTime = t;
+      return s;
     }
-    let isHovered = false;
-    let isFullscreen = false;
-    let operatorMessage = '';
-    let isEvaluating = false;
-    let currentState = 'compact';
-    let bannerTimer = null;
+    session = normalise(session);
 
-    const container = document.getElementById('dynamic-island-container');
-    const wrapper = document.getElementById('island-bezel-wrapper');
+    let state = 'compact', isHovered = false, isFullscreen = false, isChecking = false;
+    let alertMsg = '', bannerTimer = null;
 
-    container.addEventListener('mouseenter', () => {
-      if (operatorMessage || isEvaluating) return;
-      isHovered = true;
-      updateState();
-    });
+    const island = document.getElementById('island');
+    const dot    = document.getElementById('dot');
+    const row    = document.getElementById('row');
 
-    container.addEventListener('mouseleave', () => {
-      isHovered = false;
-      updateState();
-    });
+    const ALL_STATES = ['notch','compact','split','check','card','banner'];
+    function applyState(ns) {
+      if (ns === state) return;
+      state = ns;
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('show'));
+      ALL_STATES.forEach(s => island.classList.remove('s-' + s));
+      island.classList.add('s-' + state);
+      dot.className = state === 'split' ? 'visible' : 'hidden';
+      setTimeout(() => {
+        const p = document.getElementById('panel-' + state);
+        if (p) p.classList.add('show');
+      }, 420);
+    }
 
-    document.addEventListener('mousemove', (e) => {
-      const rect = container.getBoundingClientRect();
-      const isInside = (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom);
-      // Include detached dot in mouse interaction bounds if split state is active
-      const detached = document.getElementById('detached-dot-container');
-      let isInsideDetached = false;
-      if (currentState === 'split') {
-        const dRect = detached.getBoundingClientRect();
-        isInsideDetached = (e.clientX >= dRect.left && e.clientX <= dRect.right && e.clientY >= dRect.top && e.clientY <= dRect.bottom);
-      }
-      ipcRenderer.send('island-mouse', !(isInside || isInsideDetached));
-    });
+    function resolveState() {
+      if (alertMsg)     return 'banner';
+      if (isChecking)   return 'check';
+      if (isHovered)    return 'card';
+      if (isFullscreen) return 'notch';
+      if (session && session.mode === 'prepaid' && getRemainingSec() < 300 && getRemainingSec() >= 0) return 'split';
+      return 'compact';
+    }
 
+    function tick() { applyState(resolveState()); }
+
+    function getStartMs() {
+      if (!session || !session.startTime) return Date.now();
+      const ms = new Date(session.startTime).getTime();
+      return isNaN(ms) ? Date.now() : ms;
+    }
+    function getElapsedSec() { return Math.max(0, Math.floor((Date.now() - getStartMs()) / 1000)); }
     function getRemainingSec() {
       if (!session || session.mode !== 'prepaid') return Infinity;
-      const now = Date.now();
-      const startMs = new Date(session.startTime).getTime();
-      const elapsedSec = Math.max(0, Math.floor((now - startMs) / 1000));
-      const totalDurationSec = (session.durationMinutes || 0) * 60;
-      return Math.max(0, totalDurationSec - elapsedSec);
+      return Math.max(0, ((session.durationMinutes || 0) * 60) - getElapsedSec());
     }
-
-    function updateState() {
-      let newState = 'compact';
-      if (operatorMessage) {
-        newState = 'banner';
-      } else if (isEvaluating) {
-        newState = 'evaluating';
-      } else if (isHovered) {
-        newState = 'card';
-      } else if (isFullscreen) {
-        newState = 'notch';
-      } else if (session && session.mode === 'prepaid' && getRemainingSec() < 300) {
-        // Less than 5 minutes remaining -> split state warnings
-        newState = 'split';
-      } else {
-        newState = 'compact';
-      }
-
-      if (newState === currentState) return;
-
-      // Phase 1: Fade out old content immediately (150ms opacity transition)
-      const contents = document.querySelectorAll('.content-sequencer');
-      contents.forEach(el => el.classList.remove('visible'));
-
-      // Phase 2: Start morphing container dimensions (600ms transition)
-      currentState = newState;
-      container.className = currentState;
-      
-      const detached = document.getElementById('detached-dot-container');
-      if (currentState === 'split') {
-        detached.className = 'active';
-      } else {
-        detached.className = 'inactive';
-      }
-
-      // Phase 3: Wait 400ms (morph is mostly complete) before fading in new content
-      setTimeout(() => {
-        if (currentState === newState) {
-          const newContent = document.getElementById(currentState + '-content-panel');
-          if (newContent) newContent.classList.add('visible');
-          
-          if (currentState === 'split') {
-            const dotContent = document.getElementById('split-dot-content');
-            if (dotContent) dotContent.classList.add('visible');
-          }
-        }
-      }, 400);
-    }
-
-    function formatTime(seconds) {
-      const h = Math.floor(seconds / 3600);
-      const m = Math.floor((seconds % 3600) / 60);
-      const s = seconds % 60;
-      return [
-        h.toString().padStart(2, '0'),
-        m.toString().padStart(2, '0'),
-        s.toString().padStart(2, '0')
-      ].join(':');
+    function fmt(sec) {
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      return [h,m,s].map(v => String(v).padStart(2,'0')).join(':');
     }
 
     function updateUI() {
       if (!session) return;
-      
-      const now = Date.now();
-      const startMs = new Date(session.startTime).getTime();
-      const elapsedSec = Math.max(0, Math.floor((now - startMs) / 1000));
-      
-      let timeStr = '';
-      let costStr = '$0.00';
-      const remainingSec = getRemainingSec();
-      
-      if (session.mode === 'prepaid') {
-        timeStr = formatTime(remainingSec);
-        costStr = session.planPrice ? '$' + Number(session.planPrice).toFixed(2) : '$0.00';
-        
-        const labelEl = document.querySelector('.card-info .info-label:nth-child(1)');
-        if (labelEl) labelEl.innerHTML = 'Remaining: <span id="card-time" class="info-val">' + timeStr + '</span>';
-      } else {
-        timeStr = formatTime(elapsedSec);
-        const hourlyRate = session.planPrice || 5.0;
-        const accruedCost = (elapsedSec / 3600) * hourlyRate;
-        costStr = '$' + accruedCost.toFixed(2);
+      const isPrepaid = session.mode === 'prepaid';
+      const elapsed   = getElapsedSec();
+      const remaining = getRemainingSec();
+      const timeStr   = isPrepaid ? fmt(remaining) : fmt(elapsed);
 
-        const labelEl = document.querySelector('.card-info .info-label:nth-child(1)');
-        if (labelEl) labelEl.innerHTML = 'Time Used: <span id="card-time" class="info-val">' + timeStr + '</span>';
+      const ct = document.getElementById('compact-time'); if (ct) ct.textContent = timeStr;
+      const st = document.getElementById('split-time');   if (st) st.textContent = timeStr;
+      const ct2= document.getElementById('card-time');    if (ct2) ct2.textContent = timeStr;
+
+      const nameEl = document.getElementById('card-name'); if (nameEl) nameEl.textContent = session.user || 'Guest';
+      const badge  = document.getElementById('card-badge');
+      if (badge) {
+        badge.textContent      = isPrepaid ? 'Prepaid' : 'Postpaid';
+        badge.style.background = isPrepaid ? 'rgba(59,130,246,0.25)' : 'rgba(16,185,129,0.25)';
+        badge.style.color      = isPrepaid ? '#93c5fd' : '#6ee7b7';
       }
-      
-      const compactTimeEl = document.getElementById('compact-time');
-      if (compactTimeEl) compactTimeEl.innerText = timeStr;
-
-      const splitTimeEl = document.getElementById('split-time');
-      if (splitTimeEl) splitTimeEl.innerText = timeStr;
-      
-      const cardTimeEl = document.getElementById('card-time');
-      if (cardTimeEl) cardTimeEl.innerText = timeStr;
-      
-      const cardCostEl = document.getElementById('card-cost-val');
-      if (cardCostEl) cardCostEl.innerText = costStr;
-
-      const cardStartEl = document.getElementById('card-start');
-      if (cardStartEl) {
-        const d = new Date(session.startTime);
-        cardStartEl.innerText = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const tl = document.getElementById('card-tlabel'); if (tl) tl.textContent = isPrepaid ? 'Remaining' : 'Time Used';
+      const se = document.getElementById('card-start');
+      if (se) {
+        const d = new Date(getStartMs());
+        se.textContent = isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
       }
-
-      const cardModeEl = document.getElementById('card-mode');
-      if (cardModeEl) {
-        cardModeEl.innerText = session.mode;
-        cardModeEl.style.background = session.mode === 'prepaid' ? 'rgba(59, 130, 246, 0.3)' : 'rgba(16, 185, 129, 0.3)';
-      }
-
-      const username = session.user || 'Guest';
-      const cardUserEl = document.getElementById('card-username');
-      if (cardUserEl) cardUserEl.innerText = username;
-
-      // Automatically re-evaluate state if low time triggered split state
-      updateState();
+      const rate   = parseFloat(session.planPrice) || 5.0;
+      const costEl = document.getElementById('card-cost');
+      if (costEl) costEl.textContent = isPrepaid ? ('$' + rate.toFixed(2)) : ('$' + ((elapsed/3600)*rate).toFixed(2));
+      tick();
     }
 
-    function requestExitSession() {
-      ipcRenderer.send('exit-session-request');
-    }
-
-    function saveLog() {
-      ipcRenderer.send('save-client-log');
-    }
-
-    function dismissBanner() {
-      operatorMessage = '';
-      if (bannerTimer) {
-        clearTimeout(bannerTimer);
-        bannerTimer = null;
-      }
-      updateState();
-    }
-
-    ipcRenderer.on('sync-session-data', (event, updatedSession) => {
-      session = { ...session, ...updatedSession };
-      updateUI();
+    island.addEventListener('mouseenter', () => { if (alertMsg || isChecking) return; isHovered = true;  tick(); });
+    island.addEventListener('mouseleave', () => {                                       isHovered = false; tick(); });
+    document.addEventListener('mousemove', e => {
+      const ri = island.getBoundingClientRect(), rd = dot.getBoundingClientRect();
+      const inside = (x,y,r) => x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
+      ipcRenderer.send('island-mouse', !inside(e.clientX,e.clientY,ri) && !inside(e.clientX,e.clientY,rd));
     });
 
-    ipcRenderer.on('set-fullscreen-state', (event, isFS) => {
-      isFullscreen = isFS;
-      updateState();
-    });
-
-    ipcRenderer.on('set-evaluating-state', (event, evaluating) => {
-      isEvaluating = evaluating;
-      updateState();
-    });
-
-    ipcRenderer.on('show-message', (event, msg) => {
-      operatorMessage = msg;
-      
-      // Check if it's a safety guard warning message
-      const isWarning = msg.includes('Safety Violation Warning') || msg.includes('not allowed');
-      const titleEl = document.getElementById('banner-message-title');
-      if (titleEl) {
-        titleEl.innerText = isWarning ? 'Safety Warning' : 'Alert from Operator';
-        titleEl.style.color = isWarning ? '#ef4444' : '#60a5fa';
-      }
-
-      const msgEl = document.getElementById('banner-message-text');
-      if (msgEl) msgEl.innerText = msg;
-      
-      updateState();
-
-      // Automatically dismiss operator message banners after 2.5 seconds as per spec
+    ipcRenderer.on('sync-session-data',    (_, s) => { session = normalise({...session,...s}); updateUI(); });
+    ipcRenderer.on('set-fullscreen-state', (_, v) => { isFullscreen = v; tick(); });
+    ipcRenderer.on('set-evaluating-state', (_, v) => { isChecking   = v; tick(); });
+    ipcRenderer.on('show-message', (_, msg) => {
+      alertMsg = msg;
+      const ttl = document.getElementById('banner-ttl');
+      const bm  = document.getElementById('banner-msg');
+      const isW = msg.toLowerCase().includes('safety') || msg.toLowerCase().includes('violation') || msg.toLowerCase().includes('blocked');
+      if (ttl) { ttl.textContent = isW ? 'Safety Warning' : 'Operator Alert'; ttl.style.color = isW ? '#f87171' : '#60a5fa'; }
+      if (bm)  bm.textContent = msg;
+      tick();
       if (bannerTimer) clearTimeout(bannerTimer);
-      bannerTimer = setTimeout(() => {
-        dismissBanner();
-      }, 2500);
+      bannerTimer = setTimeout(() => { alertMsg = ''; tick(); }, 3000);
     });
-
-    ipcRenderer.on('agent-log-updated', (event, logEntry) => {
+    ipcRenderer.on('agent-log-updated', (_, entry) => {
       if (!isDevMode) return;
-      const logsContainer = document.getElementById('island-logs-container');
-      if (logsContainer) {
-        const line = document.createElement('div');
-        line.className = 'log-line';
-        line.innerText = '[' + logEntry.timestamp + '] ' + logEntry.message;
-        logsContainer.appendChild(line);
-        while (logsContainer.childNodes.length > 20) {
-          logsContainer.removeChild(logsContainer.firstChild);
-        }
-        logsContainer.scrollTop = logsContainer.scrollHeight;
-      }
+      const el = document.getElementById('dev-log'); if (!el) return;
+      const line = document.createElement('div'); line.className = 'log-line';
+      line.textContent = '['+entry.timestamp+'] '+entry.message;
+      el.appendChild(line);
+      while (el.childNodes.length > 25) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight;
     });
 
-    // Observe wrapper instead of container to account for split dot width!
-    const resizeObserver = new ResizeObserver(entries => {
-      for (let entry of entries) {
-        const { width, height } = entry.contentRect;
-        ipcRenderer.send('resize-island', { width: Math.ceil(width) + 30, height: Math.ceil(height) + 30 });
+    function onExit()    { ipcRenderer.send('exit-session-request'); }
+    function onDismiss() { alertMsg=''; if(bannerTimer){clearTimeout(bannerTimer);bannerTimer=null;} tick(); }
+    function saveLog()   { ipcRenderer.send('save-client-log'); }
+
+    const ro = new ResizeObserver(entries => {
+      for (const e of entries) {
+        ipcRenderer.send('resize-island', { width: Math.ceil(e.contentRect.width)+24, height: Math.ceil(e.contentRect.height)+20 });
       }
     });
-    resizeObserver.observe(wrapper);
+    ro.observe(row);
+
+    if (isDevMode) {
+      const wrap = document.getElementById('dev-log-wrap'); if (wrap) wrap.style.display='block';
+      const el   = document.getElementById('dev-log');
+      if (el) {
+        for (const log of initialLogs) {
+          const l=document.createElement('div'); l.className='log-line';
+          l.textContent='['+log.timestamp+'] '+log.message; el.appendChild(l);
+        }
+        el.scrollTop=el.scrollHeight;
+      }
+    }
 
     setInterval(updateUI, 1000);
     updateUI();
-    updateState();
-
-    if (isDevMode) {
-      const devPanel = document.getElementById('dev-log-panel');
-      if (devPanel) devPanel.style.display = 'block';
-      const saveBtn = document.getElementById('island-save-log-btn');
-      if (saveBtn) saveBtn.style.display = 'block';
-      
-      const logsContainer = document.getElementById('island-logs-container');
-      if (logsContainer) {
-        for (const log of initialLogs) {
-          const line = document.createElement('div');
-          line.className = 'log-line';
-          line.innerText = '[' + log.timestamp + '] ' + log.message;
-          logsContainer.appendChild(line);
-        }
-        logsContainer.scrollTop = logsContainer.scrollHeight;
-      }
-    }
+    tick();
   </script>
 </body>
 </html>`;

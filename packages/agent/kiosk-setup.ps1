@@ -292,8 +292,21 @@ try {
                     Set-ItemProperty `
                         -Path "$hivePath\Software\Policies\Microsoft\Windows\System" `
                         -Name  "DisableCMD" -Value 1 -Type DWord -Force
-                    
-                    Log "OK:" "GPO restriction policies written for standard Kiosk user '$username'"
+
+                    # Disable shutdown/restart/sleep from Start Menu and Ctrl+Alt+Del for kiosk user
+                    New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                             -Force -ErrorAction SilentlyContinue | Out-Null
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoClose"          -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoLogOff"         -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoStartMenuMorePrograms" -Value 1 -Type DWord -Force
+
+                    Log "OK:" "GPO restriction policies (incl. NoClose/NoLogOff) written for standard Kiosk user '$username'"
                     
                     # Flush and unload if we loaded it
                     if (-not $isLoaded) {
@@ -408,4 +421,7 @@ try {
 }
 
 Log "DONE:" "NetCafe Kiosk Setup completed. Review log at $LogFile"
+Log "INFO:" "Rebooting computer in 5 seconds to apply kiosk shell and policies..."
+Start-Sleep -Seconds 5
+Restart-Computer -Force
 exit 0

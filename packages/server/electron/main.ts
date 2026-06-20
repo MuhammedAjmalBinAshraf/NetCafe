@@ -171,7 +171,7 @@ function setupDatabase() {
 // TCP Server & Metrics Maps
 const tcpServer = net.createServer()
 const clients = new Map<net.Socket, number>() // socket -> machine.id
-const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number }>()
+const clientMetrics = new Map<number, { cpu: number, ram: number, activeWindow: string, os: string, ip: string, uptime: number, version?: string }>()
 const pendingScreenshots = new Map<number, { resolve: (val: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>()
 const latestScreenFrames = new Map<number, string>()
 let activeMirrorMachineId: number | null = null;
@@ -347,7 +347,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
         os: data.payload.os || 'Windows',
         ip: data.payload.ip || socket.remoteAddress || '',
         uptime: data.payload.uptime || 0,
-        resolution: data.payload.resolution || { width: 1920, height: 1080 }
+        resolution: data.payload.resolution || { width: 1920, height: 1080 },
+        version: data.payload.version || '1.0.0'
       })
       broadcastMachines()
 
@@ -891,7 +892,7 @@ function getMachinesData() {
     } else if (m.mode === 'postpaid') {
       timeRemaining = m.timeElapsed || 0
     }
-    const metrics = clientMetrics.get(m.id) || { cpu: 0, ram: 0, activeWindow: '', os: 'Unknown', uptime: 0 }
+    const metrics = clientMetrics.get(m.id) || { cpu: 0, ram: 0, activeWindow: '', os: 'Unknown', uptime: 0, version: 'Unknown' }
     return { ...m, timeRemaining, metrics }
   })
 }
@@ -992,6 +993,137 @@ function startWebServer() {
     } else {
       res.status(404).json({ error: `IPC channel ${channel} not found` });
     }
+  });
+
+  // Client Web Installation Pages
+  webApp.get('/install', (req, res) => {
+    const ip = getLanIPAddress();
+    const command = `Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; iex ((New-Object System.Net.WebClient).DownloadString('http://${ip}:9001/api/install.ps1'))`;
+    res.send(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>NetCafe Agent Setup</title>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Plus+Jakarta+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      margin: 0; padding: 0;
+      background: #020617; color: #f8fafc;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh;
+    }
+    .container {
+      max-width: 600px; width: 100%;
+      background: rgba(15, 23, 42, 0.6);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 24px; padding: 2.5rem;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      text-align: center;
+    }
+    h1 { font-family: 'Outfit', sans-serif; font-size: 2rem; margin-bottom: 0.5rem; color: #38bdf8; }
+    p { color: #94a3b8; font-size: 0.95rem; line-height: 1.6; margin-bottom: 2rem; }
+    .card {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 16px; padding: 1.5rem; margin-bottom: 1.5rem;
+      text-align: left; transition: transform 0.2s;
+    }
+    .card:hover { transform: translateY(-2px); }
+    h3 { margin-top: 0; font-family: 'Outfit', sans-serif; font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 100%; padding: 0.75rem; border-radius: 12px;
+      font-weight: 700; text-decoration: none; font-size: 0.9rem;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-primary { background: linear-gradient(135deg, #0ea5e9, #2563eb); color: white; border: none; }
+    .btn-primary:hover { opacity: 0.9; }
+    .code-box {
+      background: #090d16; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; padding: 0.75rem; font-family: monospace;
+      font-size: 0.75rem; color: #38bdf8; word-break: break-all;
+      margin-bottom: 1rem; position: relative;
+    }
+    .copy-btn {
+      position: absolute; right: 8px; top: 8px;
+      background: rgba(255,255,255,0.1); border: none; color: white;
+      padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; cursor: pointer;
+    }
+    .copy-btn:hover { background: rgba(255,255,255,0.2); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>NetCafe Agent Setup</h1>
+    <p>Choose your kiosk client installation method for this PC terminal.</p>
+    
+    <div class="card">
+      <h3 style="color:#10b981;">🛡️ Option 1: Create New CafeKiosk User (Recommended)</h3>
+      <p style="font-size:0.85rem; margin-bottom:1rem;">Creates a secure, dedicated standard user account named 'CafeKiosk' on this PC. Configures auto-logon to boot directly into the NetCafe member login screen.</p>
+      <a class="btn btn-primary" href="https://github.com/MuhammedAjmalBinAshraf/NetCafe/releases/latest/download/NetCafe-Agent-Setup.exe">Download Kiosk Installer (.exe)</a>
+    </div>
+
+    <div class="card">
+      <h3 style="color:#0ea5e9;">💻 Option 2: Use Current Standard User</h3>
+      <p style="font-size:0.85rem; margin-bottom:1rem;">Configures the client only for the currently logged-in standard user. No new user account is created. Run this in PowerShell (Admin):</p>
+      <div class="code-box">
+        <span id="cmdText">${command}</span>
+        <button class="copy-btn" onclick="copyCmd()">Copy</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    function copyCmd() {
+      navigator.clipboard.writeText(document.getElementById('cmdText').innerText);
+      alert('Command copied to clipboard!');
+    }
+  </script>
+</body>
+</html>`);
+  });
+
+  webApp.get('/api/install.ps1', (req, res) => {
+    res.setHeader('Content-Type', 'text/plain');
+    res.send(`#Requires -RunAsAdministrator
+$currUser = $env:USERNAME
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "           NetCafe Agent Client Installer" -ForegroundColor Cyan
+Write-Host "==========================================================" -ForegroundColor Cyan
+Write-Host "Detected current user: $currUser" -ForegroundColor Yellow
+Write-Host "This will configure NetCafe Agent for the current user ONLY." -ForegroundColor Yellow
+Write-Host "NO new CafeKiosk user account will be created." -ForegroundColor Yellow
+Write-Host ""
+$confirm = Read-Host "Do you want to continue? (Y/N)"
+if ($confirm -ne "Y" -and $confirm -ne "y") {
+    Write-Host "Installation aborted." -ForegroundColor Red
+    Exit
+}
+
+Write-Host "Creating C:\\NetCafe folder..."
+New-Item -ItemType Directory -Path "C:\\NetCafe" -Force | Out-Null
+
+Write-Host "Writing kiosk.ini configuration override..."
+$iniContent = @"
+KioskUser=$currUser
+KioskPassword=SKIP
+"@
+Set-Content -Path "C:\\NetCafe\\kiosk.ini" -Value $iniContent -Force
+
+Write-Host "Downloading NetCafe Agent installer..." -ForegroundColor Green
+$installerUrl = "https://github.com/MuhammedAjmalBinAshraf/NetCafe/releases/latest/download/NetCafe-Agent-Setup.exe"
+$tempInstaller = "$env:TEMP\\NetCafe-Agent-Setup.exe"
+(New-Object System.Net.WebClient).DownloadFile($installerUrl, $tempInstaller)
+
+Write-Host "Running Agent Installer in the background..." -ForegroundColor Green
+Start-Process -FilePath $tempInstaller -ArgumentList "/S" -Wait
+
+Write-Host "NetCafe Agent installation completed!" -ForegroundColor Green
+Write-Host "The PC will restart in 5 seconds to apply settings." -ForegroundColor Yellow
+Start-Sleep -Seconds 5
+Restart-Computer -Force
+`);
   });
 
   // Serve static UI assets in production/packaged app
@@ -1464,6 +1596,20 @@ ipcMain.handle('power-machine', (_, machineId) => {
 
 ipcMain.handle('restart-machine', (_, machineId) => {
   sendCommandToMachine(machineId, { command: 'restart' })
+})
+
+ipcMain.handle('trigger-client-update', (_, machineId) => {
+  if (machineId === 'all') {
+    for (const socket of clients.keys()) {
+      try {
+        socket.write(JSON.stringify({ command: 'trigger-update' }) + '\n')
+      } catch {}
+    }
+    return { success: true }
+  } else {
+    sendCommandToMachine(machineId, { command: 'trigger-update' })
+    return { success: true }
+  }
 })
 
 ipcMain.handle('limit-bandwidth', (_, machineId, rate) => {
@@ -2009,7 +2155,7 @@ async function evaluateQuerySafety(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        generation_config: { response_mime_type: "application/json" }
       }),
       signal: controller.signal
     });

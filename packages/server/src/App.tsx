@@ -3,7 +3,7 @@ import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
-  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu,
+  UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
   ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy
 } from 'lucide-react'
@@ -709,6 +709,22 @@ export default function App() {
     const machineName = machine ? machine.name : `PC ${machineId}`
     if (confirm(`Are you sure you want to restart terminal "${machineName}"?`)) {
       if (window.ipcRenderer) await window.ipcRenderer.invoke('restart-machine', machineId)
+    }
+  }
+
+  const handleTriggerUpdate = async (machineId: number | 'all') => {
+    if (machineId === 'all') {
+      if (confirm('Trigger agent software update on ALL connected terminals? (This will trigger client PC reboots if update is found)')) {
+        if (window.ipcRenderer) await window.ipcRenderer.invoke('trigger-client-update', 'all')
+        alert('Update check broadcast sent to all terminals.')
+      }
+    } else {
+      const machine = machines.find((m: any) => m.id === machineId)
+      const machineName = machine ? machine.name : `PC ${machineId}`
+      if (confirm(`Trigger update check on terminal "${machineName}"? (Reboots if update is found)`)) {
+        if (window.ipcRenderer) await window.ipcRenderer.invoke('trigger-client-update', machineId)
+        alert(`Update command sent to terminal "${machineName}".`)
+      }
     }
   }
 
@@ -1458,6 +1474,13 @@ export default function App() {
                   >
                     <RefreshCcw size={12} />
                     <span>Reload Terminals</span>
+                  </button>
+                  <button
+                    onClick={() => handleTriggerUpdate('all')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-800/50 text-emerald-400 hover:text-white rounded text-xs font-semibold transition-colors"
+                  >
+                    <ArrowUpCircle size={12} />
+                    <span>Batch Update Agents</span>
                   </button>
                 </div>
               </div>
@@ -3214,6 +3237,10 @@ Respond strictly in JSON format:
                     <span className="text-white">{selectedDrawerMachine.metrics?.ip || selectedDrawerMachine.ip_address || 'Offline'}</span>
                   </div>
                   <div className="flex justify-between">
+                    <span className="text-slate-500">Version:</span>
+                    <span className="text-white font-bold">{selectedDrawerMachine.metrics?.version || 'Unknown'}</span>
+                  </div>
+                  <div className="flex justify-between">
                     <span className="text-slate-500">Platform:</span>
                     <span className="text-white">{selectedDrawerMachine.metrics?.os || 'Unknown'}</span>
                   </div>
@@ -3423,6 +3450,12 @@ Respond strictly in JSON format:
                       className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-red-900/30 hover:bg-red-800/50 border border-red-800/40 text-red-400 hover:text-red-300 rounded text-xs font-bold transition-all"
                     >
                       Shutdown
+                    </button>
+                    <button
+                      onClick={() => handleTriggerUpdate(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-emerald-900/30 hover:bg-emerald-800/50 border border-emerald-800/40 text-emerald-400 hover:text-emerald-300 rounded text-xs font-bold transition-all"
+                    >
+                      Update Agent
                     </button>
                   </div>
                 </div>
@@ -4494,6 +4527,12 @@ Respond strictly in JSON format:
                   className="col-span-2 py-1 px-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700/60 text-slate-200 hover:text-white rounded text-xs font-bold transition-all"
                 >
                   Send Operator Message
+                </button>
+                <button
+                  onClick={() => handleTriggerUpdate(selectedDrawerMachine.id)}
+                  className="col-span-2 py-1 px-1.5 bg-emerald-900/30 hover:bg-emerald-800/50 border border-emerald-800/40 text-emerald-400 hover:text-emerald-250 rounded text-xs font-bold transition-all"
+                >
+                  🚀 Update Client Agent
                 </button>
                 <button
                   onClick={() => handleToggleHardwareLock(selectedDrawerMachine.id, !selectedDrawerMachine.hardware_locked)}
