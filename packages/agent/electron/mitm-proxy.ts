@@ -243,12 +243,13 @@ export class MitmProxy {
     const policy = JSON.stringify({
       policies: {
         Certificates: { ImportEnterpriseRoots: true },
-        NetworkSettings: {
-          HTTPProxy:                  `localhost:${PROXY_PORT}`,
+        Proxy: {
+          Mode: 'manual',
+          HTTPProxy: `127.0.0.1:${PROXY_PORT}`,
           UseHTTPProxyForAllProtocols: true,
-          NoProxiesOn:                'localhost,127.0.0.1',
-        },
-      },
+          NoProxy: 'localhost, 127.0.0.1'
+        }
+      }
     }, null, 2);
 
     for (const dir of ffDirs) {
@@ -262,19 +263,31 @@ export class MitmProxy {
     }
   }
 
+  private refreshProxySettings(): void {
+    if (process.platform !== 'win32') return;
+    const psCmd = `
+      $src = '[DllImport("wininet.dll")] public static extern bool InternetSetOption(IntPtr h, int o, IntPtr b, int l);';
+      $type = Add-Type -MemberDefinition $src -Name "WinINet" -Namespace "Win32" -PassThru;
+      $type::InternetSetOption([IntPtr]::Zero, 39, [IntPtr]::Zero, 0);
+      $type::InternetSetOption([IntPtr]::Zero, 37, [IntPtr]::Zero, 0);
+    `.replace(/\s+/g, ' ');
+    exec(`powershell.exe -NoProfile -WindowStyle Hidden -Command "${psCmd}"`, () => {});
+  }
+
   private setSystemProxy(): void {
     const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
     exec(`reg add "${key}" /v ProxyEnable  /t REG_DWORD /d 1                    /f`);
     exec(`reg add "${key}" /v ProxyServer  /t REG_SZ    /d "localhost:${PROXY_PORT}" /f`);
     exec(`reg add "${key}" /v ProxyOverride /t REG_SZ   /d "<local>"             /f`);
-    // Notify WinINet that proxy settings changed
-    exec('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
+    // Notify WinINet that proxy settings changed via working PowerShell call
+    this.refreshProxySettings();
     this.log(`[Proxy] Windows system proxy → localhost:${PROXY_PORT}`);
   }
 
   private unsetSystemProxy(): void {
     exec('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
-    exec('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
+    // Notify WinINet that proxy settings changed via working PowerShell call
+    this.refreshProxySettings();
     this.log('[Proxy] System proxy disabled');
   }
 

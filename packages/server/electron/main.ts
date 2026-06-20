@@ -433,11 +433,18 @@ function handleClientMessage(socket: net.Socket, data: any) {
               const matchedTerm = customTerms.find((t: string) => t && lowerQuery.includes(t.toLowerCase()))
               if (matchedTerm) {
                 logToUI(`Safety Guard CUSTOM TERM MATCH on machine ID ${Number(machineId)}: "${query}" matched term "${matchedTerm}"`)
-                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — Locking machine ${Number(machineId)}`, machineId: Number(machineId), query })
-                db.prepare("INSERT INTO safety_alerts (machine_id, query, reason) VALUES (?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`)
+                
+                let windowHitUserDetails = 'Walk-in User'
+                try {
+                  const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
+                  if (activeSess?.customer_name) windowHitUserDetails = activeSess.customer_name
+                } catch {}
+
+                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — User: "${windowHitUserDetails}" — Locking machine ${Number(machineId)}`, machineId: Number(machineId), query })
+                db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`, windowHitUserDetails)
                 sendCommandToMachine(Number(machineId), { command: 'lock' })
                 sendCommandToMachine(Number(machineId), { command: 'message', payload: `Your terminal has been locked: blocked search term detected ("${matchedTerm}").` })
-                if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"` })
+                if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"`, userDetails: windowHitUserDetails })
                 broadcastMachines()
               } else {
                 if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 PASSED — No custom term match for "${query}"`, machineId: Number(machineId), query })
@@ -568,9 +575,21 @@ function handleClientMessage(socket: net.Socket, data: any) {
   }
   else if (data.type === 'query-check-request') {
     const machineId = clients.get(socket)
+    logToUI(`[MITM] Received query-check-request: machineId=${machineId}, db=${!!db}`)
     if (!machineId || !db) return
     const query: string = data.payload?.query || ''
     const requestId: string = data.payload?.requestId || ''
+    
+    // Check if AI safety is enabled
+    const safetyEnabled = (db.prepare("SELECT value FROM settings WHERE key = 'ai_safety_enabled'").get() as any)?.value === 'true'
+    if (!safetyEnabled) {
+      logToUI(`[MITM] Safety filter disabled, allowing query "${query}" (Machine ${machineId})`)
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+      }
+      return
+    }
+
     if (!query || query.length < 2) {
       if (!socket.destroyed) {
         socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
@@ -780,6 +799,12 @@ tcpServer.on('connection', (socket) => {
     logToUI(`TCP connection closed for machine ID ${machineId || 'unregistered'}`)
     if (machineId) {
       db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machineId)
+      try {
+        db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
+        logToUI(`Automatically ended active billing session for machine ID ${machineId} on disconnect.`)
+      } catch (err: any) {
+        logToUI(`Error auto-closing session for machine ID ${machineId}: ${err.message}`)
+      }
       clients.delete(socket)
       clientMetrics.delete(machineId)
       latestScreenFrames.delete(machineId)
@@ -1715,15 +1740,26 @@ ipcMain.handle('bulk-import-users', (_, xlsxBase64: string) => {
 
     const results = { success: 0, skipped: 0, errors: [] as string[] }
 
+    // Helper to get case-insensitive, space-insensitive, and punctuation-insensitive values
+    const getVal = (r: any, expectedKeys: string[]) => {
+      const normalizedExpected = expectedKeys.map(k => k.toLowerCase().replace(/[^a-z0-9]/g, ''))
+      for (const k of Object.keys(r)) {
+        const normK = k.toLowerCase().replace(/[^a-z0-9]/g, '')
+        if (normalizedExpected.includes(normK)) {
+          return r[k]
+        }
+      }
+      return ''
+    }
+
     for (const row of rows) {
-      // Find values for the specific columns or case-insensitive/variation fallback
-      const adNo = (row['ad.no'] || row['ad_no'] || row['ad no'] || row['Ad.No'] || row['Ad. No'] || row['AD.NO'] || '').toString().trim()
-      const name = (row['name'] || row['Name'] || row['display_name'] || row['displayName'] || '').toString().trim()
-      const className = (row['class'] || row['Class'] || '').toString().trim()
-      const username = (row['username'] || row['Username'] || '').toString().trim()
-      const password = (row['password'] || row['Password'] || '').toString().trim()
-      const email = (row['email'] || row['Email'] || '').toString().trim()
-      const phone = (row['phone'] || row['Phone'] || row['mobile'] || row['Mobile'] || '').toString().trim()
+      const adNo = getVal(row, ['ad.no', 'ad_no', 'ad no', 'adno', 'id', 'admissionno', 'admission_no', 'admission no']).toString().trim()
+      const name = getVal(row, ['name', 'display_name', 'displayName', 'displayname', 'fullname', 'full name', 'studentname', 'student name']).toString().trim()
+      const className = getVal(row, ['class', 'classname', 'class name', 'grade', 'division']).toString().trim()
+      const username = getVal(row, ['username', 'user_name', 'user name', 'login', 'user', 'userid', 'user_id', 'user id']).toString().trim()
+      const password = getVal(row, ['password', 'pass_word', 'pass word', 'pass']).toString().trim()
+      const email = getVal(row, ['email', 'email_address', 'email address', 'mail']).toString().trim()
+      const phone = getVal(row, ['phone', 'phone_number', 'phone number', 'mobile', 'mobile_number', 'mobile number', 'contact']).toString().trim()
 
       if (!username) {
         results.skipped++
