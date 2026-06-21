@@ -5,7 +5,7 @@ import {
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
-  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy
+  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -83,6 +83,12 @@ export default function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
   const [aiCustomContext, setAiCustomContext] = useState('')
+  const [showApiKey, setShowApiKey] = useState(false)
+  const [aiSearchQuery, setAiSearchQuery] = useState('')
+  const [isAiSearching, setIsAiSearching] = useState(false)
+  const [aiSearchResultIds, setAiSearchResultIds] = useState<Set<number> | null>(null)
+  const [aiSearchStatus, setAiSearchStatus] = useState('')
+  const [apiKeySaveStatus, setApiKeySaveStatus] = useState('')
   const [filterLogs, setFilterLogs] = useState<Array<{timestamp: string, level: string, message: string, machineId?: number, query?: string}>>([])
   const filterLogEndRef = useRef<HTMLDivElement>(null)
   const [appVersion, setAppVersion] = useState<string>('')
@@ -417,6 +423,7 @@ export default function App() {
         window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       } else if (activeTab === 'safety') {
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
+        window.ipcRenderer.invoke('get-settings').then(setSettings)
       } else if (activeTab === 'reports' || activeTab === 'sessions') {
         window.ipcRenderer.invoke('get-reports-summary').then(setReportsData)
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
@@ -426,6 +433,7 @@ export default function App() {
         window.ipcRenderer.invoke('get-users').then(setUsers)
       } else if (activeTab === 'activity_log') {
         window.ipcRenderer.invoke('get-all-activity-logs').then(setAllActivityLogs)
+        window.ipcRenderer.invoke('get-settings').then(setSettings)
       }
     }
   }, [activeTab, isAuthenticated])
@@ -1078,7 +1086,6 @@ export default function App() {
       setIsSavingSettings(true)
       setSaveStatus('Saving...')
       try {
-        await window.ipcRenderer.invoke('update-settings', 'gemini_api_key', apiKeyInput)
         await window.ipcRenderer.invoke('update-settings', 'filter_porn', filterPorn ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_violence', filterViolence ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_self_harm', filterSelfHarm ? 'true' : 'false')
@@ -1095,6 +1102,62 @@ export default function App() {
         setIsSavingSettings(false)
       }
     }
+  }
+
+  const handleSaveApiKey = async () => {
+    if (window.ipcRenderer) {
+      setIsSavingSettings(true)
+      setApiKeySaveStatus('Saving...')
+      try {
+        await window.ipcRenderer.invoke('update-settings', 'gemini_api_key', apiKeyInput)
+        const fresh = await window.ipcRenderer.invoke('get-settings')
+        setSettings(fresh)
+        setApiKeySaveStatus('API Key saved successfully!')
+        setTimeout(() => setApiKeySaveStatus(''), 3000)
+      } catch (err) {
+        setApiKeySaveStatus('Failed to save API Key.')
+      } finally {
+        setIsSavingSettings(false)
+      }
+    }
+  }
+
+  const handleAiSearch = async () => {
+    if (!aiSearchQuery.trim()) {
+      setAiSearchResultIds(null)
+      setAiSearchStatus('')
+      return
+    }
+
+    if (window.ipcRenderer) {
+      setIsAiSearching(true)
+      setAiSearchStatus('Searching...')
+      try {
+        const logsPayload = allActivityLogs.map((log: any) => ({
+          id: log.id,
+          student: log.customer_name || log.username || 'Walk-in User',
+          class: log.class || 'N/A',
+          program: log.app_title || '',
+          time: log.last_seen || log.first_seen || ''
+        }))
+
+        const matchedIds = await window.ipcRenderer.invoke('ai-search-logs', aiSearchQuery, logsPayload)
+        setAiSearchResultIds(new Set(matchedIds))
+        setAiSearchStatus(`Found ${matchedIds.length} matching logs`)
+      } catch (err: any) {
+        console.error('AI Search failed:', err)
+        setAiSearchStatus(err.message || 'AI Search failed')
+        setAiSearchResultIds(null)
+      } finally {
+        setIsAiSearching(false)
+      }
+    }
+  }
+
+  const handleClearAiSearch = () => {
+    setAiSearchQuery('')
+    setAiSearchResultIds(null)
+    setAiSearchStatus('')
   }
 
   const handleAddCustomTerm = () => {
@@ -2122,126 +2185,263 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Active AI System Context / Prompt Preview */}
-              <div className="bg-slate-900/30 border border-slate-900 rounded-xl p-5 space-y-3">
-                <div>
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <Terminal size={16} className="text-blue-400" /> Active AI System Context (Layer 2)
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">The exact hardcoded system prompt and configuration passed to Gemini 2.5 Flash for filtering.</p>
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Left Side: Violation Log & Live Filter Stream */}
+                <div className="lg:col-span-2 space-y-6">
+                  {/* Real-Time Violation Log */}
+                  <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden shadow-lg">
+                    <div className="flex justify-between items-center p-4 border-b border-slate-900 bg-slate-950/30">
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <AlertTriangle size={15} className="text-amber-400" /> Real-Time Violation Log
+                      </h3>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-slate-500">{safetyAlerts.length} total</span>
+                        {safetyAlerts.length > 0 && (
+                          <button
+                            onClick={handleClearSafetyAlerts}
+                            className="px-2.5 py-1 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 border border-slate-700 hover:border-red-800 rounded text-xs font-semibold transition-all"
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {safetyAlerts.length === 0 ? (
+                      <div className="py-16 flex flex-col items-center justify-center text-slate-600">
+                        <ShieldAlert size={40} className="mb-3 text-slate-800" />
+                        <div className="text-sm font-semibold text-slate-500">No violations logged</div>
+                        <div className="text-xs mt-1.5 text-slate-600">Alerts appear instantly when a client searches prohibited content.</div>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-sm">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
+                              <th className="p-4">Terminal</th>
+                              <th className="p-4">Active User</th>
+                              <th className="p-4">Search Query</th>
+                              <th className="p-4">Reason</th>
+                              <th className="p-4">Timestamp</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            {safetyAlerts.map((alert: any) => (
+                              <tr key={alert.id} className="hover:bg-red-950/20 transition-colors">
+                                <td className="p-4 font-semibold text-white">{alert.machine_name || `PC-${alert.machine_id}`}</td>
+                                <td className="p-4 text-slate-300 text-xs font-semibold">{alert.user_details || 'Walk-in User'}</td>
+                                <td className="p-4 font-mono text-red-300 text-xs">{alert.query}</td>
+                                <td className="p-4 text-slate-300 text-xs">{alert.reason}</td>
+                                <td className="p-4 font-mono text-xs text-slate-400">{new Date(alert.timestamp).toLocaleString()}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Live Filter Log */}
+                  <div className="bg-slate-950 border border-slate-900 rounded-xl overflow-hidden shadow-lg">
+                    <div className="flex justify-between items-center px-4 py-3 border-b border-slate-900">
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <span className="text-green-400 font-mono text-xs">▶</span> Live Filter Log
+                      </h3>
+                      <div className="flex items-center gap-3">
+                        <span className="text-xs text-slate-600">{filterLogs.length} entries</span>
+                        <button onClick={() => setFilterLogs([])} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
+                      </div>
+                    </div>
+                    <div className="font-mono text-xs p-3 space-y-0.5 h-52 overflow-y-auto bg-slate-950">
+                      {filterLogs.length === 0 ? (
+                        <div className="text-slate-700 py-6 text-center">
+                          Waiting for activity... Filter events will stream here in real-time when clients search.
+                        </div>
+                      ) : (
+                        filterLogs.map((log, i) => (
+                          <div key={i} className={`flex gap-2 leading-relaxed ${
+                            log.level === 'block' ? 'text-red-400' :
+                            log.level === 'allow' ? 'text-emerald-400' :
+                            log.level === 'warn' ? 'text-amber-400' :
+                            'text-slate-500'
+                          }`}>
+                            <span className="text-slate-700 shrink-0">[{log.timestamp}]</span>
+                            <span className="break-all">
+                              {log.level === 'block' ? '❌' : log.level === 'allow' ? '✅' : log.level === 'warn' ? '⚠️' : '→'}{' '}
+                              {log.message}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                      <div ref={filterLogEndRef} />
+                    </div>
+                  </div>
                 </div>
-                
-                <div className="bg-slate-950 border border-slate-800/60 rounded-lg p-4 font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap select-all">
-                  {`You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${[
-                    settings.filter_porn !== 'false' ? 'pornography/adult content' : null,
-                    settings.filter_violence !== 'false' ? 'severe violence/gore/terrorist activities' : null,
-                    settings.filter_self_harm !== 'false' ? 'self-harm/suicide instructions' : null,
-                    settings.filter_illegal !== 'false' ? 'illegal acts/weapons/hacking guides' : null,
-                    settings.custom_filter_terms && JSON.parse(settings.custom_filter_terms || '[]').length > 0
-                      ? `any of these specific blocked terms/topics: ${JSON.parse(settings.custom_filter_terms).join(', ')}`
-                      : null
-                  ].filter(Boolean).join(', ') || 'none'}.${
-                    settings.ai_custom_context?.trim()
-                      ? `\nAdditional instructions from administrator: ${settings.ai_custom_context.trim()}`
-                      : ''
-                  }
+
+                {/* Right Side: Configuration Cards */}
+                <div className="space-y-6">
+                  {/* AI Safety Configuration Panel */}
+                  <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-5 shadow-lg">
+                    <h3 className="text-md font-bold text-white flex items-center gap-2">
+                      <SettingsIcon size={18} className="text-blue-500" /> AI Filter Settings
+                    </h3>
+                    
+                    {/* Category Toggles */}
+                    <div className="space-y-3">
+                      <span className="text-xs font-bold uppercase text-slate-400 block">Safety Categories</span>
+                      <div className="grid grid-cols-1 gap-2">
+                        <label className="flex items-center gap-2.5 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/40 hover:border-slate-700/60 transition-colors cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={filterPorn}
+                            onChange={(e) => setFilterPorn(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                          />
+                          <span className="text-xs text-slate-300 font-semibold">Filter Pornography / Adults</span>
+                        </label>
+                        <label className="flex items-center gap-2.5 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/40 hover:border-slate-700/60 transition-colors cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={filterViolence}
+                            onChange={(e) => setFilterViolence(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                          />
+                          <span className="text-xs text-slate-300 font-semibold">Filter Severe Violence / Gore</span>
+                        </label>
+                        <label className="flex items-center gap-2.5 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/40 hover:border-slate-700/60 transition-colors cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={filterSelfHarm}
+                            onChange={(e) => setFilterSelfHarm(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                          />
+                          <span className="text-xs text-slate-300 font-semibold">Filter Self-Harm / Suicide</span>
+                        </label>
+                        <label className="flex items-center gap-2.5 bg-slate-950/60 p-2.5 rounded-lg border border-slate-800/40 hover:border-slate-700/60 transition-colors cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={filterIllegal}
+                            onChange={(e) => setFilterIllegal(e.target.checked)}
+                            className="w-4 h-4 rounded border-slate-800 bg-slate-900 text-blue-600 focus:ring-0 focus:ring-offset-0"
+                          />
+                          <span className="text-xs text-slate-300 font-semibold">Filter Illegal / Weapons / Hack</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    {/* Custom Filter Terms */}
+                    <div className="space-y-3">
+                      <span className="text-xs font-bold uppercase text-slate-400 block">Custom Blocked Terms / Topics</span>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          placeholder="e.g. proxy, tor, torrent..."
+                          value={newCustomTerm}
+                          onChange={(e) => setNewCustomTerm(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleAddCustomTerm();
+                            }
+                          }}
+                          className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
+                        />
+                        <button
+                          onClick={handleAddCustomTerm}
+                          className="p-2 bg-blue-600 hover:bg-blue-505 text-white rounded-lg transition-colors flex items-center justify-center shrink-0"
+                        >
+                          <Plus size={16} />
+                        </button>
+                      </div>
+
+                      {customFilterTerms.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto bg-slate-950/45 border border-slate-800/40 p-2 rounded-lg">
+                          {customFilterTerms.map((term) => (
+                            <span
+                              key={term}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-full text-[10px] text-slate-300 font-semibold"
+                            >
+                              {term}
+                              <button
+                                onClick={() => handleRemoveCustomTerm(term)}
+                                className="text-slate-500 hover:text-red-400 transition-colors"
+                              >
+                                <X size={10} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Custom AI Context / Rules */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase text-slate-400 block">Custom AI Filtering Context</label>
+                      <textarea
+                        placeholder="Add custom instructions or exceptions for the AI safety filter..."
+                        className="w-full h-20 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors resize-none font-mono text-[11px]"
+                        value={aiCustomContext}
+                        onChange={(e) => setAiCustomContext(e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-500">Appended to the Layer 2 prompt dynamically.</p>
+                    </div>
+
+                    {/* Action Buttons */}
+                    <div className="flex items-center gap-3 pt-1">
+                      <button
+                        onClick={handleSaveSafetySettings}
+                        disabled={isSavingSettings}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded-lg text-xs font-bold transition-all shadow-md"
+                      >
+                        {isSavingSettings ? 'Saving...' : 'Save AI Settings'}
+                      </button>
+                      {saveStatus && (
+                        <span className="text-xs font-bold text-emerald-400">
+                          {saveStatus}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Active AI System Context / Prompt Preview */}
+                  <div className="bg-slate-900/30 border border-slate-900 rounded-xl p-5 space-y-3 shadow-lg">
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <Terminal size={16} className="text-blue-400" /> Active AI System Context
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">The exact prompt context sent to Gemini 1.5 Flash for filtering:</p>
+                    </div>
+                    
+                    <div className="bg-slate-950 border border-slate-800/60 rounded-lg p-3 font-mono text-[10px] text-slate-400 leading-relaxed whitespace-pre-wrap select-all max-h-48 overflow-y-auto">
+                      {`You are a safety filter for a cybercafe. Analyze this search query and decide if it is unsafe or violates safety rules. Unsafe topics to filter: ${[
+                        settings.filter_porn !== 'false' ? 'pornography/adult content' : null,
+                        settings.filter_violence !== 'false' ? 'severe violence/gore/terrorist activities' : null,
+                        settings.filter_self_harm !== 'false' ? 'self-harm/suicide instructions' : null,
+                        settings.filter_illegal !== 'false' ? 'illegal acts/weapons/hacking guides' : null,
+                        settings.custom_filter_terms && JSON.parse(settings.custom_filter_terms || '[]').length > 0
+                          ? `any of these specific blocked terms/topics: ${JSON.parse(settings.custom_filter_terms).join(', ')}`
+                          : null
+                      ].filter(Boolean).join(', ') || 'none'}.${
+                        settings.ai_custom_context?.trim()
+                          ? `\nAdditional instructions from administrator: ${settings.ai_custom_context.trim()}`
+                          : ''
+                      }
 Respond strictly in JSON format:
 {
   "isUnsafe": true or false,
   "category": "Reason/category if unsafe, otherwise empty string",
   "reason": "Brief explanation of why this query is allowed or blocked (e.g. why it is safe or unsafe)"
 }`}
-                </div>
-              </div>
-
-              <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
-                <div className="flex justify-between items-center p-4 border-b border-slate-900 bg-slate-950/30">
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <AlertTriangle size={15} className="text-amber-400" /> Real-Time Violation Log
-                  </h3>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-500">{safetyAlerts.length} total</span>
-                    {safetyAlerts.length > 0 && (
-                      <button
-                        onClick={handleClearSafetyAlerts}
-                        className="px-2.5 py-1 bg-slate-800 hover:bg-red-900/40 text-slate-300 hover:text-red-300 border border-slate-700 hover:border-red-800 rounded text-xs font-semibold transition-all"
-                      >Clear All</button>
-                    )}
-                  </div>
-                </div>
-                {safetyAlerts.length === 0 ? (
-                  <div className="py-16 flex flex-col items-center justify-center text-slate-600">
-                    <ShieldAlert size={40} className="mb-3 text-slate-800" />
-                    <div className="text-sm font-semibold text-slate-500">No violations logged</div>
-                    <div className="text-xs mt-1.5 text-slate-600">Alerts appear instantly when a client searches prohibited content.</div>
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse text-sm">
-                      <thead>
-                        <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
-                          <th className="p-4">Terminal</th>
-                          <th className="p-4">Active User</th>
-                          <th className="p-4">Search Query</th>
-                          <th className="p-4">Reason</th>
-                          <th className="p-4">Timestamp</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-900">
-                        {safetyAlerts.map((alert: any) => (
-                          <tr key={alert.id} className="hover:bg-red-950/20 transition-colors">
-                            <td className="p-4 font-semibold text-white">{alert.machine_name || `PC-${alert.machine_id}`}</td>
-                            <td className="p-4 text-slate-300 text-xs font-semibold">{alert.user_details || 'Walk-in User'}</td>
-                            <td className="p-4 font-mono text-red-300 text-xs">{alert.query}</td>
-                            <td className="p-4 text-slate-300 text-xs">{alert.reason}</td>
-                            <td className="p-4 font-mono text-xs text-slate-400">{new Date(alert.timestamp).toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-
-              {/* Live Filter Log */}
-              <div className="bg-slate-950 border border-slate-900 rounded-xl overflow-hidden">
-                <div className="flex justify-between items-center px-4 py-3 border-b border-slate-900">
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                    <span className="text-green-400 font-mono text-xs">▶</span> Live Filter Log
-                  </h3>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-slate-600">{filterLogs.length} entries</span>
-                    <button onClick={() => setFilterLogs([])} className="text-xs text-slate-500 hover:text-slate-300 transition-colors">Clear</button>
-                  </div>
-                </div>
-                <div className="font-mono text-xs p-3 space-y-0.5 h-52 overflow-y-auto bg-slate-950">
-                  {filterLogs.length === 0 ? (
-                    <div className="text-slate-700 py-6 text-center">
-                      Waiting for activity... Filter events will stream here in real-time when clients search.
                     </div>
-                  ) : (
-                    filterLogs.map((log, i) => (
-                      <div key={i} className={`flex gap-2 leading-relaxed ${
-                        log.level === 'block' ? 'text-red-400' :
-                        log.level === 'allow' ? 'text-emerald-400' :
-                        log.level === 'warn' ? 'text-amber-400' :
-                        'text-slate-500'
-                      }`}>
-                        <span className="text-slate-700 shrink-0">[{log.timestamp}]</span>
-                        <span className="break-all">
-                          {log.level === 'block' ? '❌' : log.level === 'allow' ? '✅' : log.level === 'warn' ? '⚠️' : '→'}{' '}
-                          {log.message}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                  <div ref={filterLogEndRef} />
+                  </div>
                 </div>
               </div>
 
-              <div className="text-xs text-slate-500 bg-slate-900/30 border border-slate-900 rounded-lg p-3">
-                Configure Gemini API key, filter categories, and custom blocked terms in
-                <button onClick={() => setActiveTab('settings')} className="text-blue-400 hover:underline ml-1">⚙️ Settings → AI Safety Filter</button>.
+              {/* Note about API Key */}
+              <div className="text-xs text-slate-500 bg-slate-900/30 border border-slate-900 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md">
+                <span>The Gemini API key is configured globally. All AI features (filtering, log searching) use this key.</span>
+                <button onClick={() => setActiveTab('settings')} className="text-blue-400 hover:text-blue-300 font-bold ml-1 flex items-center gap-1 transition-colors self-start sm:self-center">
+                  ⚙️ Settings → API Configuration
+                </button>
               </div>
             </div>
           )}
@@ -2362,138 +2562,44 @@ Respond strictly in JSON format:
                   </div>
                 </div>
 
-                {/* AI Safety Config (FG Filtering) */}
+                {/* AI API Configuration */}
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
                   <h3 className="text-md font-bold text-white flex items-center gap-2">
-                    <ShieldAlert size={18} className="text-red-500" /> AI Safety Filter (FG Filtering)
+                    <KeyRound size={18} className="text-purple-500" /> AI API Configuration
                   </h3>
-                  <div className="flex items-center justify-between p-3 bg-slate-950/40 border border-slate-800/60 rounded-lg">
-                    <div className="space-y-0.5">
-                      <label className="text-sm font-semibold text-white">Enable AI Safety Filter</label>
-                      <p className="text-xs text-slate-400">Classifies clients' Google, YouTube, Yahoo, & Bing search queries via Gemini.</p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      className="w-5 h-5 accent-blue-600 rounded bg-slate-950 border border-slate-800 cursor-pointer"
-                      checked={settings.ai_safety_enabled === 'true'}
-                      onChange={(e) => handleUpdateSetting('ai_safety_enabled', e.target.checked ? 'true' : 'false')}
-                    />
-                  </div>
                   
                   <div className="space-y-2">
                     <label className="text-xs font-bold uppercase text-slate-400">Gemini API Key</label>
-                    <input
-                      type="password"
-                      placeholder="Enter Gemini API Key..."
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors font-mono text-sm"
-                      value={apiKeyInput}
-                      onChange={(e) => setApiKeyInput(e.target.value)}
-                    />
-                    <p className="text-[10px] text-slate-500">Requires a valid Gemini API key to check safety (uses gemini-1.5-flash).</p>
-                  </div>
-
-                  {/* Safety Categories */}
-                  <div className="space-y-2.5 pt-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Filter Safety Categories</label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-950/30 border border-slate-850 p-3.5 rounded-lg">
-                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
-                          checked={filterPorn}
-                          onChange={(e) => setFilterPorn(e.target.checked)}
-                        />
-                        Pornography & Adult Content
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
-                          checked={filterViolence}
-                          onChange={(e) => setFilterViolence(e.target.checked)}
-                        />
-                        Violence, Gore & Terrorism
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
-                          checked={filterSelfHarm}
-                          onChange={(e) => setFilterSelfHarm(e.target.checked)}
-                        />
-                        Self-Harm & Suicide
-                      </label>
-                      <label className="flex items-center gap-2.5 text-xs text-slate-300 cursor-pointer hover:text-white">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 accent-blue-600 cursor-pointer rounded"
-                          checked={filterIllegal}
-                          onChange={(e) => setFilterIllegal(e.target.checked)}
-                        />
-                        Illegal Acts, Weapons & Hacking
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* Custom Blocked Terms */}
-                  <div className="space-y-2.5 pt-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Custom Blocked Terms</label>
-                    <p className="text-[10px] text-slate-500">Queries containing any of these words/phrases will instantly lock the terminal — no API key required.</p>
-                    <div className="flex gap-2">
+                    <div className="relative">
                       <input
-                        type="text"
-                        placeholder="e.g. gambling, proxy, vpn..."
-                        className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={newCustomTerm}
-                        onChange={(e) => setNewCustomTerm(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddCustomTerm() } }}
+                        type={showApiKey ? "text" : "password"}
+                        placeholder="Enter Gemini API Key..."
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 pr-10 text-white outline-none transition-colors font-mono text-sm"
+                        value={apiKeyInput}
+                        onChange={(e) => setApiKeyInput(e.target.value)}
                       />
                       <button
-                        onClick={handleAddCustomTerm}
-                        className="px-3 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded text-sm font-bold transition-all flex items-center gap-1.5"
+                        type="button"
+                        onClick={() => setShowApiKey(!showApiKey)}
+                        className="absolute right-3 top-2.5 text-slate-505 hover:text-slate-300 transition-colors"
                       >
-                        <Plus size={14} /> Add
+                        {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
                       </button>
                     </div>
-                    {customFilterTerms.length > 0 && (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {customFilterTerms.map((term) => (
-                          <span key={term} className="flex items-center gap-1.5 px-2.5 py-1 bg-red-950/60 border border-red-800/50 text-red-300 rounded-full text-xs font-semibold">
-                            {term}
-                            <button onClick={() => handleRemoveCustomTerm(term)} className="text-red-400 hover:text-white transition-colors ml-0.5">
-                              <X size={11} />
-                            </button>
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    <p className="text-[10px] text-slate-500">Global Gemini API key used by all AI features (Filtering and Log Analysis).</p>
                   </div>
 
-                  {/* Layer 2 — Custom AI Context */}
-                  <div className="space-y-2 pt-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Layer 2 — Custom AI Context</label>
-                    <p className="text-[10px] text-slate-500">Extra instructions injected into every Gemini prompt. Example: <em className="text-slate-400 not-italic">"This is a school lab. Also block gaming sites and social media."</em></p>
-                    <textarea
-                      rows={3}
-                      placeholder="Leave empty to use default cybercafe safety context, or write your own instructions for the AI..."
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm resize-none font-mono"
-                      value={aiCustomContext}
-                      onChange={(e) => setAiCustomContext(e.target.value)}
-                    />
-                  </div>
-
-                  {/* Submit buttons */}
-                  <div className="flex items-center gap-3.5 pt-1">
+                  <div className="flex items-center gap-3.5">
                     <button
-                      onClick={handleSaveSafetySettings}
+                      onClick={handleSaveApiKey}
                       disabled={isSavingSettings}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded text-xs font-bold transition-all shadow-md"
                     >
-                      {isSavingSettings ? 'Saving...' : 'Save AI Settings'}
+                      {isSavingSettings ? 'Saving...' : 'Save API Key'}
                     </button>
-                    {saveStatus && (
-                      <span className={`text-xs font-semibold ${saveStatus.includes('successfully') ? 'text-emerald-450 font-bold' : 'text-red-400'}`}>
-                        {saveStatus}
+                    {apiKeySaveStatus && (
+                      <span className="text-xs font-semibold text-emerald-400 font-bold">
+                        {apiKeySaveStatus}
                       </span>
                     )}
                   </div>
@@ -3016,6 +3122,10 @@ Respond strictly in JSON format:
           {/* TAB: Activity Log */}
           {activeTab === 'activity_log' && (() => {
             const filteredLogs = allActivityLogs.filter((log: any) => {
+              if (aiSearchResultIds && !aiSearchResultIds.has(log.id)) {
+                return false
+              }
+
               const nameQuery = activitySearchName.toLowerCase().trim()
               const classQuery = activitySearchClass.toLowerCase().trim()
               const dateQuery = activitySearchDate.trim()
@@ -3046,6 +3156,71 @@ Respond strictly in JSON format:
                     <p className="text-slate-400 text-sm mt-1">Monitor active application usage and user events across all machines.</p>
                   </div>
                   <div className="text-sm text-slate-400">Total activities tracked: {allActivityLogs.length}</div>
+                </div>
+
+                {/* AI Search Card */}
+                <div className="bg-slate-900/40 border border-slate-900 p-5 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-slate-350 flex items-center gap-2 uppercase tracking-wider">
+                      <Sparkles size={14} className="text-purple-400" /> AI Natural Language Search
+                    </h3>
+                    <span className="text-[10px] text-slate-500 font-mono">Gemini Intelligent Search</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-2.5 text-slate-500" size={14} />
+                      <input
+                        type="text"
+                        placeholder="e.g. Find students who were watching coding videos, playing games, or using CMD..."
+                        value={aiSearchQuery}
+                        onChange={(e) => setAiSearchQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAiSearch();
+                          }
+                        }}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 rounded-lg py-1.5 pl-9 pr-3 text-xs text-slate-200 placeholder-slate-500 focus:outline-none transition-colors"
+                      />
+                    </div>
+                    <button
+                      onClick={handleAiSearch}
+                      disabled={isAiSearching}
+                      className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800 text-white rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 shadow-md shadow-purple-950/20"
+                    >
+                      {isAiSearching ? (
+                        <>
+                          <Loader2 size={13} className="animate-spin" />
+                          Searching...
+                        </>
+                      ) : (
+                        'AI Search'
+                      )}
+                    </button>
+                    {aiSearchResultIds !== null && (
+                      <button
+                        onClick={handleClearAiSearch}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-bold transition-colors"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  {aiSearchStatus && (
+                    <div className="flex items-center justify-between text-[11px]">
+                      <span className={`font-semibold ${aiSearchStatus.includes('failed') || aiSearchStatus.includes('not configured') ? 'text-red-400' : 'text-purple-300'}`}>
+                        {aiSearchStatus}
+                      </span>
+                      {aiSearchResultIds !== null && (
+                        <button
+                          onClick={handleClearAiSearch}
+                          className="text-purple-400 hover:text-purple-300 font-bold hover:underline transition-colors"
+                        >
+                          Show all logs
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Filters Row */}
@@ -3133,13 +3308,16 @@ Respond strictly in JSON format:
                       CMD / Terminal
                     </button>
                   </div>
-                  {(activitySearchName || activitySearchClass || activitySearchDate || activitySearchProgram) && (
+                  {(activitySearchName || activitySearchClass || activitySearchDate || activitySearchProgram || aiSearchQuery || aiSearchResultIds !== null) && (
                     <button
                       onClick={() => {
                         setActivitySearchName('')
                         setActivitySearchClass('')
                         setActivitySearchDate('')
                         setActivitySearchProgram('')
+                        setAiSearchQuery('')
+                        setAiSearchResultIds(null)
+                        setAiSearchStatus('')
                       }}
                       className="text-blue-400 hover:text-blue-300 font-bold transition-colors"
                     >

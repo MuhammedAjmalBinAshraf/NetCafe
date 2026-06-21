@@ -581,6 +581,70 @@
     .banner-dismiss-btn:hover {
       background: rgba(255, 255, 255, 0.22);
     }
+
+    /* Change Password form styling */
+    .pw-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.4);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 6px 0 4px 0;
+    }
+    .pw-input {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 6px;
+      padding: 6px 10px;
+      color: #ffffff;
+      font-size: 11px;
+      outline: none;
+      transition: border-color 200ms ease, background 200ms ease;
+    }
+    .pw-input:focus {
+      border-color: #7c3aed;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .pw-submit-btn {
+      width: 100%;
+      background: #7c3aed;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 0;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 200ms ease;
+      text-align: center;
+    }
+    .pw-submit-btn:hover {
+      background: #6d28d9;
+    }
+    .pw-submit-btn:disabled {
+      background: rgba(255, 255, 255, 0.15);
+      color: rgba(255, 255, 255, 0.4);
+      cursor: not-allowed;
+    }
+    .pw-status-msg {
+      font-size: 10px;
+      text-align: center;
+      padding: 4px;
+      border-radius: 4px;
+      display: none;
+      margin-top: 2px;
+    }
+    .pw-status-msg.success {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+      border: 1px solid rgba(34, 197, 94, 0.2);
+    }
+    .pw-status-msg.error {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.2);
+    }
   </style>
 </head>
 <body>
@@ -694,19 +758,18 @@
         </div>
 
         <!-- Settings Panel -->
-        <div class="tab-panel" id="tab-settings">
-          <div class="list-item">
+        <div class="tab-panel" id="tab-settings" style="gap: 4px; overflow-y: auto;">
+          <div class="list-item" style="padding: 4px 8px;">
             <span class="item-label">Kiosk Hotkey</span>
             <span class="item-value">Alt + L</span>
           </div>
-          <div class="list-item">
-            <span class="item-label">Language</span>
-            <span class="item-value">English (US)</span>
-          </div>
-          <div class="list-item">
-            <span class="item-label">Log level</span>
-            <span class="item-value">Production</span>
-          </div>
+          
+          <div class="pw-section-title">Change Password</div>
+          <input type="password" id="pw-old" class="pw-input" placeholder="Old Password" style="margin-bottom: 2px;" />
+          <input type="password" id="pw-new" class="pw-input" placeholder="New Password" style="margin-bottom: 2px;" />
+          <input type="password" id="pw-confirm" class="pw-input" placeholder="Confirm Password" style="margin-bottom: 4px;" />
+          <button id="pw-btn" class="pw-submit-btn">Update Password</button>
+          <div id="pw-status" class="pw-status-msg"></div>
         </div>
       </div>
     </div>
@@ -843,7 +906,7 @@
       });
     });
 
-    // Usage Graph rendering (Weekly / Monthly)
+    // Usage Graph rendering (Weekly / Monthly Stock Chart style SVG)
     const weeklyData = [
       { label: 'Mon', time: '1h 20m', value: 80, pct: 40 },
       { label: 'Tue', time: '2h 45m', value: 165, pct: 75 },
@@ -864,18 +927,107 @@
     function renderUsageGraph(data) {
       const container = document.getElementById('graph-container');
       container.innerHTML = '';
-      data.forEach(item => {
-        const row = document.createElement('div');
-        row.className = 'graph-row';
-        row.innerHTML = `
-          <span class="graph-label">${item.label}</span>
-          <div class="graph-bar-container">
-            <div class="graph-bar" style="width: ${item.pct}%"></div>
-            <span class="graph-bar-text">${item.time}</span>
-          </div>
-        `;
-        container.appendChild(row);
+
+      // Create card background for stock graph
+      const chartCard = document.createElement('div');
+      chartCard.style.background = 'rgba(255, 255, 255, 0.02)';
+      chartCard.style.border = '1px solid rgba(255, 255, 255, 0.05)';
+      chartCard.style.borderRadius = '10px';
+      chartCard.style.padding = '8px';
+      chartCard.style.width = '100%';
+      chartCard.style.display = 'flex';
+      chartCard.style.flexDirection = 'column';
+      chartCard.style.gap = '6px';
+
+      // Graph size parameters
+      const width = 310;
+      const height = 115;
+      const paddingLeft = 15;
+      const paddingRight = 15;
+      const paddingTop = 12;
+      const paddingBottom = 20;
+      const plotWidth = width - paddingLeft - paddingRight;
+      const plotHeight = height - paddingTop - paddingBottom;
+
+      const points = data.map((item, i) => {
+        const x = paddingLeft + (i * plotWidth) / (data.length - 1);
+        const y = height - paddingBottom - (item.pct / 100) * plotHeight;
+        return { x, y, label: item.label, time: item.time };
       });
+
+      let linePathD = '';
+      let areaPathD = '';
+
+      if (points.length > 0) {
+        linePathD = `M ${points[0].x} ${points[0].y}`;
+        areaPathD = `M ${points[0].x} ${height - paddingBottom} L ${points[0].x} ${points[0].y}`;
+
+        for (let i = 1; i < points.length; i++) {
+          linePathD += ` L ${points[i].x} ${points[i].y}`;
+          areaPathD += ` L ${points[i].x} ${points[i].y}`;
+        }
+
+        areaPathD += ` L ${points[points.length - 1].x} ${height - paddingBottom} Z`;
+      }
+
+      let svgHtml = `
+        <svg viewBox="0 0 ${width} ${height}" style="width:100%; height:${height}px; overflow:visible;">
+          <defs>
+            <linearGradient id="chart-area-grad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#22c55e" stop-opacity="0.38"/>
+              <stop offset="100%" stop-color="#22c55e" stop-opacity="0.00"/>
+            </linearGradient>
+          </defs>
+          
+          <!-- Dashed Grid Lines -->
+          <line x1="${paddingLeft}" y1="${paddingTop}" x2="${width - paddingRight}" y2="${paddingTop}" stroke="rgba(255, 255, 255, 0.05)" stroke-dasharray="3,3" />
+          <line x1="${paddingLeft}" y1="${paddingTop + plotHeight / 2}" x2="${width - paddingRight}" y2="${paddingTop + plotHeight / 2}" stroke="rgba(255, 255, 255, 0.05)" stroke-dasharray="3,3" />
+          <line x1="${paddingLeft}" y1="${height - paddingBottom}" x2="${width - paddingRight}" y2="${height - paddingBottom}" stroke="rgba(255, 255, 255, 0.08)" />
+
+          <!-- Gradient Area -->
+          <path d="${areaPathD}" fill="url(#chart-area-grad)" />
+
+          <!-- Stroke Line -->
+          <path d="${linePathD}" stroke="#22c55e" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round" />
+
+          <!-- Points -->
+      `;
+
+      points.forEach((pt, idx) => {
+        const isLast = idx === points.length - 1;
+        if (isLast) {
+          svgHtml += `
+            <circle cx="${pt.x}" cy="${pt.y}" r="5.5" fill="#22c55e" stroke="#ffffff" stroke-width="2" />
+          `;
+        } else {
+          svgHtml += `
+            <circle cx="${pt.x}" cy="${pt.y}" r="2" fill="#22c55e" stroke="none" />
+          `;
+        }
+        svgHtml += `
+          <text x="${pt.x}" y="${height - 6}" fill="rgba(255,255,255,0.4)" font-size="8.5" font-weight="600" text-anchor="middle">${pt.label}</text>
+        `;
+      });
+
+      svgHtml += `</svg>`;
+
+      // Header row
+      const lastPoint = points[points.length - 1];
+      const headerDiv = document.createElement('div');
+      headerDiv.style.display = 'flex';
+      headerDiv.style.justifyContent = 'space-between';
+      headerDiv.style.alignItems = 'baseline';
+      headerDiv.style.padding = '0 2px';
+      headerDiv.innerHTML = `
+        <span style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 500;">Usage (${lastPoint.label})</span>
+        <span style="font-size: 13px; color: #22c55e; font-weight: 700;">${lastPoint.time}</span>
+      `;
+
+      chartCard.appendChild(headerDiv);
+      const svgWrap = document.createElement('div');
+      svgWrap.innerHTML = svgHtml;
+      chartCard.appendChild(svgWrap);
+      container.appendChild(chartCard);
     }
 
     // Default graph content
@@ -921,8 +1073,66 @@
       document.getElementById('card-timer').textContent = displayTime;
     }, 1000);
 
+    // Change Password Form logic
+    const pwOld = document.getElementById('pw-old');
+    const pwNew = document.getElementById('pw-new');
+    const pwConfirm = document.getElementById('pw-confirm');
+    const pwBtn = document.getElementById('pw-btn');
+    const pwStatus = document.getElementById('pw-status');
+
+    if (pwBtn) {
+      pwBtn.addEventListener('click', async () => {
+        const oldPw = pwOld.value;
+        const newPw = pwNew.value;
+        const confPw = pwConfirm.value;
+
+        if (!oldPw || !newPw || !confPw) {
+          showPwStatus('All fields are required.', 'error');
+          return;
+        }
+        if (newPw !== confPw) {
+          showPwStatus('New passwords do not match.', 'error');
+          return;
+        }
+        if (newPw.length < 4) {
+          showPwStatus('Password must be at least 4 characters.', 'error');
+          return;
+        }
+
+        pwBtn.disabled = true;
+        pwBtn.textContent = 'Updating...';
+        pwStatus.style.display = 'none';
+
+        try {
+          const username = sessionData.name || '';
+          const res = await ipcRenderer.invoke('agent-change-password', username, oldPw, newPw);
+          if (res && res.success) {
+            showPwStatus(res.message || 'Password changed successfully!', 'success');
+            pwOld.value = '';
+            pwNew.value = '';
+            pwConfirm.value = '';
+          } else {
+            showPwStatus((res && res.message) || 'Failed to change password.', 'error');
+          }
+        } catch (err) {
+          showPwStatus('Error changing password: ' + (err.message || err), 'error');
+        } finally {
+          pwBtn.disabled = false;
+          pwBtn.textContent = 'Update Password';
+        }
+      });
+    }
+
+    function showPwStatus(msg, type) {
+      if (pwStatus) {
+        pwStatus.textContent = msg;
+        pwStatus.className = 'pw-status-msg ' + type;
+        pwStatus.style.display = 'block';
+      }
+    }
+
     // IPC Main Listener bindings
-    ipcRenderer.on('session-update', (event, data) => {
+    const handleSessionUpdate = (event, data) => {
       if (!data) return;
       sessionData = {
         elapsedSeconds: data.elapsedSeconds || 0,
@@ -947,7 +1157,7 @@
         timeLabel.textContent = 'Remaining Time';
         finLabel.textContent = 'Balance';
         finValue.textContent = `$${parseFloat(sessionData.balance || 0).toFixed(2)}`;
-        finValue.style.color = '#ef4444'; // Red for prepaid balance depleting or standard warning style
+        finValue.style.color = '#ef4444'; // Red for prepaid balance depleting
       } else {
         timeLabel.textContent = 'Elapsed Time';
         finLabel.textContent = 'Session Cost';
@@ -959,7 +1169,6 @@
       let initDisplay = '';
       if (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null) {
         initDisplay = formatTime(sessionData.remainingSeconds);
-        // Switch to split warning automatically if remaining time < 300 seconds and not hovering/profile
         if (sessionData.remainingSeconds < 300 && currentState === 'compact') {
           collapsedState = 'split';
           setIslandState('split');
@@ -971,20 +1180,41 @@
       document.getElementById('compact-timer').textContent = initDisplay;
       document.getElementById('split-timer').textContent = initDisplay;
       document.getElementById('card-timer').textContent = initDisplay;
-    });
+    };
 
-    ipcRenderer.on('safety-check-start', () => {
-      collapsedState = 'check';
-      if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
-        setIslandState('check');
+    ipcRenderer.on('session-update', handleSessionUpdate);
+    ipcRenderer.on('sync-session-data', handleSessionUpdate);
+
+    ipcRenderer.on('set-evaluating-state', (event, evaluating) => {
+      if (evaluating) {
+        collapsedState = 'check';
+        if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
+          setIslandState('check');
+        }
+      } else {
+        collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+        if (currentState === 'check') {
+          setIslandState(collapsedState);
+        }
       }
     });
 
-    ipcRenderer.on('safety-check-done', () => {
-      collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
-      if (currentState === 'check') {
-        setIslandState(collapsedState);
-      }
+    ipcRenderer.on('show-message', (event, msg) => {
+      if (!msg) return;
+      const isW = msg.toLowerCase().includes('safety') || msg.toLowerCase().includes('violation') || msg.toLowerCase().includes('blocked');
+      document.getElementById('banner-type').textContent = isW ? 'Safety Warning' : 'Operator Alert';
+      document.getElementById('banner-message').textContent = msg;
+      
+      collapsedState = 'banner';
+      setIslandState('banner');
+      
+      if (window.bannerTimeout) clearTimeout(window.bannerTimeout);
+      window.bannerTimeout = setTimeout(() => {
+        if (currentState === 'banner') {
+          collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+          setIslandState(collapsedState);
+        }
+      }, 4000);
     });
 
     ipcRenderer.on('safety-violation', (event, payload) => {
@@ -1006,7 +1236,6 @@
     });
 
     ipcRenderer.on('session-end', () => {
-      // Clear timers and hide island container
       island.style.display = 'none';
     });
   </script>

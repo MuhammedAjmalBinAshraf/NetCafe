@@ -1803,15 +1803,34 @@ function applyHostBlocking(domains: string[]) {
 
 function enforceAppBlocking(executables: string[]) {
   if (executables.length === 0) return;
-  if (process.platform === 'win32') {
-    executables.forEach((exe) => {
-      safeSpawn('taskkill.exe', ['/F', '/IM', exe]);
+
+  const runningBlocked = executables.filter(exe => {
+    const name = exe.toLowerCase();
+    const cleanName = name.endsWith('.exe') ? name : name + '.exe';
+    return lastProcessSet.has(name) || lastProcessSet.has(cleanName);
+  });
+
+  if (runningBlocked.length > 0) {
+    runningBlocked.forEach((exe) => {
+      logToUI(`[Block] Terminating blocked executable: "${exe}"`);
+      if (process.platform === 'win32') {
+        const name = exe.toLowerCase().endsWith('.exe') ? exe : exe + '.exe';
+        safeSpawn('taskkill.exe', ['/F', '/IM', name]);
+      } else {
+        const name = exe.toLowerCase().endsWith('.exe') ? exe.slice(0, -4) : exe;
+        exec(`pkill -f ${name}`, () => {});
+      }
     });
-  } else {
-    executables.forEach((exe) => {
-      const name = exe.toLowerCase().endsWith('.exe') ? exe.slice(0, -4) : exe;
-      exec(`pkill -f ${name}`, () => {});
-    });
+
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('set-evaluating-state', true);
+      setTimeout(() => {
+        if (islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-evaluating-state', false);
+          islandWindow.webContents.send('show-message', `Safety Warning: Blocked application "${runningBlocked[0]}" terminated.`);
+        }
+      }, 1000);
+    }
   }
 }
 
@@ -2378,7 +2397,7 @@ function checkQuerySafety(query: string): Promise<boolean> {
       return;
     }
 
-    if (!tcpSocket || tcpSocket.destroyed) {
+    if (!tcpSocket || tcpSocket.destroyed || !isTcpConnected) {
       logToUI(`[MITM] Server not connected, allowing query "${query}"`);
       const elapsed = Date.now() - startTime;
       const remainingDelay = Math.max(0, 2500 - elapsed);
@@ -2419,33 +2438,38 @@ function checkQuerySafety(query: string): Promise<boolean> {
     pendingQueryChecks.set(requestId, {
       resolve: (allowed: boolean) => {
         clearTimeout(timeout);
-        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
-          islandWindow.webContents.send('set-evaluating-state', false);
-        }
-        if (allowed) {
-          // Enforce minimum delay of 2.5 seconds when resolving allowed = true
-          const elapsed = Date.now() - startTime;
-          const remainingDelay = Math.max(0, 2500 - elapsed);
-          if (remainingDelay > 0) {
-            setTimeout(() => resolve(true), remainingDelay);
-          } else {
-            resolve(true);
+        const elapsed = Date.now() - startTime;
+        const remainingDelay = Math.max(0, 2500 - elapsed);
+        
+        const finish = () => {
+          if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+            islandWindow.webContents.send('set-evaluating-state', false);
           }
+          resolve(allowed);
+        };
+
+        if (remainingDelay > 0) {
+          setTimeout(finish, remainingDelay);
         } else {
-          resolve(false);
+          finish();
         }
       },
       reject: (err: any) => {
         clearTimeout(timeout);
-        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
-          islandWindow.webContents.send('set-evaluating-state', false);
-        }
         const elapsed = Date.now() - startTime;
         const remainingDelay = Math.max(0, 2500 - elapsed);
-        if (remainingDelay > 0) {
-          setTimeout(() => resolve(true), remainingDelay);
-        } else {
+
+        const finish = () => {
+          if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+            islandWindow.webContents.send('set-evaluating-state', false);
+          }
           resolve(true);
+        };
+
+        if (remainingDelay > 0) {
+          setTimeout(finish, remainingDelay);
+        } else {
+          finish();
         }
       },
       timeout
@@ -2566,7 +2590,27 @@ app.whenReady().then(async () => {
           logToUI(`[MITM] Safety check result for "${query}": ${allowed ? 'ALLOWED' : 'BLOCKED'}`);
           return allowed;
         },
-        logToUI
+        logToUI,
+        (domain: string) => {
+          const lowerDomain = domain.toLowerCase();
+          return activeBlockRules.some(r => {
+            if (r.type !== 'domain' || !r.value) return false;
+            const val = r.value.toLowerCase();
+            return lowerDomain === val || lowerDomain.endsWith('.' + val);
+          });
+        },
+        (domain: string) => {
+          logToUI(`[MITM] Domain block violation triggered: "${domain}"`);
+          if (islandWindow && !islandWindow.isDestroyed()) {
+            islandWindow.webContents.send('set-evaluating-state', true);
+            setTimeout(() => {
+              if (islandWindow && !islandWindow.isDestroyed()) {
+                islandWindow.webContents.send('set-evaluating-state', false);
+                islandWindow.webContents.send('show-message', `Safety Warning: "${domain}" is blocked by administrator.`);
+              }
+            }, 1000);
+          }
+        }
       );
       mitmProxy.start().catch((err: Error) => {
         logToUI(`[MITM] Proxy start warning: ${err.message}`);

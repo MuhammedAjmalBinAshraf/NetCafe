@@ -51,7 +51,12 @@ function extractSearchQuery(hostname: string, urlPath: string): string | null {
   return null;
 }
 
-function getBlockPageHtml(query: string): string {
+function getBlockPageHtml(target: string, isSite = false): string {
+  const title = isSite ? 'Website Blocked' : 'Search Query Blocked';
+  const desc = isSite 
+    ? 'The website you attempted to access is blocked by the NetCafe Safety Guard rules.' 
+    : 'The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.';
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -114,9 +119,9 @@ function getBlockPageHtml(query: string): string {
 <body>
   <div class="card">
     <div class="icon">⚠️</div>
-    <h1>Search Query Blocked</h1>
-    <p>The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.</p>
-    <div class="query-box">"${query}"</div>
+    <h1>${title}</h1>
+    <p>${desc}</p>
+    <div class="query-box">"${target}"</div>
     <div class="footer">NetCafe Manager &bull; Real-time AI Safety Guard</div>
   </div>
 </body>
@@ -255,7 +260,9 @@ export class MitmProxy {
   constructor(
     private readonly dataDir: string,
     private readonly onQuery: (query: string) => Promise<boolean>,
-    private readonly log: (msg: string) => void
+    private readonly log: (msg: string) => void,
+    private readonly isDomainBlocked?: (domain: string) => boolean,
+    private readonly onDomainViolation?: (domain: string) => void
   ) {}
 
   // ─── Certificate Authority ────────────────────────────────────────────────
@@ -415,6 +422,21 @@ export class MitmProxy {
   private async handleHttp(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
       const parsed  = new URL(req.url || '', 'http://localhost');
+      const hostname = parsed.hostname;
+      if (this.isDomainBlocked && this.isDomainBlocked(hostname)) {
+        this.log(`[Proxy] Blocked HTTP domain intercepted: "${hostname}". Instantly blocking.`);
+        if (this.onDomainViolation) {
+          this.onDomainViolation(hostname);
+        }
+        const blockHtml = getBlockPageHtml(hostname, true);
+        res.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Length': Buffer.byteLength(blockHtml)
+        });
+        res.end(blockHtml);
+        return;
+      }
+
       const query   = extractSearchQuery(parsed.hostname, parsed.pathname + parsed.search);
       if (query) {
         this.log(`[Proxy] HTTP query: "${query}"`);
@@ -517,6 +539,38 @@ export class MitmProxy {
           reqBuffer = ''; // reset after reading first line
           const match = firstLine.match(/^[A-Z]+ ([^\s]+) HTTP/);
           if (match) {
+            // First check if the domain itself is blocked
+            if (this.isDomainBlocked && this.isDomainBlocked(hostname)) {
+              this.log(`[Proxy] Blocked HTTPS domain intercepted: "${hostname}". Instantly blocking.`);
+              clientTls.pause();
+              
+              if (this.onDomainViolation) {
+                this.onDomainViolation(hostname);
+              }
+
+              const blockHtml = getBlockPageHtml(hostname, true);
+              const blockResponse = [
+                'HTTP/1.1 200 OK',
+                'Content-Type: text/html; charset=utf-8',
+                'Connection: close',
+                `Content-Length: ${Buffer.byteLength(blockHtml)}`,
+                '',
+                blockHtml
+              ].join('\r\n');
+              try {
+                if (!clientTls.destroyed) {
+                  clientTls.write(blockResponse);
+                  clientTls.end();
+                }
+              } catch (e: any) {
+                this.log(`[Proxy] Error writing block response: ${e.message}`);
+              } finally {
+                try { realSocket.end(); } catch {}
+                clientTls.resume();
+              }
+              return;
+            }
+
             const query = extractSearchQuery(hostname, match[1]);
             if (query) {
               if (this.blockedQueries.has(query.toLowerCase())) {
@@ -556,7 +610,7 @@ export class MitmProxy {
                   'Content-Type: text/html; charset=utf-8',
                   'Connection: close',
                   '',
-                  checkHtml.replace('</body>\n</html>', '') // strip closing tags to write redirect script later
+                  checkHtml.replace(/<\/body>\s*<\/html>/gi, '') // strip closing tags to write redirect script later
                 ].join('\r\n');
                 
                 try {
@@ -579,6 +633,7 @@ export class MitmProxy {
                       const successScript = `
                         <script>
                           window.location.replace(${JSON.stringify(redirectUrl)});
+                          window.location.reload();
                         </script>
                         </body>
                         </html>
@@ -621,6 +676,7 @@ export class MitmProxy {
                     const fallbackScript = `
                       <script>
                         window.location.replace(${JSON.stringify(redirectUrl)});
+                        window.location.reload();
                       </script>
                       </body>
                       </html>

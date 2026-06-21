@@ -2166,7 +2166,7 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");
@@ -2328,5 +2328,60 @@ ipcMain.handle('get-all-activity-logs', () => {
   } catch (e: any) {
     console.error('get-all-activity-logs failed:', e)
     return []
+  }
+})
+
+ipcMain.handle('ai-search-logs', async (_event, searchQuery: string, logs: any[]) => {
+  if (!db) throw new Error('Database not connected')
+  const apiKeySetting = db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any
+  const apiKey = apiKeySetting?.value || ''
+  if (!apiKey) {
+    throw new Error('Gemini API key is not configured. Please add it in Settings.')
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const prompt = `You are an AI assistant analyzing computer lab activity logs.
+The administrator wants to filter/search the logs using this request: "${searchQuery}".
+
+Activity Logs JSON data:
+${JSON.stringify(logs)}
+
+Analyze which log entries match the request (for example, if they request "browsers", match Chrome, Firefox, Edge; if "video", match YouTube, Netflix; etc.).
+Respond strictly in JSON format containing an array of matched log IDs:
+{
+  "matchedIds": [1, 2, 3]
+}
+If nothing matches, return:
+{
+  "matchedIds": []
+}`
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 20000)
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      }),
+      signal: controller.signal
+    })
+    clearTimeout(timeoutId)
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`Gemini API error: ${res.status} ${text}`)
+    }
+    const data: any = await res.json()
+    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || ''
+    const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim()
+    const parsed = JSON.parse(cleaned)
+    return parsed.matchedIds || []
+  } catch (err: any) {
+    clearTimeout(timeoutId)
+    console.error('AI log search failed:', err)
+    throw err
   }
 })

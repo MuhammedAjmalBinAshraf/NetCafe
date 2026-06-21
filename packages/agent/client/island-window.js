@@ -33,8 +33,8 @@ function createIslandWindow(sessionData) {
   try { islandWindow.setIgnoreMouseEvents(true, { forward: true }); } catch (e) {}
 
   // Center horizontally, position at top of primary screen
-  const x = Math.round(displayBounds.x + (workArea.width - 400) / 2);
-  const y = displayBounds.y;
+  const x = Math.round(displayBounds.x + (displayBounds.width - 400) / 2);
+  const y = displayBounds.y + 12;
   islandWindow.setPosition(x, y);
 
   // Load our dynamic-island.html component
@@ -71,10 +71,9 @@ ipcMain.on('resize', (event, { width, height }) => {
     try {
       islandWindow.setSize(width, height);
       const primary = screen.getPrimaryDisplay();
-      const workArea = primary.workAreaSize;
       const displayBounds = primary.bounds;
-      const x = Math.round(displayBounds.x + (workArea.width - width) / 2);
-      const y = displayBounds.y;
+      const x = Math.round(displayBounds.x + (displayBounds.width - width) / 2);
+      const y = displayBounds.y + 12;
       islandWindow.setPosition(x, y);
     } catch (e) {
       console.error('Failed to resize island:', e);
