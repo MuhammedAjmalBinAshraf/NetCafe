@@ -70,9 +70,10 @@ ipcMain.on('resize', (event, { width, height }) => {
   if (islandWindow && !islandWindow.isDestroyed()) {
     try {
       islandWindow.setSize(width, height);
+      const [actualWidth, actualHeight] = islandWindow.getSize();
       const primary = screen.getPrimaryDisplay();
       const displayBounds = primary.bounds;
-      const x = Math.round(displayBounds.x + (displayBounds.width - width) / 2);
+      const x = Math.round(displayBounds.x + (displayBounds.width - actualWidth) / 2);
       const y = displayBounds.y + 12;
       islandWindow.setPosition(x, y);
     } catch (e) {
