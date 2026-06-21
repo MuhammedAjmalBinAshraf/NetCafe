@@ -1327,7 +1327,7 @@ async function handleServerMessage(msg: any) {
 
       // Create and show dynamic island
       createIslandWindow({
-        startTime: new Date().toISOString(),
+        startTime: new Date(Date.now() + 9000).toISOString(),
         mode: 'prepaid',
         durationMinutes: msg.duration || null,
         user: msg.user || 'Guest'
@@ -1379,7 +1379,7 @@ async function handleServerMessage(msg: any) {
       destroyIslandWindow();
       // Create and show dynamic island
       createIslandWindow({
-        startTime: (msg.session && msg.session.startTime) || new Date().toISOString(),
+        startTime: (msg.session && msg.session.startTime) || new Date(Date.now() + 9000).toISOString(),
         mode: (msg.session && msg.session.mode) || 'postpaid',
         durationMinutes: (msg.session && msg.session.durationMinutes) || null,
         planPrice: (msg.session && msg.session.planPrice) || null,
@@ -3018,38 +3018,15 @@ function stopFullscreenCheck() {
   }
 }
 
+const islandModule = require('../client/island-window.js');
+
 function createIslandWindow(sessionData?: any) {
-  if (islandWindow) return;
+  if (islandWindow && !islandWindow.isDestroyed()) return;
   currentSessionData = sessionData;
   try {
-    const primary = screen.getPrimaryDisplay();
+    islandWindow = islandModule.createIslandWindow(sessionData);
+    if (!islandWindow) return;
     
-    islandWindow = new BrowserWindow({
-      width: 200,
-      height: 50,
-      frame: false,
-      transparent: true,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      hasShadow: false,
-      webPreferences: {
-        nodeIntegration: true,
-        contextIsolation: false
-      }
-    });
-
-    try { islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch {}
-    try { islandWindow.setAlwaysOnTop(true, 'screen-saver', 2); } catch {}
-    try { islandWindow.setIgnoreMouseEvents(true, { forward: true }); } catch {}
-    
-    const x = Math.round(primary.bounds.x + (primary.bounds.width - 200) / 2);
-    const y = primary.bounds.y;
-    try { islandWindow.setPosition(x, y); } catch {}
-
-    const htmlContent = getIslandHtml(sessionData);
-    islandWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
-
     islandWindow.on('close', (e) => {
       if (!isLocked) {
         e.preventDefault();
@@ -3080,33 +3057,9 @@ function createIslandWindow(sessionData?: any) {
 
 function destroyIslandWindow() {
   stopFullscreenCheck();
-  if (islandWindow) {
-    try {
-      islandWindow.destroy();
-    } catch {}
-    islandWindow = null;
-  }
+  islandModule.destroyIslandWindow();
+  islandWindow = null;
 }
-
-ipcMain.on('resize-island', (event, { width, height }) => {
-  if (islandWindow && !islandWindow.isDestroyed()) {
-    try {
-      islandWindow.setSize(width, height);
-      const primary = screen.getPrimaryDisplay();
-      const x = Math.round(primary.bounds.x + (primary.bounds.width - width) / 2);
-      const y = primary.bounds.y;
-      islandWindow.setPosition(x, y);
-    } catch (e) {
-      console.error('Failed to resize island:', e);
-    }
-  }
-});
-
-ipcMain.on('island-mouse', (event, ignore) => {
-  if (islandWindow && !islandWindow.isDestroyed()) {
-    islandWindow.setIgnoreMouseEvents(ignore, { forward: true });
-  }
-});
 
 ipcMain.on('exit-session-request', () => {
   sendToServer({ type: 'client-request-close' });

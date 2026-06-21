@@ -225,6 +225,10 @@ function broadcastBlockRulesToClients() {
 }
 
 function handleClientMessage(socket: net.Socket, data: any) {
+  if (!db) {
+    logToUI("Error: DB not initialized yet")
+    return
+  }
   if (data.type === 'register') {
     const payload = data.payload
     let machine: any = null
@@ -748,7 +752,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
         // Open a new prepaid session using the user's full balance
         db.prepare(`
           INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration)
-          VALUES (?, ?, NULL, datetime('now'), 'prepaid', 'active', ?)
+          VALUES (?, ?, NULL, datetime('now', '+9 seconds'), 'prepaid', 'active', ?)
         `).run(machineId, user.display_name || user.username, user.balance_minutes)
         db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
         // Deduct balance
@@ -881,10 +885,7 @@ function setupWindowsFirewall() {
   })
 }
 
-tcpServer.listen(9000, '0.0.0.0', () => { 
-  logToUI('TCP server listening on port 9000') 
-  setupWindowsFirewall()
-})
+// tcpServer.listen moved inside app.whenReady()
 
 function getMachinesData() {
   if (!db) return []
@@ -896,7 +897,16 @@ function getMachinesData() {
            s.custom_duration,
            COALESCE(p.duration_minutes, s.custom_duration) as duration_minutes,
            CASE 
-             WHEN s.start_time IS NOT NULL THEN CAST((strftime('%s', 'now') - strftime('%s', s.start_time)) AS INTEGER)
+             WHEN s.start_time IS NOT NULL THEN
+               CASE 
+                 WHEN s.status = 'paused' AND s.paused_duration IS NOT NULL THEN
+                   CAST((s.paused_duration - strftime('%s', s.start_time)) AS INTEGER)
+                 ELSE
+                   CASE 
+                     WHEN CAST((strftime('%s', 'now') - strftime('%s', s.start_time)) AS INTEGER) < 0 THEN 0
+                     ELSE CAST((strftime('%s', 'now') - strftime('%s', s.start_time)) AS INTEGER)
+                   END
+               END
              ELSE 0 
            END as timeElapsed
     FROM machines m 
@@ -1295,6 +1305,11 @@ function startPrepaidSessionMonitor() {
 app.whenReady().then(async () => {
   setupDatabase()
   
+  tcpServer.listen(9000, '0.0.0.0', () => { 
+    logToUI('TCP server listening on port 9000') 
+    setupWindowsFirewall()
+  })
+  
   // Register get-server-ip handler
   ipcMain.handle('get-server-ip', () => {
     return getLanIPAddress();
@@ -1475,7 +1490,7 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
   
   db.prepare(`
     INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration) 
-    VALUES (?, ?, ?, datetime('now'), ?, 'active', ?)
+    VALUES (?, ?, ?, datetime('now', '+9 seconds'), ?, 'active', ?)
   `).run(machineId, customerName || 'Walk-in', planId || null, mode || 'postpaid', duration)
 
   db.prepare("UPDATE machines SET status = 'in_use', violation_count = 0 WHERE id = ?").run(machineId)
@@ -1509,36 +1524,48 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
 
 ipcMain.handle('pause-session', (_, machineId) => {
   db.prepare("UPDATE machines SET status = 'paused' WHERE id = ?").run(machineId)
-  db.prepare("UPDATE sessions SET status = 'paused' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
+  const now = Math.floor(Date.now() / 1000)
+  db.prepare("UPDATE sessions SET status = 'paused', paused_duration = ? WHERE machine_id = ? AND end_time IS NULL").run(now, machineId)
   sendCommandToMachine(machineId, { command: 'lock' })
   broadcastMachines()
 })
 
 ipcMain.handle('resume-session', (_, machineId) => {
   db.prepare("UPDATE machines SET status = 'in_use', violation_count = 0 WHERE id = ?").run(machineId)
-  db.prepare("UPDATE sessions SET status = 'active' WHERE machine_id = ? AND end_time IS NULL").run(machineId)
+  
+  const sess = db.prepare("SELECT id, start_time, paused_duration FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId)
+  if (sess) {
+    if (sess.paused_duration) {
+      const now = Math.floor(Date.now() / 1000)
+      const diff = now - sess.paused_duration
+      const shift = diff > 0 ? diff + 9 : 9
+      db.prepare("UPDATE sessions SET start_time = datetime(start_time, '+' || ? || ' seconds'), paused_duration = NULL, status = 'active' WHERE id = ?").run(shift, sess.id)
+    } else {
+      db.prepare("UPDATE sessions SET status = 'active' WHERE id = ?").run(sess.id)
+    }
 
-  const activeSession = db.prepare(`
-    SELECT s.*, p.duration_minutes as plan_duration, p.price
-    FROM sessions s
-    LEFT JOIN plans p ON s.plan_id = p.id
-    WHERE s.machine_id = ? AND s.end_time IS NULL
-  `).get(machineId)
+    const activeSession = db.prepare(`
+      SELECT s.*, p.duration_minutes as plan_duration, p.price
+      FROM sessions s
+      LEFT JOIN plans p ON s.plan_id = p.id
+      WHERE s.id = ?
+    `).get(sess.id)
 
-  if (activeSession) {
-    sendCommandToMachine(machineId, {
-      command: 'unlock',
-      user: activeSession.customer_name || 'Guest',
-      session: {
-        startTime: activeSession.start_time,
-        mode: activeSession.mode || 'postpaid',
-        durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
-        planPrice: activeSession.price || null,
-        customDuration: activeSession.custom_duration || null
-      }
-    })
+    if (activeSession) {
+      sendCommandToMachine(machineId, {
+        command: 'unlock',
+        user: activeSession.customer_name || 'Guest',
+        session: {
+          startTime: activeSession.start_time,
+          mode: activeSession.mode || 'postpaid',
+          durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
+          planPrice: activeSession.price || null,
+          customDuration: activeSession.custom_duration || null
+        }
+      })
+    }
   } else {
-    sendCommandToMachine(machineId, { command: 'unlock' })
+    sendCommandToMachine(machineId, { command: 'unlock', user: 'Guest' })
   }
 
   broadcastMachines()

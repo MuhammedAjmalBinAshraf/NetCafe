@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Dynamic Island</title>
+  <style>
+    /* Reset and Core Styling */
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      background: transparent;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: #ffffff;
+      user-select: none;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      height: 100vh;
+      width: 100vw;
+    }
+
+    /* Scrollbar Style */
+    ::-webkit-scrollbar {
+      width: 3px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #7c3aed;
+      border-radius: 999px;
+    }
+
+    /* Container: The Island */
+    #island {
+      background: #000000;
+      border: 1px solid rgba(255, 255, 255, 0.09);
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
+      transition: width 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                  height 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                  border-radius 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
+      position: relative;
+      overflow: hidden;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* State Sizes & Border Radius */
+    #island.state-compact {
+      width: 122px;
+      height: 36px;
+      border-radius: 20px;
+    }
+
+    #island.state-split {
+      width: 232px;
+      height: 36px;
+      border-radius: 20px;
+    }
+
+    #island.state-check {
+      width: 172px;
+      height: 36px;
+      border-radius: 20px;
+    }
+
+    #island.state-card {
+      width: 342px;
+      height: 185px;
+      border-radius: 22px;
+    }
+
+    #island.state-profile {
+      width: 342px;
+      height: 320px;
+      border-radius: 22px;
+    }
+
+    #island.state-banner {
+      width: 372px;
+      height: 78px;
+      border-radius: 20px;
+    }
+
+    /* Panels Setup */
+    .panel {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 200ms ease;
+      box-sizing: border-box;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .panel.active {
+      opacity: 1;
+      pointer-events: auto;
+      position: relative; /* to allow natural scroll/layout if needed, but still fits size */
+    }
+
+    /* 1. Compact Panel styling */
+    #panel-compact {
+      padding: 0 12px;
+      justify-content: flex-start;
+      gap: 8px;
+    }
+
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background-color: #22c55e;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #22c55e;
+      animation: pulse 1.5s infinite ease-in-out;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.6; box-shadow: 0 0 4px rgba(34, 197, 94, 0.5); }
+      50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 12px rgba(34, 197, 94, 0.8); }
+      100% { transform: scale(0.9); opacity: 0.6; box-shadow: 0 0 4px rgba(34, 197, 94, 0.5); }
+    }
+
+    .time-text {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: -0.2px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 2. Split Panel styling */
+    #panel-split {
+      padding: 0 12px;
+      justify-content: space-between;
+      gap: 6px;
+    }
+
+    .split-warning-dot {
+      width: 8px;
+      height: 8px;
+      background-color: #ef4444;
+      border-radius: 50%;
+      box-shadow: 0 0 8px #ef4444;
+      animation: pulse-red 1.5s infinite ease-in-out;
+      flex-shrink: 0;
+    }
+
+    @keyframes pulse-red {
+      0% { transform: scale(0.9); opacity: 0.6; box-shadow: 0 0 4px rgba(239, 68, 68, 0.5); }
+      50% { transform: scale(1.1); opacity: 1; box-shadow: 0 0 12px rgba(239, 68, 68, 0.8); }
+      100% { transform: scale(0.9); opacity: 0.6; box-shadow: 0 0 4px rgba(239, 68, 68, 0.5); }
+    }
+
+    .split-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.9);
+      white-space: nowrap;
+    }
+
+    .split-time {
+      font-size: 13px;
+      font-weight: 700;
+      color: #ef4444;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* 3. Check Panel styling */
+    #panel-check {
+      padding: 0 12px;
+      justify-content: flex-start;
+      gap: 8px;
+    }
+
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(255, 255, 255, 0.2);
+      border-top: 2px solid #ffffff;
+      border-radius: 50%;
+      animation: spin 800ms linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    .check-text {
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(255, 255, 255, 0.85);
+      letter-spacing: -0.1px;
+    }
+
+    /* 4. Card Panel styling */
+    #panel-card {
+      padding: 14px 16px;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: stretch;
+    }
+
+    .card-row-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .card-username {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+
+    .card-badge {
+      font-size: 9px;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.12);
+      padding: 2px 8px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .card-row-middle {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      margin: 10px 0;
+    }
+
+    .card-time-block {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .card-label {
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.6);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .card-value {
+      font-size: 14px;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .card-financial-block {
+      text-align: right;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .financial-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #22c55e;
+    }
+
+    .card-row-bottom {
+      display: flex;
+      gap: 8px;
+    }
+
+    /* Buttons Styling */
+    .exit-btn {
+      flex: 1;
+      background: rgba(239, 68, 68, 0.15);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #ffffff;
+      padding: 8px 0;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 200ms ease;
+      text-align: center;
+    }
+
+    .exit-btn:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    .profile-btn {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: #ffffff;
+      padding: 8px 0;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 200ms ease;
+      text-align: center;
+    }
+
+    .profile-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    /* 5. Profile Panel styling */
+    #panel-profile {
+      padding: 12px 14px;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: flex-start;
+      gap: 8px;
+    }
+
+    .profile-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .profile-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+    }
+
+    .back-btn {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 2px 8px;
+      border-radius: 4px;
+      transition: color 200ms ease, background 200ms ease;
+    }
+
+    .back-btn:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    /* Profile Tabs styling */
+    .profile-tabs {
+      display: flex;
+      gap: 2px;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 2px;
+      border-radius: 8px;
+      margin-bottom: 4px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 10px;
+      font-weight: 600;
+      padding: 6px 0;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 200ms ease;
+      text-align: center;
+    }
+
+    .tab-btn.active {
+      background: #7c3aed;
+      color: #ffffff;
+    }
+
+    .tab-btn:hover:not(.active) {
+      color: rgba(255, 255, 255, 0.9);
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    /* Tab Contents styling */
+    .tab-contents {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-right: 2px;
+    }
+
+    .tab-panel {
+      display: none;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .tab-panel.active {
+      display: flex;
+    }
+
+    /* List item styles inside tabs */
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 6px 8px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      border-radius: 6px;
+      font-size: 11px;
+    }
+
+    .list-item .item-label {
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .list-item .item-value {
+      font-weight: 600;
+    }
+
+    /* Usage specific styles */
+    .usage-toggle-container {
+      display: flex;
+      justify-content: center;
+      margin-bottom: 6px;
+    }
+
+    .usage-toggle {
+      display: flex;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 2px;
+      border-radius: 6px;
+    }
+
+    .toggle-opt {
+      background: transparent;
+      border: none;
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 9px;
+      font-weight: 700;
+      padding: 4px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 150ms ease;
+    }
+
+    .toggle-opt.active {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+    }
+
+    .usage-graph {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .graph-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .graph-label {
+      width: 28px;
+      font-size: 9px;
+      color: rgba(255, 255, 255, 0.6);
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .graph-bar-container {
+      flex: 1;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 3px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .graph-bar {
+      height: 100%;
+      background: #7c3aed;
+      border-radius: 3px;
+      width: 0; /* Animated dynamically */
+      transition: width 500ms ease;
+      display: flex;
+      align-items: center;
+      padding-left: 6px;
+    }
+
+    .graph-bar-text {
+      position: absolute;
+      left: 6px;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 8.5px;
+      font-weight: 700;
+      color: #ffffff;
+      pointer-events: none;
+    }
+
+    /* 6. Banner Panel styling */
+    #panel-banner {
+      padding: 0 16px;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .banner-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    .banner-icon {
+      font-size: 20px;
+      flex-shrink: 0;
+    }
+
+    .banner-text-block {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      overflow: hidden;
+    }
+
+    .banner-title {
+      font-size: 10px;
+      font-weight: 800;
+      color: #ef4444;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .banner-message {
+      font-size: 12px;
+      font-weight: 600;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .banner-dismiss-btn {
+      background: rgba(255, 255, 255, 0.12);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #ffffff;
+      padding: 6px 12px;
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 150ms ease;
+      white-space: nowrap;
+    }
+
+    .banner-dismiss-btn:hover {
+      background: rgba(255, 255, 255, 0.22);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- The Pill Container -->
+  <div id="island" class="state-compact">
+    
+    <!-- 1. COMPACT STATE -->
+    <div id="panel-compact" class="panel active">
+      <div class="live-dot"></div>
+      <div class="time-text" id="compact-timer">00:00:00</div>
+    </div>
+
+    <!-- 2. SPLIT STATE -->
+    <div id="panel-split" class="panel">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <div class="split-warning-dot"></div>
+        <div class="split-text">Prepaid Time Alert</div>
+      </div>
+      <div class="split-time" id="split-timer">04:59</div>
+    </div>
+
+    <!-- 3. CHECK STATE -->
+    <div id="panel-check" class="panel">
+      <div class="spinner"></div>
+      <div class="check-text">Safety check in progress</div>
+    </div>
+
+    <!-- 4. CARD STATE -->
+    <div id="panel-card" class="panel">
+      <div class="card-row-top">
+        <div class="card-username" id="card-name">John Doe</div>
+        <div class="card-badge" id="card-badge">Prepaid</div>
+      </div>
+      
+      <div class="card-row-middle">
+        <div class="card-time-block">
+          <div class="card-label" id="card-time-label">Remaining Time</div>
+          <div class="card-value" id="card-timer">01:45:12</div>
+        </div>
+        <div class="card-financial-block">
+          <div class="card-label" id="card-financial-label">Balance</div>
+          <div class="financial-value" id="card-financial-value">$24.50</div>
+        </div>
+      </div>
+
+      <div class="card-row-bottom">
+        <button class="exit-btn" id="btn-exit">Exit Session</button>
+        <button class="profile-btn" id="btn-profile">Your Profile</button>
+      </div>
+    </div>
+
+    <!-- 5. PROFILE STATE -->
+    <div id="panel-profile" class="panel">
+      <div class="profile-header">
+        <div class="profile-title">Your Profile</div>
+        <button class="back-btn" id="btn-profile-back">Back</button>
+      </div>
+
+      <div class="profile-tabs">
+        <button class="tab-btn active" data-tab="tab-activity">Activity</button>
+        <button class="tab-btn" data-tab="tab-sessions">Sessions</button>
+        <button class="tab-btn" data-tab="tab-usage">Usage</button>
+        <button class="tab-btn" data-tab="tab-settings">Settings</button>
+      </div>
+
+      <div class="tab-contents">
+        <!-- Activity Panel -->
+        <div class="tab-panel active" id="tab-activity">
+          <div class="list-item">
+            <span class="item-label">Web Interception</span>
+            <span class="item-value">0 flagged queries</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">App Launch</span>
+            <span class="item-value">VS Code started</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">Last check</span>
+            <span class="item-value">Just now (OK)</span>
+          </div>
+        </div>
+
+        <!-- Sessions Panel -->
+        <div class="tab-panel" id="tab-sessions">
+          <div class="list-item">
+            <span class="item-label">Current Session</span>
+            <span class="item-value" id="session-current-time">Active</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">Previous (Yesterday)</span>
+            <span class="item-value">2h 15m</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">Total Sessions</span>
+            <span class="item-value">14 sessions</span>
+          </div>
+        </div>
+
+        <!-- Usage Panel (Graph) -->
+        <div class="tab-panel" id="tab-usage">
+          <div class="usage-toggle-container">
+            <div class="usage-toggle">
+              <button class="toggle-opt active" id="btn-toggle-weekly">Weekly</button>
+              <button class="toggle-opt" id="btn-toggle-monthly">Monthly</button>
+            </div>
+          </div>
+          <div class="usage-graph" id="graph-container">
+            <!-- Populated via Javascript -->
+          </div>
+        </div>
+
+        <!-- Settings Panel -->
+        <div class="tab-panel" id="tab-settings">
+          <div class="list-item">
+            <span class="item-label">Kiosk Hotkey</span>
+            <span class="item-value">Alt + L</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">Language</span>
+            <span class="item-value">English (US)</span>
+          </div>
+          <div class="list-item">
+            <span class="item-label">Log level</span>
+            <span class="item-value">Production</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6. BANNER STATE -->
+    <div id="panel-banner" class="panel">
+      <div class="banner-left">
+        <span class="banner-icon">⚠️</span>
+        <div class="banner-text-block">
+          <div class="banner-title" id="banner-type">Warning</div>
+          <div class="banner-message" id="banner-message">Violation detected! Please close illegal tabs.</div>
+        </div>
+      </div>
+      <button class="banner-dismiss-btn" id="btn-banner-dismiss">Dismiss</button>
+    </div>
+
+  </div>
+
+  <script>
+    const { ipcRenderer } = require('electron');
+
+    const island = document.getElementById('island');
+    let currentState = 'compact';
+    let collapsedState = 'compact'; // remembers collapsed state before hover
+
+    // Session states data cache
+    let sessionData = {
+      elapsedSeconds: 0,
+      remainingSeconds: null,
+      type: 'postpaid',
+      name: 'Guest',
+      cost: 0,
+      balance: 0
+    };
+
+    // Helper: format duration in seconds to hh:mm:ss or mm:ss
+    function formatTime(totalSeconds) {
+      if (totalSeconds < 0 || totalSeconds === null || totalSeconds === undefined) return '00:00';
+      const hrs = Math.floor(totalSeconds / 3600);
+      const mins = Math.floor((totalSeconds % 3600) / 60);
+      const secs = Math.floor(totalSeconds % 60);
+
+      const paddedMins = String(mins).padStart(2, '0');
+      const paddedSecs = String(secs).padStart(2, '0');
+
+      if (hrs > 0) {
+        return `${String(hrs).padStart(2, '0')}:${paddedMins}:${paddedSecs}`;
+      }
+      return `${paddedMins}:${paddedSecs}`;
+    }
+
+    // Set state function
+    function setIslandState(state) {
+      // Remove all state classes
+      island.className = '';
+      island.classList.add(`state-${state}`);
+      currentState = state;
+
+      // Hide all panels, show the selected one
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const activePanel = document.getElementById(`panel-${state}`);
+      if (activePanel) {
+        activePanel.classList.add('active');
+      }
+
+      // Handle ignore mouse events based on state:
+      // In collapsed states (compact, split, check), let hover trigger expansion, so forward is true,
+      // but in expanded states (card, profile, banner), we need full interaction.
+      const ignoreMouse = (state === 'compact' || state === 'split' || state === 'check');
+      ipcRenderer.send('island-mouse', ignoreMouse);
+    }
+
+    // Centered Resize sync
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (let entry of entries) {
+        const rect = island.getBoundingClientRect();
+        ipcRenderer.send('resize', {
+          width: Math.ceil(rect.width),
+          height: Math.ceil(rect.height)
+        });
+      }
+    });
+    resizeObserver.observe(island);
+
+    // Initial state
+    setIslandState('compact');
+
+    // Hover interactions (transitions to card on hover/click)
+    island.addEventListener('mouseenter', () => {
+      if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
+        collapsedState = currentState;
+        setIslandState('card');
+      }
+    });
+
+    island.addEventListener('mouseleave', () => {
+      if (currentState === 'card' || currentState === 'profile') {
+        // Return to the active collapsed state
+        setIslandState(collapsedState);
+      }
+    });
+
+    // Button interactions
+    document.getElementById('btn-exit').addEventListener('click', () => {
+      ipcRenderer.send('exit-session-request');
+    });
+
+    document.getElementById('btn-profile').addEventListener('click', () => {
+      setIslandState('profile');
+    });
+
+    document.getElementById('btn-profile-back').addEventListener('click', () => {
+      setIslandState('card');
+    });
+
+    document.getElementById('btn-banner-dismiss').addEventListener('click', () => {
+      setIslandState(collapsedState);
+    });
+
+    // Profile Tabs switching
+    const tabButtons = document.querySelectorAll('.tab-btn');
+    const tabPanels = document.querySelectorAll('.tab-panel');
+
+    tabButtons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabButtons.forEach(b => b.classList.remove('active'));
+        tabPanels.forEach(p => p.classList.remove('active'));
+
+        btn.classList.add('active');
+        const targetPanel = document.getElementById(btn.getAttribute('data-tab'));
+        if (targetPanel) {
+          targetPanel.classList.add('active');
+        }
+      });
+    });
+
+    // Usage Graph rendering (Weekly / Monthly)
+    const weeklyData = [
+      { label: 'Mon', time: '1h 20m', value: 80, pct: 40 },
+      { label: 'Tue', time: '2h 45m', value: 165, pct: 75 },
+      { label: 'Wed', time: '3h 10m', value: 190, pct: 90 },
+      { label: 'Thu', time: '1h 05m', value: 65, pct: 30 },
+      { label: 'Fri', time: '2h 15m', value: 135, pct: 60 },
+      { label: 'Sat', time: '4h 00m', value: 240, pct: 100 },
+      { label: 'Sun', time: '0h 45m', value: 45, pct: 20 }
+    ];
+
+    const monthlyData = [
+      { label: 'Wk 1', time: '12h 30m', value: 750, pct: 70 },
+      { label: 'Wk 2', time: '18h 15m', value: 1095, pct: 100 },
+      { label: 'Wk 3', time: '8h 45m', value: 525, pct: 50 },
+      { label: 'Wk 4', time: '14h 20m', value: 860, pct: 80 }
+    ];
+
+    function renderUsageGraph(data) {
+      const container = document.getElementById('graph-container');
+      container.innerHTML = '';
+      data.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'graph-row';
+        row.innerHTML = `
+          <span class="graph-label">${item.label}</span>
+          <div class="graph-bar-container">
+            <div class="graph-bar" style="width: ${item.pct}%"></div>
+            <span class="graph-bar-text">${item.time}</span>
+          </div>
+        `;
+        container.appendChild(row);
+      });
+    }
+
+    // Default graph content
+    renderUsageGraph(weeklyData);
+
+    document.getElementById('btn-toggle-weekly').addEventListener('click', (e) => {
+      document.getElementById('btn-toggle-weekly').classList.add('active');
+      document.getElementById('btn-toggle-monthly').classList.remove('active');
+      renderUsageGraph(weeklyData);
+    });
+
+    document.getElementById('btn-toggle-monthly').addEventListener('click', (e) => {
+      document.getElementById('btn-toggle-weekly').classList.remove('active');
+      document.getElementById('btn-toggle-monthly').classList.add('active');
+      renderUsageGraph(monthlyData);
+    });
+
+    // Update timers periodically (based on current sessionData cache)
+    setInterval(() => {
+      if (sessionData.elapsedSeconds === null) return;
+      
+      // Update elapsed/remaining calculations
+      if (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null) {
+        if (sessionData.remainingSeconds > 0) {
+          sessionData.remainingSeconds--;
+        }
+        sessionData.elapsedSeconds++;
+      } else {
+        sessionData.elapsedSeconds++;
+      }
+
+      // Format time based on plan mode
+      let displayTime = '';
+      if (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null) {
+        displayTime = formatTime(sessionData.remainingSeconds);
+      } else {
+        displayTime = formatTime(sessionData.elapsedSeconds);
+      }
+
+      // Update timer elements
+      document.getElementById('compact-timer').textContent = displayTime;
+      document.getElementById('split-timer').textContent = displayTime;
+      document.getElementById('card-timer').textContent = displayTime;
+    }, 1000);
+
+    // IPC Main Listener bindings
+    ipcRenderer.on('session-update', (event, data) => {
+      if (!data) return;
+      sessionData = {
+        elapsedSeconds: data.elapsedSeconds || 0,
+        remainingSeconds: data.remainingSeconds !== undefined ? data.remainingSeconds : null,
+        type: data.type || 'postpaid',
+        name: data.name || 'Guest',
+        cost: data.cost || 0,
+        balance: data.balance || 0
+      };
+
+      // Update Card texts
+      document.getElementById('card-name').textContent = sessionData.name;
+      
+      const badge = document.getElementById('card-badge');
+      badge.textContent = sessionData.type;
+      
+      const timeLabel = document.getElementById('card-time-label');
+      const finLabel = document.getElementById('card-financial-label');
+      const finValue = document.getElementById('card-financial-value');
+
+      if (sessionData.type === 'prepaid') {
+        timeLabel.textContent = 'Remaining Time';
+        finLabel.textContent = 'Balance';
+        finValue.textContent = `$${parseFloat(sessionData.balance || 0).toFixed(2)}`;
+        finValue.style.color = '#ef4444'; // Red for prepaid balance depleting or standard warning style
+      } else {
+        timeLabel.textContent = 'Elapsed Time';
+        finLabel.textContent = 'Session Cost';
+        finValue.textContent = `$${parseFloat(sessionData.cost || 0).toFixed(2)}`;
+        finValue.style.color = '#22c55e'; // Green for accrued cost
+      }
+
+      // Immediately tick the timers
+      let initDisplay = '';
+      if (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null) {
+        initDisplay = formatTime(sessionData.remainingSeconds);
+        // Switch to split warning automatically if remaining time < 300 seconds and not hovering/profile
+        if (sessionData.remainingSeconds < 300 && currentState === 'compact') {
+          collapsedState = 'split';
+          setIslandState('split');
+        }
+      } else {
+        initDisplay = formatTime(sessionData.elapsedSeconds);
+      }
+
+      document.getElementById('compact-timer').textContent = initDisplay;
+      document.getElementById('split-timer').textContent = initDisplay;
+      document.getElementById('card-timer').textContent = initDisplay;
+    });
+
+    ipcRenderer.on('safety-check-start', () => {
+      collapsedState = 'check';
+      if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
+        setIslandState('check');
+      }
+    });
+
+    ipcRenderer.on('safety-check-done', () => {
+      collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+      if (currentState === 'check') {
+        setIslandState(collapsedState);
+      }
+    });
+
+    ipcRenderer.on('safety-violation', (event, payload) => {
+      const message = payload && payload.message ? payload.message : 'Violation detected!';
+      const type = payload && payload.type ? payload.type : 'Violation';
+      
+      document.getElementById('banner-type').textContent = type;
+      document.getElementById('banner-message').textContent = message;
+      
+      collapsedState = 'banner';
+      setIslandState('banner');
+    });
+
+    ipcRenderer.on('session-warning', () => {
+      collapsedState = 'split';
+      if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
+        setIslandState('split');
+      }
+    });
+
+    ipcRenderer.on('session-end', () => {
+      // Clear timers and hide island container
+      island.style.display = 'none';
+    });
+  </script>
+</body>
+</html>
