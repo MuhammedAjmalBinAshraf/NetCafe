@@ -2699,6 +2699,7 @@ app.whenReady().then(async () => {
 
   let updateInstallTimeout: NodeJS.Timeout | null = null;
   const triggerInstallUpdate = () => {
+    isAppQuitting = true;
     if (updateInstallTimeout) {
       clearTimeout(updateInstallTimeout);
       updateInstallTimeout = null;
@@ -3072,10 +3073,10 @@ function createIslandWindow(sessionData?: any) {
     if (!islandWindow) return;
     
     islandWindow.on('close', (e) => {
-      if (!isLocked) {
-        e.preventDefault();
-      }
-    });
+       if (!isLocked && !isAppQuitting) {
+         e.preventDefault();
+       }
+     });
 
     islandWindow.on('closed', () => {
       islandWindow = null;

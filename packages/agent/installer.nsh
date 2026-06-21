@@ -43,10 +43,12 @@ ps_ready:
 !macro customInstall
   CreateDirectory "C:\NetCafe"
   CreateDirectory "C:\NetCafe\logs"
+  IfSilent skip_kiosk_setup
   DetailPrint "NetCafe: Running kiosk setup..."
   !insertmacro runPowerShell "$INSTDIR\resources\kiosk-setup.ps1" "'$INSTDIR\NetCafe Agent.exe'" "C:\NetCafe\logs\agent-install.log"
   Pop $0
   DetailPrint "NetCafe: Kiosk setup exited with code $0"
+skip_kiosk_setup:
 !macroend
 
 !macro customUnInit
