@@ -341,53 +341,76 @@ export class MitmProxy {
     return result;
   }
 
-  // ─── System Setup ─────────────────────────────────────────────────────────
-
   private installCA(): void {
     const crtPath = path.join(this.dataDir, 'netcafe-proxy-ca.crt');
     fs.writeFileSync(crtPath, this.caCertPem);
 
-    // Install to Windows Trusted Root store (local machine)
-    exec(`certutil -addstore -f "Root" "${crtPath}"`, (err) => {
-      if (!err) {
-        this.log('[Proxy] CA installed in Windows Trusted Root store (Local Machine) ✓');
-      } else {
-        this.log(`[Proxy] Local Machine CA install note: ${err.message.split('\n')[0]}`);
-        // Fallback to Current User store (does not require admin privileges)
-        exec(`certutil -user -addstore -f "Root" "${crtPath}"`, (userErr) => {
-          if (!userErr) this.log('[Proxy] CA installed in Windows Trusted Root store (Current User) ✓');
-          else this.log(`[Proxy] Current User CA install note: ${userErr.message.split('\n')[0]}`);
+    const writeFirefoxPolicy = () => {
+      // Write Firefox enterprise policy: trust enterprise CAs + use system proxy
+      const ffDirs = [
+        'C:\\Program Files\\Mozilla Firefox\\distribution',
+        'C:\\Program Files (x86)\\Mozilla Firefox\\distribution',
+      ];
+      const policy = JSON.stringify({
+        policies: {
+          Certificates: { ImportEnterpriseRoots: true },
+          Proxy: {
+            Mode: 'manual',
+            HTTPProxy: `127.0.0.1:${PROXY_PORT}`,
+            UseHTTPProxyForAllProtocols: true,
+            NoProxy: 'localhost, 127.0.0.1'
+          }
+        }
+      }, null, 2);
+
+      for (const dir of ffDirs) {
+        try {
+          if (fs.existsSync(path.dirname(dir))) {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(path.join(dir, 'policies.json'), policy);
+            this.log(`[Proxy] Firefox policy written to ${dir}`);
+          }
+        } catch { /* Firefox may not be installed */ }
+      }
+    };
+
+    // First check if the certificate is already trusted globally (Local Machine) or for Current User
+    exec(`certutil -verifystore Root "NetCafe Security Filter CA"`, (localCheckErr) => {
+      if (!localCheckErr) {
+        this.log('[Proxy] CA certificate is already trusted globally (Local Machine) ✓');
+        writeFirefoxPolicy();
+        return;
+      }
+
+      exec(`certutil -user -verifystore Root "NetCafe Security Filter CA"`, (userCheckErr) => {
+        if (!userCheckErr) {
+          this.log('[Proxy] CA certificate is already trusted for Current User ✓');
+          writeFirefoxPolicy();
+          return;
+        }
+
+        this.log('[Proxy] CA certificate not found in trusted root stores. Attempting installation...');
+
+        // Install to Windows Trusted Root store (local machine)
+        exec(`certutil -addstore -f "Root" "${crtPath}"`, (err) => {
+          if (!err) {
+            this.log('[Proxy] CA installed in Windows Trusted Root store (Local Machine) ✓');
+            writeFirefoxPolicy();
+          } else {
+            this.log(`[Proxy] Local Machine CA install note: ${err.message.split('\n')[0]}`);
+            
+            // To avoid silent hang on standard user accounts (which prompts with a hidden GUI dialog),
+            // we do NOT fall back to certutil -user -addstore if we are running in non-interactive/service/shell mode.
+            // Instead, we log a clear warning instructing the administrator to run the Agent as Admin once.
+            this.log('[Proxy] WARNING: NetCafe Agent is not running as Administrator. Please launch the Agent once as Administrator to trust the root certificate globally.');
+            writeFirefoxPolicy();
+          }
         });
-      }
+      });
     });
-
-    // Write Firefox enterprise policy: trust enterprise CAs + use system proxy
-    const ffDirs = [
-      'C:\\Program Files\\Mozilla Firefox\\distribution',
-      'C:\\Program Files (x86)\\Mozilla Firefox\\distribution',
-    ];
-    const policy = JSON.stringify({
-      policies: {
-        Certificates: { ImportEnterpriseRoots: true },
-        Proxy: {
-          Mode: 'manual',
-          HTTPProxy: `127.0.0.1:${PROXY_PORT}`,
-          UseHTTPProxyForAllProtocols: true,
-          NoProxy: 'localhost, 127.0.0.1'
-        }
-      }
-    }, null, 2);
-
-    for (const dir of ffDirs) {
-      try {
-        if (fs.existsSync(path.dirname(dir))) {
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(path.join(dir, 'policies.json'), policy);
-          this.log(`[Proxy] Firefox policy written to ${dir}`);
-        }
-      } catch { /* Firefox may not be installed */ }
-    }
   }
+
+  // ─── System Setup ─────────────────────────────────────────────────────────
 
   private refreshProxySettings(): void {
     if (process.platform !== 'win32') return;
