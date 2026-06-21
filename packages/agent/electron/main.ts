@@ -53,6 +53,41 @@ function writeAgentRuntimeLog(msg: string) {
   }
 }
 
+function resolveWinPath(cmd: string): string {
+  if (process.platform !== 'win32') return cmd;
+  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+  if (cmd === 'explorer.exe') {
+    return path.join(sysRoot, 'explorer.exe');
+  }
+  if (cmd === 'powershell.exe') {
+    return path.join(sysRoot, 'System32\\WindowsPowerShell\\v1.0\\powershell.exe');
+  }
+  if (cmd === 'taskkill.exe' || cmd === 'shutdown.exe' || cmd === 'sc.exe') {
+    return path.join(sysRoot, 'System32', cmd);
+  }
+  return cmd;
+}
+
+function safeSpawn(command: string, args: string[] = [], options: any = {}) {
+  const resolvedCmd = resolveWinPath(command);
+  try {
+    const child = spawn(resolvedCmd, args, options);
+    child.on('error', (err) => {
+      console.error(`SafeSpawn error for ${command} (resolved to ${resolvedCmd}):`, err);
+      logToUI(`SafeSpawn error for ${command}: ${err.message}`);
+    });
+    return child;
+  } catch (err: any) {
+    console.error(`SafeSpawn exception for ${command} (resolved to ${resolvedCmd}):`, err);
+    logToUI(`SafeSpawn exception for ${command}: ${err.message}`);
+    const dummy = new (require('events').EventEmitter)();
+    (dummy as any).unref = () => {};
+    (dummy as any).stdout = new (require('events').EventEmitter)();
+    (dummy as any).stderr = new (require('events').EventEmitter)();
+    return dummy as any;
+  }
+}
+
 function isAgentTheShell(): boolean {
   if (process.platform !== 'win32') return false;
   try {
@@ -85,7 +120,7 @@ function spawnExplorerShell() {
   
   if (!isAgentTheShell()) {
     logToUI('Agent is not the registered shell. Spawning explorer.exe directly...');
-    spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     return;
   }
   
@@ -96,7 +131,7 @@ function spawnExplorerShell() {
   try {
     execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
     logToUI('Spawning explorer.exe...');
-    spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     
     setTimeout(() => {
       try {
@@ -575,6 +610,30 @@ function createLockWindow() {
     <div style="margin-top: 1.5rem; font-size: 1.1rem; font-weight: 700; background: linear-gradient(135deg, #e2e8f0, #94a3b8); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Preparing Desktop...</div>
     <div style="margin-top: 0.5rem; font-size: 0.8rem; color: #64748b;">Loading user shell and configuration</div>
   </div>
+
+  <div id="autoUpdatingOverlay" style="display: none; position: fixed; inset: 0; background: radial-gradient(ellipse at top, #0f172a 0%, #020617 60%); z-index: 99999; flex-direction: column; align-items: center; justify-content: center; padding: 2rem; box-sizing: border-box; overflow-y: auto;">
+    <div style="width: 50px; height: 50px; border: 3px solid rgba(16,185,129,0.1); border-top: 3px solid #10b981; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+    <div style="margin-top: 1.5rem; font-size: 1.5rem; font-weight: 800; background: linear-gradient(135deg, #34d399, #059669); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">Installing Software Update...</div>
+    <div style="margin-top: 0.5rem; font-size: 0.95rem; color: #94a3b8;" id="autoUpdateCountdown">Restarting in 15 seconds to apply update</div>
+    <div style="margin-top: 0.25rem; font-size: 0.8rem; color: #64748b;">Estimated install time: 10-15 seconds. Please do not turn off your computer.</div>
+    
+    <div style="margin-top: 1.5rem; width: 100%; max-width: 600px; text-align: left;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+        <span style="font-size: 0.75rem; font-weight: 700; text-transform: uppercase; color: #64748b;">Installation & Setup Logs</span>
+        <div style="display: flex; gap: 0.5rem;">
+          <button id="btnCopyUpdateLog" style="background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); color: #cbd5e1; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; transition: background 0.15s;">📋 Copy Log</button>
+          <button id="btnSaveUpdateLog" style="background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); color: #60a5fa; padding: 0.3rem 0.6rem; border-radius: 6px; font-size: 0.75rem; cursor: pointer; transition: background 0.15s;">💾 Save Log to File</button>
+        </div>
+      </div>
+      <pre id="updateLogPre" style="background: #020617; border: 1px solid rgba(255,255,255,0.05); border-radius: 10px; padding: 0.75rem; height: 180px; overflow-y: auto; font-family: monospace; font-size: 0.75rem; color: #cbd5e1; line-height: 1.4; white-space: pre-wrap; word-break: break-all; user-select: text;"></pre>
+      <div id="updateLogStatus" style="margin-top: 0.5rem; font-size: 0.75rem; font-weight: 600; text-align: center; display: none; padding: 0.4rem; border-radius: 6px;"></div>
+    </div>
+    
+    <div style="margin-top: 1.5rem; display: flex; gap: 1rem;">
+      <button id="btnRestartNow" style="background: linear-gradient(135deg, #10b981, #059669); border: none; color: white; padding: 0.6rem 1.5rem; border-radius: 8px; font-size: 0.88rem; font-weight: 700; cursor: pointer; transition: opacity 0.15s;">Restart Now</button>
+    </div>
+  </div>
+
   <div class="container">
     <div class="logo">🔒</div>
     <h1>NetCafe Terminal</h1>
@@ -1007,6 +1066,101 @@ function createLockWindow() {
         appendLog(log);
       });
 
+      ipcRenderer.on('show-auto-updating', (_, payload) => {
+        const overlay = document.getElementById('autoUpdatingOverlay');
+        const countdownEl = document.getElementById('autoUpdateCountdown');
+        const logPre = document.getElementById('updateLogPre');
+        if (overlay) {
+          overlay.style.display = 'flex';
+        }
+        if (logPre) {
+          logPre.textContent = payload.logs || 'No logs available.';
+          logPre.scrollTop = logPre.scrollHeight;
+        }
+
+        let secondsLeft = 15;
+        if (countdownEl) {
+          countdownEl.textContent = 'Restarting in ' + secondsLeft + ' seconds to apply update';
+        }
+
+        const interval = setInterval(() => {
+          secondsLeft--;
+          if (countdownEl) {
+            countdownEl.textContent = 'Restarting in ' + secondsLeft + ' seconds to apply update';
+          }
+          if (secondsLeft <= 0) {
+            clearInterval(interval);
+          }
+        }, 1000);
+
+        // Copy Log Button
+        const btnCopyUpdateLog = document.getElementById('btnCopyUpdateLog');
+        const updateLogStatus = document.getElementById('updateLogStatus');
+        if (btnCopyUpdateLog) {
+          btnCopyUpdateLog.addEventListener('click', () => {
+            if (logPre) {
+              navigator.clipboard.writeText(logPre.textContent).then(() => {
+                if (updateLogStatus) {
+                  updateLogStatus.style.background = 'rgba(16,185,129,0.12)';
+                  updateLogStatus.style.color = '#6ee7b7';
+                  updateLogStatus.style.border = '1px solid rgba(16,185,129,0.2)';
+                  updateLogStatus.textContent = '✓ Log copied to clipboard!';
+                  updateLogStatus.style.display = 'block';
+                  setTimeout(() => { updateLogStatus.style.display = 'none'; }, 3000);
+                }
+              }).catch(() => {});
+            }
+          });
+        }
+
+        // Save Log Button
+        const btnSaveUpdateLog = document.getElementById('btnSaveUpdateLog');
+        if (btnSaveUpdateLog) {
+          btnSaveUpdateLog.addEventListener('click', async () => {
+            if (updateLogStatus) {
+              updateLogStatus.style.display = 'none';
+            }
+            try {
+              const result = await ipcRenderer.invoke('ui-save-client-log');
+              if (updateLogStatus) {
+                if (result.success) {
+                  updateLogStatus.style.background = 'rgba(16,185,129,0.12)';
+                  updateLogStatus.style.color = '#6ee7b7';
+                  updateLogStatus.style.border = '1px solid rgba(16,185,129,0.2)';
+                  updateLogStatus.textContent = '✓ Log saved to: ' + result.path;
+                } else {
+                  updateLogStatus.style.background = 'rgba(239,68,68,0.12)';
+                  updateLogStatus.style.color = '#fca5a5';
+                  updateLogStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+                  updateLogStatus.textContent = '✗ Failed: ' + result.error;
+                }
+                updateLogStatus.style.display = 'block';
+                setTimeout(() => { updateLogStatus.style.display = 'none'; }, 5000);
+              }
+            } catch (err) {
+              if (updateLogStatus) {
+                updateLogStatus.style.background = 'rgba(239,68,68,0.12)';
+                updateLogStatus.style.color = '#fca5a5';
+                updateLogStatus.style.border = '1px solid rgba(239,68,68,0.2)';
+                updateLogStatus.textContent = '✗ Error: ' + err.message;
+                updateLogStatus.style.display = 'block';
+                setTimeout(() => { updateLogStatus.style.display = 'none'; }, 5000);
+              }
+            }
+          });
+        }
+
+        // Restart Now Button
+        const btnRestartNow = document.getElementById('btnRestartNow');
+        if (btnRestartNow) {
+          btnRestartNow.addEventListener('click', () => {
+            btnRestartNow.disabled = true;
+            btnRestartNow.textContent = 'Restarting...';
+            ipcRenderer.invoke('trigger-update-restart').catch(() => {});
+          });
+        }
+      });
+
       ipcRenderer.on('show-unlock-loading', () => {
         const loadingEl = document.getElementById('unlockLoading');
         if (loadingEl) {
@@ -1136,7 +1290,7 @@ async function handleServerMessage(msg: any) {
 
       // Unblock hardware input in case it was blocked from a previous session
       if (process.platform === 'win32') {
-        spawn('powershell.exe', [
+        safeSpawn('powershell.exe', [
           '-NoProfile',
           '-WindowStyle', 'Hidden',
           '-Command',
@@ -1185,7 +1339,7 @@ async function handleServerMessage(msg: any) {
 
       // Unblock hardware input in case it was blocked from a previous session
       if (process.platform === 'win32') {
-        spawn('powershell.exe', [
+        safeSpawn('powershell.exe', [
           '-NoProfile',
           '-WindowStyle', 'Hidden',
           '-Command',
@@ -1236,7 +1390,7 @@ async function handleServerMessage(msg: any) {
       // Always kill explorer.exe on Windows when locking
       if (process.platform === 'win32') {
         logToUI('Terminating explorer.exe to lock desktop shell...');
-        spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+        safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
       }
     } else if (msg.command === 'message') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
@@ -1254,15 +1408,15 @@ async function handleServerMessage(msg: any) {
       }
     } else if (msg.command === 'poweroff') {
       if (process.platform === 'win32') {
-        spawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
+        safeSpawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
       } else {
-        spawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
+        safeSpawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
       }
     } else if (msg.command === 'restart') {
       if (process.platform === 'win32') {
-        spawn('shutdown.exe', ['/r', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
+        safeSpawn('shutdown.exe', ['/r', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
       } else {
-        spawn('reboot', [], { detached: true, stdio: 'ignore' });
+        safeSpawn('reboot', [], { detached: true, stdio: 'ignore' });
       }
     } else if (msg.command === 'limit-bandwidth') {
       const rate = msg.payload?.rate || '2mbit';
@@ -1325,7 +1479,7 @@ async function handleServerMessage(msg: any) {
           psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
         }
         // Secondary: direct spawn to guarantee effect (BlockInput needs calling thread to have input)
-        spawn('powershell.exe', [
+        safeSpawn('powershell.exe', [
           '-NoProfile',
           '-WindowStyle', 'Hidden',
           '-Command',
@@ -1436,9 +1590,9 @@ ipcMain.handle('restore-shell', () => {
 ipcMain.handle('system-shutdown', () => {
   logToUI('System shutdown requested via lockscreen.');
   if (process.platform === 'win32') {
-    spawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
+    safeSpawn('shutdown.exe', ['/s', '/f', '/t', '0'], { detached: true, stdio: 'ignore' });
   } else {
-    spawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
+    safeSpawn('shutdown', ['-h', 'now'], { detached: true, stdio: 'ignore' });
   }
   return { success: true };
 });
@@ -1475,7 +1629,7 @@ function restoreShell() {
 
     // Spawn explorer immediately so the operator gets their desktop back without restarting!
     if (process.platform === 'win32') {
-      spawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+      safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     }
   } catch (e) {
     console.error('Failed to restore shell:', e);
@@ -1605,7 +1759,7 @@ function enforceAppBlocking(executables: string[]) {
   if (executables.length === 0) return;
   if (process.platform === 'win32') {
     executables.forEach((exe) => {
-      spawn('taskkill.exe', ['/F', '/IM', exe]);
+      safeSpawn('taskkill.exe', ['/F', '/IM', exe]);
     });
   } else {
     executables.forEach((exe) => {
@@ -1790,7 +1944,7 @@ function connectToServer() {
     }
     // Extra safety unblock via direct spawn
     if (process.platform === 'win32') {
-      spawn('powershell.exe', [
+      safeSpawn('powershell.exe', [
         '-NoProfile',
         '-WindowStyle', 'Hidden',
         '-Command',
@@ -1812,7 +1966,7 @@ function connectToServer() {
     // Always kill explorer.exe on Windows when locking on server disconnect
     if (process.platform === 'win32') {
       logToUI('Terminating explorer.exe on server disconnect lock...');
-      spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+      safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
     }
     
     setTimeout(connectToServer, 5000);
@@ -2009,7 +2163,7 @@ let psProcess: any = null;
 function initPowerShell() {
   if (process.platform !== 'win32') return;
   try {
-    psProcess = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
+    psProcess = safeSpawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', '-'], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
@@ -2264,7 +2418,7 @@ app.whenReady().then(async () => {
   }
   if (process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() !== 0) {
     const args = [process.execPath, ...process.argv.slice(1)];
-    const child = spawn('pkexec', args, {
+    const child = safeSpawn('pkexec', args, {
       detached: true,
       stdio: 'ignore'
     });
@@ -2319,9 +2473,17 @@ app.whenReady().then(async () => {
 
   // Safety: always unblock hardware input on startup in case a previous session/crash
   // left BlockInput(true) active — this is the #1 cause of "keyboard not responding".
+  
+
+
+
+
+
+
+
   if (process.platform === 'win32') {
     logToUI('Startup safety: unblocking hardware input (BlockInput false)...');
-    spawn('powershell.exe', [
+    safeSpawn('powershell.exe', [
       '-NoProfile',
       '-WindowStyle', 'Hidden',
       '-Command',
@@ -2332,10 +2494,32 @@ app.whenReady().then(async () => {
     }
   }
 
+  let updateInstallTimeout: NodeJS.Timeout | null = null;
+  const triggerInstallUpdate = () => {
+    if (updateInstallTimeout) {
+      clearTimeout(updateInstallTimeout);
+      updateInstallTimeout = null;
+    }
+    if (process.platform === 'win32') {
+      const scProc = safeSpawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
+      scProc.on('close', () => {
+        setTimeout(() => autoUpdater.quitAndInstall(), 2000);
+      });
+    } else {
+      autoUpdater.quitAndInstall();
+    }
+  };
+
+  ipcMain.handle('trigger-update-restart', () => {
+    logToUI('Operator/System requested immediate update restart.');
+    triggerInstallUpdate();
+    return { success: true };
+  });
+
   // Always terminate explorer.exe on Windows startup when locked
   if (isLocked && process.platform === 'win32') {
     logToUI('Terminating explorer.exe on startup (locked)...');
-    spawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+    safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
   }
 
   createLockWindow();
@@ -2344,12 +2528,12 @@ app.whenReady().then(async () => {
   // Auto Updater logic for Agent
   autoUpdater.channel = 'latest-agent';  // ← must NOT pick up latest-server.yml
   autoUpdater.autoDownload = true;        // automatically download and install updates
-  autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err));
+  // autoUpdater.checkForUpdates().catch((err: unknown) => console.error("Agent update check failed:", err)); // Disabled client auto-updating on startup
 
   // Also check for updates every hour
-  setInterval(() => {
-    autoUpdater.checkForUpdates().catch(() => {});
-  }, 60 * 60 * 1000);
+  // setInterval(() => {
+    //   autoUpdater.checkForUpdates().catch(() => {});
+  // }, 60 * 60 * 1000);
 
   function sendUpdateStatus(payload: object) {
     if (lockWindow && !lockWindow.isDestroyed()) {
@@ -2378,7 +2562,39 @@ app.whenReady().then(async () => {
     }
     // Stop the watchdog service before installing so it can't restart the old
     // agent binary while the new installer is writing files (prevents file-lock conflicts).
-    setTimeout(() => {
+    // Read setup log contents to display in the UI
+    let setupLogContent = '';
+    try {
+      if (fs.existsSync(logPath)) {
+        setupLogContent = fs.readFileSync(logPath, 'utf8');
+      }
+    } catch {}
+
+    let agentLogContent = '';
+    try {
+      if (fs.existsSync(runtimeLogFilePath)) {
+        agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
+      } else {
+        agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
+      }
+    } catch {}
+
+    const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
+
+    // Send IPC to show the Auto Updating screen
+    if (lockWindow && !lockWindow.isDestroyed()) {
+      lockWindow.webContents.send('show-auto-updating', {
+        version: info?.version,
+        logs: combinedLogs
+      });
+    }
+
+    // Stop watchdog and install update after 15 seconds automatically
+    updateInstallTimeout = setTimeout(() => {
+      triggerInstallUpdate();
+    }, 15000);
+
+    /* setTimeout(() => {
       if (process.platform === 'win32') {
         const scProc = spawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
         scProc.on('close', () => {
@@ -2387,7 +2603,7 @@ app.whenReady().then(async () => {
       } else {
         autoUpdater.quitAndInstall();
       }
-    }, 3000);
+    }, 3000); */
   });
 
   // Manual IPC from operator panel
@@ -2605,9 +2821,9 @@ function checkFullscreen(): Promise<boolean> {
           } else { Write-Output "false" }
       } else { Write-Output "false" }
     `;
-    const child = spawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
+    const child = safeSpawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
     let output = '';
-    child.stdout.on('data', (data) => {
+    child.stdout.on('data', (data: any) => {
       output += data.toString();
     });
     child.on('close', () => {
@@ -2641,40 +2857,47 @@ function stopFullscreenCheck() {
 
 function createIslandWindow(sessionData?: any) {
   if (islandWindow) return;
-  
-  const primary = screen.getPrimaryDisplay();
-  
-  islandWindow = new BrowserWindow({
-    width: 200,
-    height: 50,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    hasShadow: false,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
+  try {
+    const primary = screen.getPrimaryDisplay();
+    
+    islandWindow = new BrowserWindow({
+      width: 200,
+      height: 50,
+      frame: false,
+      transparent: true,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      hasShadow: false,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false
+      }
+    });
+
+    try { islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch {}
+    try { islandWindow.setAlwaysOnTop(true, 'screen-saver', 2); } catch {}
+    try { islandWindow.setIgnoreMouseEvents(true, { forward: true }); } catch {}
+    
+    const x = Math.round(primary.bounds.x + (primary.bounds.width - 200) / 2);
+    const y = primary.bounds.y;
+    try { islandWindow.setPosition(x, y); } catch {}
+
+    const htmlContent = getIslandHtml(sessionData);
+    islandWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
+
+    islandWindow.on('closed', () => {
+      islandWindow = null;
+    });
+
+    startFullscreenCheck();
+  } catch (err: any) {
+    logToUI(`[createIslandWindow] Error: ${err?.message ?? err}`);
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      try { islandWindow.destroy(); } catch {}
     }
-  });
-
-  islandWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-  islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
-  islandWindow.setIgnoreMouseEvents(true, { forward: true });
-  
-  const x = Math.round(primary.bounds.x + (primary.bounds.width - 200) / 2);
-  const y = primary.bounds.y;
-  islandWindow.setPosition(x, y);
-
-  const htmlContent = getIslandHtml(sessionData);
-  islandWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
-
-  islandWindow.on('closed', () => {
     islandWindow = null;
-  });
-
-  startFullscreenCheck();
+  }
 }
 
 function destroyIslandWindow() {
@@ -3058,7 +3281,7 @@ function runPowerShellScript(scriptText: string): Promise<string> {
     const tempPath = path.join(app.getPath('temp'), `setup-kiosk-${Date.now()}.ps1`);
     try {
       fs.writeFileSync(tempPath, scriptText, 'utf8');
-      const child = spawn('powershell.exe', [
+      const child = safeSpawn('powershell.exe', [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
@@ -3067,17 +3290,17 @@ function runPowerShellScript(scriptText: string): Promise<string> {
       ]);
 
       let stdoutData = '';
-      child.stdout.on('data', (data) => {
+      child.stdout.on('data', (data: any) => {
         const str = data.toString();
         stdoutData += str;
         process.stdout.write(str);
       });
 
-      child.stderr.on('data', (data) => {
+      child.stderr.on('data', (data: any) => {
         process.stderr.write(data.toString());
       });
 
-      child.on('close', (code) => {
+      child.on('close', (code: any) => {
         try { fs.unlinkSync(tempPath); } catch {}
         if (code !== 0) {
           reject(new Error(`PowerShell exited with code ${code}`));
@@ -3086,7 +3309,7 @@ function runPowerShellScript(scriptText: string): Promise<string> {
         }
       });
 
-      child.on('error', (err) => {
+      child.on('error', (err: any) => {
         try { fs.unlinkSync(tempPath); } catch {}
         reject(err);
       });
