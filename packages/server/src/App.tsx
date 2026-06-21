@@ -293,7 +293,18 @@ export default function App() {
       window.ipcRenderer.invoke('get-machines').then(setMachines)
       window.ipcRenderer.invoke('get-plans').then(setPlans)
       window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
-      window.ipcRenderer.invoke('get-settings').then(setSettings)
+      window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
+        setSettings(fresh)
+        setApiKeyInput(fresh.gemini_api_key || '')
+        setAiCustomContext(fresh.ai_custom_context || '')
+        setFilterPorn(fresh.filter_porn !== 'false')
+        setFilterViolence(fresh.filter_violence !== 'false')
+        setFilterSelfHarm(fresh.filter_self_harm !== 'false')
+        setFilterIllegal(fresh.filter_illegal !== 'false')
+        try {
+          setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
+        } catch { setCustomFilterTerms([]) }
+      })
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
@@ -423,17 +434,26 @@ export default function App() {
         window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       } else if (activeTab === 'safety') {
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
-        window.ipcRenderer.invoke('get-settings').then(setSettings)
+        window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
+          setSettings(fresh)
+          initSettingsState(fresh)
+        })
       } else if (activeTab === 'reports' || activeTab === 'sessions') {
         window.ipcRenderer.invoke('get-reports-summary').then(setReportsData)
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
       } else if (activeTab === 'settings') {
-        window.ipcRenderer.invoke('get-settings').then(setSettings)
+        window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
+          setSettings(fresh)
+          initSettingsState(fresh)
+        })
       } else if (activeTab === 'users') {
         window.ipcRenderer.invoke('get-users').then(setUsers)
       } else if (activeTab === 'activity_log') {
         window.ipcRenderer.invoke('get-all-activity-logs').then(setAllActivityLogs)
-        window.ipcRenderer.invoke('get-settings').then(setSettings)
+        window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
+          setSettings(fresh)
+          initSettingsState(fresh)
+        })
       }
     }
   }, [activeTab, isAuthenticated])
@@ -1067,19 +1087,19 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    if (settings) {
-      setApiKeyInput(settings.gemini_api_key || '')
-      setAiCustomContext(settings.ai_custom_context || '')
-      setFilterPorn(settings.filter_porn !== 'false')
-      setFilterViolence(settings.filter_violence !== 'false')
-      setFilterSelfHarm(settings.filter_self_harm !== 'false')
-      setFilterIllegal(settings.filter_illegal !== 'false')
+  const initSettingsState = (fresh: any) => {
+    if (fresh) {
+      setApiKeyInput(fresh.gemini_api_key || '')
+      setAiCustomContext(fresh.ai_custom_context || '')
+      setFilterPorn(fresh.filter_porn !== 'false')
+      setFilterViolence(fresh.filter_violence !== 'false')
+      setFilterSelfHarm(fresh.filter_self_harm !== 'false')
+      setFilterIllegal(fresh.filter_illegal !== 'false')
       try {
-        setCustomFilterTerms(JSON.parse(settings.custom_filter_terms || '[]'))
+        setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
       } catch { setCustomFilterTerms([]) }
     }
-  }, [settings])
+  }
 
   const handleSaveSafetySettings = async () => {
     if (window.ipcRenderer) {
@@ -1094,6 +1114,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'ai_custom_context', aiCustomContext)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
+        initSettingsState(fresh)
         setSaveStatus('Settings saved successfully!')
         setTimeout(() => setSaveStatus(''), 3000)
       } catch (err) {
@@ -1112,6 +1133,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'gemini_api_key', apiKeyInput)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
+        initSettingsState(fresh)
         setApiKeySaveStatus('API Key saved successfully!')
         setTimeout(() => setApiKeySaveStatus(''), 3000)
       } catch (err) {

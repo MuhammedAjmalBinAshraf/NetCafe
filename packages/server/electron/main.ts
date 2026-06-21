@@ -2166,7 +2166,7 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");
@@ -2339,7 +2339,7 @@ ipcMain.handle('ai-search-logs', async (_event, searchQuery: string, logs: any[]
     throw new Error('Gemini API key is not configured. Please add it in Settings.')
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`
   const prompt = `You are an AI assistant analyzing computer lab activity logs.
 The administrator wants to filter/search the logs using this request: "${searchQuery}".
 
