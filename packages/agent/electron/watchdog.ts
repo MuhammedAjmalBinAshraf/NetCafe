@@ -1,9 +1,14 @@
 import { exec } from 'child_process';
+import fs from 'fs';
 
 const agentExeName = 'NetCafe Agent.exe';
 const taskName = 'NetCafeAgent';
 
 function checkAndRestart() {
+  if (fs.existsSync("C:\\NetCafe\\stop-watchdog.flag")) {
+    console.log('Watchdog service is temporarily disabled (stop-watchdog.flag found). Skipping check.');
+    return;
+  }
   exec('tasklist /FI "IMAGENAME eq NetCafe Agent.exe"', (err, stdout) => {
     if (err) return;
     if (!stdout.includes(agentExeName)) {

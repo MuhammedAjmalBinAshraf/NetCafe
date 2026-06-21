@@ -110,6 +110,9 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE machines ADD COLUMN violation_count INTEGER DEFAULT 0;")
   } catch {}
+  try {
+    db.exec("ALTER TABLE machines ADD COLUMN version TEXT DEFAULT '1.0.76';")
+  } catch {}
 
 
   // Session app logs table
@@ -255,21 +258,21 @@ function handleClientMessage(socket: net.Socket, data: any) {
     }
 
     if (!machine) {
-      const stmt = db.prepare("INSERT INTO machines (name, mac_address, uuid, ip_address, status) VALUES (?, ?, ?, ?, ?)")
+      const stmt = db.prepare("INSERT INTO machines (name, mac_address, uuid, ip_address, status, version) VALUES (?, ?, ?, ?, ?, ?)")
       // For cloned machines sharing a UUID/MAC, store null so they don't collide
       let storeUuid: string | null = payload.uuid || null
       let storeMac: string | null = payload.mac_address || null
       // Check if uuid/mac already in use by another machine
       if (storeUuid && db.prepare("SELECT id FROM machines WHERE uuid = ?").get(storeUuid)) storeUuid = null
       if (storeMac && db.prepare("SELECT id FROM machines WHERE mac_address = ?").get(storeMac)) storeMac = null
-      const info = stmt.run(payload.name || 'New PC', storeMac, storeUuid, incomingIp, 'available')
+      const info = stmt.run(payload.name || 'New PC', storeMac, storeUuid, incomingIp, 'available', payload.version || '1.0.76')
       machine = { id: info.lastInsertRowid }
-      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${incomingIp}`)
+      logToUI(`Registered new machine in DB: Name=${payload.name || 'New PC'}, Mac=${payload.mac_address}, UUID=${payload.uuid || 'N/A'}, IP=${incomingIp}, Version=${payload.version || '1.0.76'}`)
     } else {
       const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machine.id)
       const currentStatus = activeSession ? 'in_use' : 'available'
-      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?) WHERE id = ?").run(payload.name || machine.name, incomingIp, currentStatus, payload.uuid || null, machine.id)
-      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, Status=${currentStatus}, IP=${incomingIp}`)
+      db.prepare("UPDATE machines SET name = ?, ip_address = ?, status = ?, uuid = COALESCE(uuid, ?), version = ? WHERE id = ?").run(payload.name || machine.name, incomingIp, currentStatus, payload.uuid || null, payload.version || '1.0.76', machine.id)
+      logToUI(`Client reconnected: ID=${machine.id}, Name=${payload.name || machine.name}, Status=${currentStatus}, IP=${incomingIp}, Version=${payload.version || '1.0.76'}`)
     }
 
     // Clean up stale sockets for this machine ID
@@ -449,7 +452,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
 
                 if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — User: "${windowHitUserDetails}" — Locking machine ${Number(machineId)}`, machineId: Number(machineId), query })
                 db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`, windowHitUserDetails)
-                sendCommandToMachine(Number(machineId), { command: 'lock' })
+                sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
                 sendCommandToMachine(Number(machineId), { command: 'message', payload: `Your terminal has been locked: blocked search term detected ("${matchedTerm}").` })
                 if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"`, userDetails: windowHitUserDetails })
                 broadcastMachines()
@@ -638,7 +641,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
         if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2, warned: true })
         broadcastMachines()
       } else {
-        sendCommandToMachine(Number(machineId), { command: 'lock' })
+        sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
         sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` })
         if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2 })
         broadcastMachines()
@@ -695,7 +698,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
             if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails: l2UserDetails, warned: true })
             broadcastMachines()
           } else {
-            sendCommandToMachine(Number(machineId), { command: 'lock' })
+            sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
             sendCommandToMachine(Number(machineId), { 
               command: 'message', 
               payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
@@ -2105,7 +2108,7 @@ async function checkQuerySafety(
         if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails, warned: true })
         broadcastMachines()
       } else {
-        sendCommandToMachine(machineId, { command: 'lock' })
+        sendCommandToMachine(machineId, { command: 'lock', payload: { isViolation: true, query: query } })
         sendCommandToMachine(machineId, { 
           command: 'message', 
           payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
@@ -2176,7 +2179,7 @@ async function evaluateQuerySafety(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-        generation_config: { response_mime_type: "application/json" }
+        generationConfig: { responseMimeType: "application/json" }
       }),
       signal: controller.signal
     });

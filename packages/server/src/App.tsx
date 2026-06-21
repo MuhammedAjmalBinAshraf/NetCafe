@@ -1507,6 +1507,11 @@ export default function App() {
                     >
                       <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${getStatusColor(machine.status).split(' ')[0]}`} />
                       <span className="font-bold text-white w-28 truncate">{machine.name}</span>
+                      {machine.version && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-850 border border-slate-800 text-slate-400 font-semibold w-16 text-center truncate" title={`Agent Version: ${machine.version}`}>
+                          v{machine.version}
+                        </span>
+                      )}
                       <span className="text-[10px] uppercase font-bold text-slate-400 w-20">{machine.status.replace('_', ' ')}</span>
                       {(machine.status === 'in_use' || machine.status === 'paused') && (
                         <span className="font-mono text-sm text-white w-24">{formatTime(machine.timeRemaining || 0)}</span>
@@ -1563,6 +1568,11 @@ export default function App() {
                               <div className="p-3 border-b border-slate-800 flex justify-between items-center bg-slate-950/20">
                                 <div className="flex items-center gap-2">
                                   <h2 className="text-sm font-bold text-white">{machine.name}</h2>
+                                  {machine.version && (
+                                    <span className="text-[9px] px-1 py-0.5 rounded bg-slate-850 border border-slate-800 text-slate-400 font-semibold" title={`Agent Version: ${machine.version}`}>
+                                      v{machine.version}
+                                    </span>
+                                  )}
                                   <button
                                     onClick={() => { setSelectedDrawerMachine(machine); setScreenshotBase64(''); setScreenshotError('') }}
                                     className="text-slate-400 hover:text-blue-400 hover:bg-slate-800/80 transition-all py-0.5 px-1.5 rounded flex items-center gap-1 text-[10px] bg-slate-900/60 border border-slate-800/80"
@@ -1627,6 +1637,11 @@ export default function App() {
                       <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/20">
                         <div className="flex items-center gap-2">
                           <h2 className="text-lg font-bold text-white">{machine.name}</h2>
+                          {machine.version && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-850 border border-slate-800 text-slate-400 font-semibold" title={`Agent Version: ${machine.version}`}>
+                              v{machine.version}
+                            </span>
+                          )}
                           <button 
                             onClick={() => {
                               setSelectedDrawerMachine(machine)

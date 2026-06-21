@@ -234,6 +234,7 @@ export class MitmProxy {
   private server!: http.Server;
   private running = false;
   private recentlyAllowed = new Map<string, number>();
+  public readonly blockedQueries = new Set<string>();
 
   private isRecentlyAllowed(query: string): boolean {
     const now = Date.now();
@@ -417,9 +418,20 @@ export class MitmProxy {
       const query   = extractSearchQuery(parsed.hostname, parsed.pathname + parsed.search);
       if (query) {
         this.log(`[Proxy] HTTP query: "${query}"`);
+        if (this.blockedQueries.has(query.toLowerCase())) {
+          this.log(`[Proxy] HTTP query "${query}" matches local blocked list. Instantly blocking.`);
+          const blockHtml = getBlockPageHtml(query);
+          res.writeHead(200, {
+            'Content-Type': 'text/html; charset=utf-8',
+            'Content-Length': Buffer.byteLength(blockHtml)
+          });
+          res.end(blockHtml);
+          return;
+        }
         try {
           const allowed = await this.onQuery(query);
           if (!allowed) {
+            this.blockedQueries.add(query.toLowerCase());
             const blockHtml = getBlockPageHtml(query);
             res.writeHead(200, {
               'Content-Type': 'text/html; charset=utf-8',
@@ -507,6 +519,31 @@ export class MitmProxy {
           if (match) {
             const query = extractSearchQuery(hostname, match[1]);
             if (query) {
+              if (this.blockedQueries.has(query.toLowerCase())) {
+                this.log(`[Proxy] HTTPS query "${query}" matches local blocked list. Instantly blocking.`);
+                clientTls.pause();
+                const blockHtml = getBlockPageHtml(query);
+                const blockResponse = [
+                  'HTTP/1.1 200 OK',
+                  'Content-Type: text/html; charset=utf-8',
+                  'Connection: close',
+                  `Content-Length: ${Buffer.byteLength(blockHtml)}`,
+                  '',
+                  blockHtml
+                ].join('\r\n');
+                try {
+                  if (!clientTls.destroyed) {
+                    clientTls.write(blockResponse);
+                    clientTls.end();
+                  }
+                } catch (e: any) {
+                  this.log(`[Proxy] Error writing block response: ${e.message}`);
+                } finally {
+                  try { realSocket.end(); } catch {}
+                  clientTls.resume();
+                }
+                return;
+              }
               if (this.isRecentlyAllowed(query)) {
                 this.log(`[Proxy] Query "${query}" is recently allowed. Bypassing check.`);
               } else {
@@ -553,6 +590,7 @@ export class MitmProxy {
                         }
                       } catch {}
                     } else {
+                      this.blockedQueries.add(query.toLowerCase());
                       const blockHtmlInner = `
                         <div class="card" style="border-color: #ef4444;">
                           <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>

@@ -15,7 +15,7 @@ if (!gotTheLock) {
   process.exit(0);
 }
 
-const IS_DEVELOPER_MODE = true;
+const IS_DEVELOPER_MODE = false;
 
 let mitmProxy: MitmProxy | null = null;
 
@@ -1399,6 +1399,16 @@ async function handleServerMessage(msg: any) {
       }
       destroyIslandWindow();
 
+      // If this was triggered by a safety violation, open local blocked page and cache the query
+      if (msg.payload?.isViolation) {
+        if (msg.payload.query && mitmProxy) {
+          mitmProxy.blockedQueries.add(msg.payload.query.toLowerCase());
+        }
+        if (process.platform === 'win32') {
+          exec('start "" "C:\\NetCafe\\blocked.html"');
+        }
+      }
+
       // Always kill explorer.exe on Windows when locking
       if (process.platform === 'win32') {
         logToUI('Terminating explorer.exe to lock desktop shell...');
@@ -1939,7 +1949,8 @@ function connectToServer() {
         mac_address: mac, 
         name: machineId, 
         ip_address: getIPAddress(),
-        uuid: clientUuid
+        uuid: clientUuid,
+        version: app.getVersion()
       } 
     });
     startScreenMirroring();
@@ -2358,9 +2369,24 @@ Add-Type -TypeDefinition $csharpSource
 
 function checkQuerySafety(query: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
+    const startTime = Date.now();
+
+    // Check local blocked list first to instantly block recurring attempts
+    if (mitmProxy && mitmProxy.blockedQueries.has(query.toLowerCase())) {
+      logToUI(`[MITM] Query "${query}" matches local blocked list. Instantly blocking.`);
+      resolve(false);
+      return;
+    }
+
     if (!tcpSocket || tcpSocket.destroyed) {
       logToUI(`[MITM] Server not connected, allowing query "${query}"`);
-      resolve(true);
+      const elapsed = Date.now() - startTime;
+      const remainingDelay = Math.max(0, 2500 - elapsed);
+      if (remainingDelay > 0) {
+        setTimeout(() => resolve(true), remainingDelay);
+      } else {
+        resolve(true);
+      }
       return;
     }
 
@@ -2370,19 +2396,25 @@ function checkQuerySafety(query: string): Promise<boolean> {
       islandWindow.webContents.send('set-evaluating-state', true);
     }
 
+    // Increased proxy safety check timeout from 5 seconds to 15 seconds
     const timeout = setTimeout(() => {
       if (pendingQueryChecks.has(requestId)) {
         logToUI(`[MITM] Timeout waiting for query check: "${query}"`);
-        const item = pendingQueryChecks.get(requestId);
         pendingQueryChecks.delete(requestId);
         
         if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
           islandWindow.webContents.send('set-evaluating-state', false);
         }
         
-        resolve(true);
+        const elapsed = Date.now() - startTime;
+        const remainingDelay = Math.max(0, 2500 - elapsed);
+        if (remainingDelay > 0) {
+          setTimeout(() => resolve(true), remainingDelay);
+        } else {
+          resolve(true);
+        }
       }
-    }, 5000);
+    }, 15000);
 
     pendingQueryChecks.set(requestId, {
       resolve: (allowed: boolean) => {
@@ -2390,14 +2422,31 @@ function checkQuerySafety(query: string): Promise<boolean> {
         if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
           islandWindow.webContents.send('set-evaluating-state', false);
         }
-        resolve(allowed);
+        if (allowed) {
+          // Enforce minimum delay of 2.5 seconds when resolving allowed = true
+          const elapsed = Date.now() - startTime;
+          const remainingDelay = Math.max(0, 2500 - elapsed);
+          if (remainingDelay > 0) {
+            setTimeout(() => resolve(true), remainingDelay);
+          } else {
+            resolve(true);
+          }
+        } else {
+          resolve(false);
+        }
       },
       reject: (err: any) => {
         clearTimeout(timeout);
         if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
           islandWindow.webContents.send('set-evaluating-state', false);
         }
-        resolve(true);
+        const elapsed = Date.now() - startTime;
+        const remainingDelay = Math.max(0, 2500 - elapsed);
+        if (remainingDelay > 0) {
+          setTimeout(() => resolve(true), remainingDelay);
+        } else {
+          resolve(true);
+        }
       },
       timeout
     });
@@ -2411,6 +2460,80 @@ function checkQuerySafety(query: string): Promise<boolean> {
 }
 
 app.whenReady().then(async () => {
+  // Remove watchdog disable flag on startup to re-enable watchdog checks
+  try {
+    if (fs.existsSync("C:\\NetCafe\\stop-watchdog.flag")) {
+      fs.unlinkSync("C:\\NetCafe\\stop-watchdog.flag");
+    }
+  } catch {}
+
+  // Create beautiful local blocked.html page
+  const blockedHtmlPath = "C:\\NetCafe\\blocked.html";
+  try {
+    const blockedHtmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Blocked by NetCafe Safety Guard</title>
+  <style>
+    body {
+      background-color: #0f172a;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background-color: #1e293b;
+      border: 1px solid #ef4444;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      text-align: center;
+    }
+    .icon {
+      color: #ef4444;
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 12px 0;
+      color: #f87171;
+    }
+    p {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      margin: 0 0 20px 0;
+    }
+    .footer {
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⚠️</div>
+    <h1>Search Query Blocked</h1>
+    <p>The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.</p>
+    <div class="footer">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+  </div>
+</body>
+</html>`;
+    const dir = path.dirname(blockedHtmlPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(blockedHtmlPath, blockedHtmlContent, 'utf8');
+  } catch {}
+
   if (process.argv.includes('--install-kiosk')) {
     try {
       await runKioskSetup();
@@ -2536,6 +2659,10 @@ app.whenReady().then(async () => {
       clearTimeout(updateInstallTimeout);
       updateInstallTimeout = null;
     }
+    try {
+      fs.writeFileSync("C:\\NetCafe\\stop-watchdog.flag", "stop", "utf8");
+    } catch {}
+
     if (process.platform === 'win32') {
       const scProc = safeSpawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
       scProc.on('close', () => {
