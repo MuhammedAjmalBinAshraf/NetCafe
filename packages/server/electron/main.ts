@@ -755,6 +755,20 @@ function handleClientMessage(socket: net.Socket, data: any) {
       }
     }
   }
+  else if (data.type === 'change-member-password') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const { username, oldPassword, newPassword } = data.payload || {};
+      const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, oldPassword) as any;
+      if (!user) {
+        socket.write(JSON.stringify({ command: 'change-password-fail', message: 'Incorrect current password.' }) + '\n');
+      } else {
+        db.prepare('UPDATE users SET password = ? WHERE id = ?').run(newPassword, user.id);
+        socket.write(JSON.stringify({ command: 'change-password-success', message: 'Password updated successfully!' }) + '\n');
+        emitLog('info', `Member ${username} updated their password successfully.`);
+      }
+    }
+  }
   else if (data.type === 'client-request-close') {
     const machineId = clients.get(socket)
     if (machineId && db) {
@@ -1610,6 +1624,13 @@ ipcMain.handle('trigger-client-update', (_, machineId) => {
     sendCommandToMachine(machineId, { command: 'trigger-update' })
     return { success: true }
   }
+})
+
+ipcMain.handle('trigger-client-update-batch', (_, machineIds: number[]) => {
+  for (const id of machineIds) {
+    sendCommandToMachine(id, { command: 'trigger-update' })
+  }
+  return { success: true }
 })
 
 ipcMain.handle('limit-bandwidth', (_, machineId, rate) => {

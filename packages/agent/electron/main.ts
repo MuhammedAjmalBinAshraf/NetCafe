@@ -32,6 +32,8 @@ let lockEnforceInterval: NodeJS.Timeout | null = null;
 let pendingLoginResolve: ((result: { success: boolean; message?: string }) => void) | null = null;
 let currentUser: string | null = null;
 let islandWindow: BrowserWindow | null = null;
+let currentSessionData: any = null;
+let pendingPasswordResolve: ((result: { success: boolean; message: string }) => void) | null = null;
 let isFullscreenApp = false;
 let fullscreenCheckInterval: NodeJS.Timeout | null = null;
 const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
@@ -1273,7 +1275,17 @@ async function handleServerMessage(msg: any) {
     }
 
     logToUI(`Received server command: ${msg.command || 'unknown'}`);
-    if (msg.command === 'login-success') {
+    if (msg.command === 'change-password-success') {
+      if (pendingPasswordResolve) {
+        pendingPasswordResolve({ success: true, message: msg.message || 'Password changed successfully.' });
+        pendingPasswordResolve = null;
+      }
+    } else if (msg.command === 'change-password-fail') {
+      if (pendingPasswordResolve) {
+        pendingPasswordResolve({ success: false, message: msg.message || 'Failed to change password.' });
+        pendingPasswordResolve = null;
+      }
+    } else if (msg.command === 'login-success') {
       logToUI(`Server approved member login. Unlocking terminal.`);
       if (pendingLoginResolve) {
         pendingLoginResolve({ success: true });
@@ -1540,6 +1552,30 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
       pendingLoginResolve = null;
       origResolve(result);
     };
+  });
+});
+
+// ─── IPC: Member change password bridge ───────────────────────────────────────
+ipcMain.handle('agent-change-password', (_event, username: string, oldPassword: string, newPassword: string): Promise<{ success: boolean; message: string }> => {
+  return new Promise((resolve) => {
+    if (!tcpSocket || tcpSocket.destroyed) {
+      resolve({ success: false, message: 'Not connected to server.' });
+      return;
+    }
+    pendingPasswordResolve = resolve;
+    const timeout = setTimeout(() => {
+      if (pendingPasswordResolve === resolve) {
+        pendingPasswordResolve = null;
+        resolve({ success: false, message: 'Server did not respond. Please try again.' });
+      }
+    }, 8000);
+    const origResolve = resolve;
+    pendingPasswordResolve = (result) => {
+      clearTimeout(timeout);
+      pendingPasswordResolve = null;
+      origResolve(result);
+    };
+    sendToServer({ type: 'change-member-password', payload: { username, oldPassword, newPassword } });
   });
 });
 
@@ -2857,6 +2893,7 @@ function stopFullscreenCheck() {
 
 function createIslandWindow(sessionData?: any) {
   if (islandWindow) return;
+  currentSessionData = sessionData;
   try {
     const primary = screen.getPrimaryDisplay();
     
@@ -2886,8 +2923,22 @@ function createIslandWindow(sessionData?: any) {
     const htmlContent = getIslandHtml(sessionData);
     islandWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(htmlContent)}`);
 
+    islandWindow.on('close', (e) => {
+      if (!isLocked) {
+        e.preventDefault();
+      }
+    });
+
     islandWindow.on('closed', () => {
       islandWindow = null;
+      if (!isLocked) {
+        logToUI('Island window closed unexpectedly. Re-creating dynamic island to keep it permanent.');
+        setTimeout(() => {
+          if (!isLocked) {
+            createIslandWindow(currentSessionData);
+          }
+        }, 1000);
+      }
     });
 
     startFullscreenCheck();
@@ -2965,11 +3016,12 @@ function getIslandHtml(sessionData?: any): string {
       background: #000; color: #fff;
       overflow: hidden; display: flex; align-items: center; justify-content: center;
       border: 1px solid rgba(255,255,255,0.09);
-      box-shadow: 0 0 0 0.5px rgba(255,255,255,0.06) inset, 0 16px 40px rgba(0,0,0,0.72), 0 2px 8px rgba(0,0,0,0.5);
+      border-radius: 999px; /* Pill by default to prevent rectangular flash */
+      box-shadow: 0 12px 30px rgba(0,0,0,0.65), 0 2px 10px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.06);
       transition:
-        width  560ms cubic-bezier(0.34,1.56,0.64,1),
-        height 560ms cubic-bezier(0.34,1.56,0.64,1),
-        border-radius 560ms cubic-bezier(0.34,1.56,0.64,1),
+        width  480ms cubic-bezier(0.32,0.72,0,1),
+        height 480ms cubic-bezier(0.32,0.72,0,1),
+        border-radius 480ms cubic-bezier(0.32,0.72,0,1),
         border 250ms ease, box-shadow 300ms ease;
       will-change: width, height, border-radius;
       position: relative;
@@ -2978,24 +3030,24 @@ function getIslandHtml(sessionData?: any): string {
       background: #000; border: 1px solid rgba(255,255,255,0.09); border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
       box-shadow: 0 8px 24px rgba(0,0,0,0.6);
-      transition: width 500ms cubic-bezier(0.34,1.56,0.64,1), height 500ms cubic-bezier(0.34,1.56,0.64,1),
-        opacity 300ms ease, transform 500ms cubic-bezier(0.34,1.56,0.64,1);
+      transition: width 480ms cubic-bezier(0.32,0.72,0,1), height 480ms cubic-bezier(0.32,0.72,0,1),
+        opacity 300ms ease, transform 480ms cubic-bezier(0.32,0.72,0,1);
       overflow: hidden; flex-shrink: 0;
     }
     #dot.hidden  { width:0; height:0; opacity:0; transform:scale(0.3); border:none; box-shadow:none; }
     #dot.visible { width:37px; height:37px; opacity:1; transform:scale(1); }
 
     /* State dimensions */
-    #island.s-notch   { width:90px;  height:8px;   border-radius:4px;   border:none; box-shadow:none; background:#070707; }
     #island.s-compact { width:186px; height:36px;  border-radius:999px; }
     #island.s-split   { width:122px; height:36px;  border-radius:999px; }
     #island.s-check   { width:232px; height:36px;  border-radius:999px;
       border:1.5px solid rgba(56,189,248,0.35);
-      box-shadow:0 0 0 0.5px rgba(255,255,255,0.06) inset,0 0 22px rgba(56,189,248,0.2),0 16px 40px rgba(0,0,0,0.72); }
-    #island.s-card    { width:342px; height:175px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:8px; }
+      box-shadow:0 0 22px rgba(56,189,248,0.2), 0 12px 30px rgba(0,0,0,0.65); }
+    #island.s-card    { width:342px; height:185px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:8px; }
+    #island.s-profile { width:342px; height:320px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:0; }
     #island.s-banner  { width:372px; height:78px;  border-radius:22px; padding:0 16px;
       border:1.5px solid rgba(239,68,68,0.3);
-      box-shadow:0 0 0 0.5px rgba(255,255,255,0.06) inset,0 0 24px rgba(239,68,68,0.15),0 16px 40px rgba(0,0,0,0.72); }
+      box-shadow:0 0 24px rgba(239,68,68,0.15), 0 12px 30px rgba(0,0,0,0.65); }
 
     .panel {
       position:absolute; inset:0;
@@ -3004,8 +3056,9 @@ function getIslandHtml(sessionData?: any): string {
       transition:opacity 140ms ease-out;
       width:100%; height:100%;
     }
-    .panel.show { opacity:1; pointer-events:auto; transition:opacity 240ms ease-in; }
+    .panel.show { opacity:1; pointer-events:auto; transition:opacity 240ms ease-in 100ms; }
     #panel-card   { align-items:stretch; flex-direction:column; gap:8px; padding:14px 16px; justify-content:flex-start; }
+    #panel-profile { align-items:stretch; flex-direction:column; gap:0; padding:12px 14px; justify-content:flex-start; }
     #panel-banner { flex-direction:row; gap:12px; padding:0 16px; }
 
     /* Compact */
@@ -3041,14 +3094,60 @@ function getIslandHtml(sessionData?: any): string {
     .cost-col    { text-align:right; }
     .cost-label  { font-size:9.5px; color:rgba(255,255,255,0.38); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; }
     .cost-val    { font-size:18px; font-weight:800; color:#34d399; text-shadow:0 0 14px rgba(52,211,153,0.35); }
-    .exit-btn    {
-      width:100%; background:linear-gradient(135deg,#ef4444,#dc2626);
+    
+    .card-actions { display:flex; gap:8px; width:100%; margin-top:4px; }
+    .exit-btn {
+      flex:1; background:linear-gradient(135deg,#ef4444,#dc2626);
       color:#ffffff; border:none; border-radius:999px; padding:9px 0;
-      font-size:12.5px; font-weight:700; cursor:pointer; letter-spacing:0.1px;
+      font-size:12px; font-weight:700; cursor:pointer; letter-spacing:0.1px;
       box-shadow:0 4px 12px rgba(239,68,68,0.3); font-family:inherit;
-      transition:all 0.18s ease; flex-shrink:0; display:block; text-align:center; line-height:1; }
-    .exit-btn:hover  { background:linear-gradient(135deg,#dc2626,#b91c1c); transform:translateY(-1px); box-shadow:0 6px 18px rgba(239,68,68,0.45); }
+      transition:all 0.18s ease; flex-shrink:0; text-align:center; line-height:1; }
+    .exit-btn:hover { background:linear-gradient(135deg,#dc2626,#b91c1c); transform:translateY(-1px); box-shadow:0 6px 18px rgba(239,68,68,0.45); }
     .exit-btn:active { transform:translateY(0); }
+    
+    .profile-btn {
+      flex:1; background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.07);
+      color:#ffffff; border-radius:999px; padding:9px 0;
+      font-size:12px; font-weight:700; cursor:pointer; letter-spacing:0.1px;
+      font-family:inherit; transition:all 0.18s ease; text-align:center; line-height:1; }
+    .profile-btn:hover { background:rgba(255,255,255,0.15); transform:translateY(-1px); }
+    .profile-btn:active { transform:translateY(0); }
+
+    /* Profile Panel */
+    .prof-header { display:flex; align-items:center; justify-content:space-between; width:100%; padding-bottom:8px; border-bottom:1px solid rgba(255,255,255,0.08); margin-bottom:8px; }
+    .prof-title { font-size:13px; font-weight:700; color:#fff; }
+    .prof-back-btn { background:transparent; border:none; color:rgba(255,255,255,0.5); font-size:11px; font-weight:600; cursor:pointer; padding:2px 6px; border-radius:4px; font-family:inherit; }
+    .prof-back-btn:hover { color:#fff; background:rgba(255,255,255,0.08); }
+    
+    .prof-tabs { display:flex; gap:4px; width:100%; margin-bottom:10px; background:rgba(255,255,255,0.04); padding:3px; border-radius:8px; }
+    .prof-tab { flex:1; background:transparent; border:none; color:rgba(255,255,255,0.5); font-size:10px; font-weight:700; cursor:pointer; padding:6px 0; border-radius:6px; font-family:inherit; transition:all 0.15s ease; text-align:center; }
+    .prof-tab.active { background:rgba(255,255,255,0.12); color:#fff; }
+    .prof-tab:hover:not(.active) { color:rgba(255,255,255,0.85); background:rgba(255,255,255,0.02); }
+    
+    .tab-content { flex:1; display:flex; flex-direction:column; overflow-y:auto; width:100%; gap:8px; min-height:0; }
+    
+    /* Change Password form */
+    .form-group { display:flex; flex-direction:column; gap:4px; text-align:left; }
+    .form-group label { font-size:9.5px; color:rgba(255,255,255,0.45); font-weight:700; text-transform:uppercase; letter-spacing:0.3px; }
+    .form-group input { background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.08); border-radius:6px; color:#fff; padding:6.5px 10px; font-size:12px; font-family:inherit; outline:none; transition:border 0.15s ease; }
+    .form-group input:focus { border-color:rgba(56,189,248,0.5); }
+    .submit-btn { background:linear-gradient(135deg,#38bdf8,#0284c7); color:#fff; border:none; border-radius:6px; padding:8px 0; font-size:11.5px; font-weight:700; cursor:pointer; font-family:inherit; transition:all 0.18s ease; margin-top:2px; }
+    .submit-btn:hover { background:linear-gradient(135deg,#56c8fc,#0391da); transform:translateY(-1.5px); }
+    .submit-btn:active { transform:translateY(0); }
+    .pw-status { font-size:10px; text-align:center; font-weight:600; padding:4px; border-radius:4px; display:none; }
+    .pw-status.ok { background:rgba(16,185,129,0.12); color:#34d399; }
+    .pw-status.err { background:rgba(239,68,68,0.12); color:#f87171; }
+
+    /* Lists and logs */
+    .list-row { display:flex; justify-content:space-between; align-items:center; padding:7px 10px; background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.04); border-radius:6px; font-size:11px; }
+    .list-label { color:rgba(255,255,255,0.45); font-weight:500; }
+    .list-val { color:#fff; font-weight:700; }
+    .empty-msg { font-size:11px; color:rgba(255,255,255,0.35); text-align:center; margin:auto 0; }
+    
+    /* Progress bar */
+    .usage-bar-wrap { width:100%; height:8px; background:rgba(255,255,255,0.08); border-radius:999px; overflow:hidden; margin-top:4px; }
+    .usage-bar-fill { height:100%; background:linear-gradient(90deg, #38bdf8, #10b981); border-radius:999px; transition:width 0.5s ease-out; }
+
     .dev-log { background:rgba(0,0,0,0.55); border:1px solid rgba(255,255,255,0.07); border-radius:9px; padding:5px 8px;
       font-family:monospace; font-size:9.5px; max-height:64px; overflow-y:auto; color:#38bdf8; flex-shrink:0; }
     .log-line { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:1.5px; opacity:0.85; }
@@ -3104,7 +3203,47 @@ function getIslandHtml(sessionData?: any): string {
         <div id="dev-log-wrap" style="display:none;">
           <div class="dev-log" id="dev-log"></div>
         </div>
-        <button class="exit-btn" onclick="onExit()">Exit Session</button>
+        <div class="card-actions">
+          <button class="profile-btn" onclick="openProfile()">Your Profile</button>
+          <button class="exit-btn" onclick="onExit()">Exit Session</button>
+        </div>
+      </div>
+      <div class="panel" id="panel-profile">
+        <div class="prof-header">
+          <span class="prof-title" id="prof-user-title">Profile</span>
+          <button class="prof-back-btn" onclick="closeProfile()">← Back</button>
+        </div>
+        <div class="prof-tabs">
+          <button class="prof-tab active" onclick="showTab('password')">Password</button>
+          <button class="prof-tab" onclick="showTab('activity')">Activity</button>
+          <button class="prof-tab" onclick="showTab('sessions')">Sessions</button>
+          <button class="prof-tab" onclick="showTab('usage')">Usage</button>
+        </div>
+        <div class="tab-content" id="tab-password">
+          <div class="form-group">
+            <label>Current Password</label>
+            <input type="password" id="pw-old" placeholder="••••">
+          </div>
+          <div class="form-group">
+            <label>New Password</label>
+            <input type="password" id="pw-new" placeholder="••••">
+          </div>
+          <div class="form-group">
+            <label>Confirm Password</label>
+            <input type="password" id="pw-confirm" placeholder="••••">
+          </div>
+          <div class="pw-status" id="pw-status">Status message</div>
+          <button class="submit-btn" id="pw-btn" onclick="doChangePassword()">Change Password</button>
+        </div>
+        <div class="tab-content" id="tab-activity" style="display:none;">
+          <div id="activity-list" style="display:flex;flex-direction:column;gap:5px;width:100%;"></div>
+        </div>
+        <div class="tab-content" id="tab-sessions" style="display:none;">
+          <div id="sessions-list" style="display:flex;flex-direction:column;gap:5px;width:100%;"></div>
+        </div>
+        <div class="tab-content" id="tab-usage" style="display:none;">
+          <div id="usage-list" style="display:flex;flex-direction:column;gap:5px;width:100%;"></div>
+        </div>
       </div>
       <div class="panel" id="panel-banner">
         <div class="banner-icon">🚨</div>
@@ -3136,14 +3275,14 @@ function getIslandHtml(sessionData?: any): string {
     }
     session = normalise(session);
 
-    let state = 'compact', isHovered = false, isFullscreen = false, isChecking = false;
+    let state = 'compact', isHovered = false, isChecking = false, isProfileOpen = false;
     let alertMsg = '', bannerTimer = null;
 
     const island = document.getElementById('island');
     const dot    = document.getElementById('dot');
     const row    = document.getElementById('row');
 
-    const ALL_STATES = ['notch','compact','split','check','card','banner'];
+    const ALL_STATES = ['compact','split','check','card','banner','profile'];
     function applyState(ns) {
       if (ns === state) return;
       state = ns;
@@ -3158,10 +3297,10 @@ function getIslandHtml(sessionData?: any): string {
     }
 
     function resolveState() {
-      if (alertMsg)     return 'banner';
-      if (isChecking)   return 'check';
-      if (isHovered)    return 'card';
-      if (isFullscreen) return 'notch';
+      if (alertMsg)      return 'banner';
+      if (isChecking)    return 'check';
+      if (isProfileOpen) return 'profile';
+      if (isHovered)     return 'card';
       if (session && session.mode === 'prepaid' && getRemainingSec() < 300 && getRemainingSec() >= 0) return 'split';
       return 'compact';
     }
@@ -3195,6 +3334,7 @@ function getIslandHtml(sessionData?: any): string {
       const ct2= document.getElementById('card-time');    if (ct2) ct2.textContent = timeStr;
 
       const nameEl = document.getElementById('card-name'); if (nameEl) nameEl.textContent = session.user || 'Guest';
+      const profTitle = document.getElementById('prof-user-title'); if (profTitle) profTitle.textContent = (session.user || 'Guest') + ' Profile';
       const badge  = document.getElementById('card-badge');
       if (badge) {
         badge.textContent      = isPrepaid ? 'Prepaid' : 'Postpaid';
@@ -3213,8 +3353,8 @@ function getIslandHtml(sessionData?: any): string {
       tick();
     }
 
-    island.addEventListener('mouseenter', () => { if (alertMsg || isChecking) return; isHovered = true;  tick(); });
-    island.addEventListener('mouseleave', () => {                                       isHovered = false; tick(); });
+    island.addEventListener('mouseenter', () => { if (alertMsg || isChecking || isProfileOpen) return; isHovered = true;  tick(); });
+    island.addEventListener('mouseleave', () => { if (isProfileOpen) return; isHovered = false; tick(); });
     document.addEventListener('mousemove', e => {
       const ri = island.getBoundingClientRect(), rd = dot.getBoundingClientRect();
       const inside = (x,y,r) => x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
@@ -3222,7 +3362,7 @@ function getIslandHtml(sessionData?: any): string {
     });
 
     ipcRenderer.on('sync-session-data',    (_, s) => { session = normalise({...session,...s}); updateUI(); });
-    ipcRenderer.on('set-fullscreen-state', (_, v) => { isFullscreen = v; tick(); });
+    ipcRenderer.on('set-fullscreen-state', (_, v) => { /* noop: removed auto minimizing */ });
     ipcRenderer.on('set-evaluating-state', (_, v) => { isChecking   = v; tick(); });
     ipcRenderer.on('show-message', (_, msg) => {
       alertMsg = msg;
@@ -3249,6 +3389,83 @@ function getIslandHtml(sessionData?: any): string {
     function onDismiss() { alertMsg=''; if(bannerTimer){clearTimeout(bannerTimer);bannerTimer=null;} tick(); }
     function saveLog()   { ipcRenderer.send('save-client-log'); }
 
+    let activeTab = 'password';
+    function openProfile() {
+      isProfileOpen = true;
+      isHovered = false;
+      tick();
+      populateActivity();
+      populateSessions();
+      populateUsage();
+    }
+    function closeProfile() {
+      isProfileOpen = false;
+      isHovered = false;
+      tick();
+    }
+    function showTab(name) {
+      activeTab = name;
+      ['password','activity','sessions','usage'].forEach(t => {
+        document.getElementById('tab-'+t).style.display = t===name ? '' : 'none';
+      });
+      document.querySelectorAll('.prof-tab').forEach((btn, i) => {
+        btn.classList.toggle('active', ['password','activity','sessions','usage'][i] === name);
+      });
+    }
+
+    async function doChangePassword() {
+      const oldPw = document.getElementById('pw-old').value;
+      const newPw = document.getElementById('pw-new').value;
+      const confPw = document.getElementById('pw-confirm').value;
+      const btn = document.getElementById('pw-btn');
+      if (!oldPw || !newPw || !confPw) { showPwStatus('All fields are required.', false); return; }
+      if (newPw !== confPw) { showPwStatus('New passwords do not match.', false); return; }
+      if (newPw.length < 4) { showPwStatus('Password must be at least 4 characters.', false); return; }
+      const username = (session && session.user) || '';
+      if (!username) { showPwStatus('Session user not found.', false); return; }
+      btn.disabled = true; btn.textContent = 'Changing...';
+      try {
+        const res = await ipcRenderer.invoke('agent-change-password', username, oldPw, newPw);
+        showPwStatus(res.message || (res.success ? 'Password changed!' : 'Failed.'), res.success);
+        if (res.success) {
+          document.getElementById('pw-old').value = '';
+          document.getElementById('pw-new').value = '';
+          document.getElementById('pw-confirm').value = '';
+        }
+      } catch(e) {
+        showPwStatus('Error: ' + (e.message || 'Unknown'), false);
+      } finally { btn.disabled = false; btn.textContent = 'Change Password'; }
+    }
+    function showPwStatus(msg, ok) {
+      const el = document.getElementById('pw-status');
+      el.textContent = msg; el.className = 'pw-status ' + (ok ? 'ok' : 'err'); el.style.display = 'block';
+    }
+    function populateActivity() {
+      const el = document.getElementById('activity-list'); if (!el) return;
+      const logs = (typeof initialLogs !== 'undefined' && initialLogs.length > 0) ? initialLogs.slice(-10) : [];
+      if (!logs.length) { el.innerHTML = '<div class="empty-msg">No recent activity.</div>'; return; }
+      el.innerHTML = logs.map(l => '<div class="list-row"><span class="list-label">'+l.timestamp+'</span><span class="list-val" style="font-size:10px;color:rgba(255,255,255,0.7);">'+l.message.substring(0,30)+'</span></div>').join('');
+    }
+    function populateSessions() {
+      const el = document.getElementById('sessions-list'); if (!el) return;
+      if (!session) { el.innerHTML = '<div class="empty-msg">No session data.</div>'; return; }
+      const startD = new Date(getStartMs());
+      el.innerHTML = '<div class="list-row"><span class="list-label">Current</span><span class="list-val">'+startD.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:true})+'</span></div>'
+        + '<div class="list-row"><span class="list-label">Type</span><span class="list-val">'+(session.mode==='prepaid'?'Prepaid':'Postpaid')+'</span></div>'
+        + '<div class="list-row"><span class="list-label">Elapsed</span><span class="list-val">'+fmt(getElapsedSec())+'</span></div>'
+        + '<div class="empty-msg" style="margin-top:6px;font-size:10px;">Full history on server.</div>';
+    }
+    function populateUsage() {
+      const el = document.getElementById('usage-list'); if (!el) return;
+      const elapsed = getElapsedSec(), todayMins = Math.floor(elapsed/60), weekGoal = 600;
+      const pct = Math.min(100, Math.round((todayMins/weekGoal)*100));
+      el.innerHTML = '<div class="list-row"><span class="list-label">Today</span><span class="list-val">'+fmt(elapsed)+'</span></div>'
+        + '<div class="list-row"><span class="list-label">Weekly Goal</span><span class="list-val">'+weekGoal+'m</span></div>'
+        + '<div class="list-row"><span class="list-label">Progress</span><span class="list-val">'+pct+'%</span></div>'
+        + '<div class="usage-bar-wrap"><div class="usage-bar-fill" style="width:'+pct+'%"></div></div>'
+        + '<div class="empty-msg" style="margin-top:6px;font-size:10px;">Full history on server.</div>';
+    }
+
     const ro = new ResizeObserver(entries => {
       for (const e of entries) {
         ipcRenderer.send('resize-island', { width: Math.ceil(e.contentRect.width)+24, height: Math.ceil(e.contentRect.height)+20 });
@@ -3258,14 +3475,8 @@ function getIslandHtml(sessionData?: any): string {
 
     if (isDevMode) {
       const wrap = document.getElementById('dev-log-wrap'); if (wrap) wrap.style.display='block';
-      const el   = document.getElementById('dev-log');
-      if (el) {
-        for (const log of initialLogs) {
-          const l=document.createElement('div'); l.className='log-line';
-          l.textContent='['+log.timestamp+'] '+log.message; el.appendChild(l);
-        }
-        el.scrollTop=el.scrollHeight;
-      }
+      const el = document.getElementById('dev-log');
+      if (el) { for (const log of initialLogs) { const l=document.createElement('div'); l.className='log-line'; l.textContent='['+log.timestamp+'] '+log.message; el.appendChild(l); } el.scrollTop=el.scrollHeight; }
     }
 
     setInterval(updateUI, 1000);

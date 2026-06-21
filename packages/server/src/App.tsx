@@ -92,6 +92,9 @@ export default function App() {
   const [isSessionModalOpen, setIsSessionModalOpen] = useState(false)
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false)
   const [selectedDrawerMachine, setSelectedDrawerMachine] = useState<any>(null)
+  const [showBatchUpdateModal, setShowBatchUpdateModal] = useState(false)
+  const [selectedMachinesForUpdate, setSelectedMachinesForUpdate] = useState<number[]>([])
+  const [showUpdateConfirmation, setShowUpdateConfirmation] = useState(false)
 
   // New remote control & safety states
   const [isRemoteFullscreen, setIsRemoteFullscreen] = useState(false)
@@ -714,10 +717,10 @@ export default function App() {
 
   const handleTriggerUpdate = async (machineId: number | 'all') => {
     if (machineId === 'all') {
-      if (confirm('Trigger agent software update on ALL connected terminals? (This will trigger client PC reboots if update is found)')) {
-        if (window.ipcRenderer) await window.ipcRenderer.invoke('trigger-client-update', 'all')
-        alert('Update check broadcast sent to all terminals.')
-      }
+      const onlineIds = machines.filter((m: any) => m.status !== 'offline').map((m: any) => m.id)
+      setSelectedMachinesForUpdate(onlineIds)
+      setShowBatchUpdateModal(true)
+      setShowUpdateConfirmation(false)
     } else {
       const machine = machines.find((m: any) => m.id === machineId)
       const machineName = machine ? machine.name : `PC ${machineId}`
@@ -3644,6 +3647,174 @@ Respond strictly in JSON format:
         onClose={() => setIsReceiptModalOpen(false)}
         onConfirm={handleConfirmClose}
       />
+
+      {/* Batch Update Agents Modal */}
+      {showBatchUpdateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[85vh]">
+            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
+              <div className="flex items-center gap-2">
+                <ArrowUpCircle className="text-emerald-500" size={20} />
+                <h3 className="text-md font-bold text-white">Batch Update Agents</h3>
+              </div>
+              <button 
+                type="button" 
+                onClick={() => setShowBatchUpdateModal(false)} 
+                className="text-slate-400 hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {!showUpdateConfirmation ? (
+              <>
+                <div className="p-5 overflow-y-auto flex-1 space-y-4">
+                  <p className="text-xs text-slate-400 leading-relaxed font-medium">
+                    Select the client terminals you wish to check for software updates. Terminals running older versions will download the update package and restart to apply it.
+                  </p>
+
+                  <div className="flex items-center justify-between bg-slate-950/40 px-3.5 py-2 rounded border border-slate-800 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer text-slate-300 font-semibold select-none">
+                      <input
+                        type="checkbox"
+                        checked={selectedMachinesForUpdate.length === machines.length && machines.length > 0}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setSelectedMachinesForUpdate(machines.map((m: any) => m.id))
+                          } else {
+                            setSelectedMachinesForUpdate([])
+                          }
+                        }}
+                        className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-0"
+                      />
+                      Select All ({machines.length} PCs)
+                    </label>
+                    <span className="text-[10px] text-slate-500 uppercase font-bold">
+                      {selectedMachinesForUpdate.length} Selected
+                    </span>
+                  </div>
+
+                  <div className="border border-slate-800/80 rounded-lg overflow-hidden bg-slate-950/10 max-h-[40vh] overflow-y-auto divide-y divide-slate-800/50">
+                    {machines.map((machine: any) => {
+                      const isChecked = selectedMachinesForUpdate.includes(machine.id)
+                      const isOffline = machine.status === 'offline'
+                      return (
+                        <div key={machine.id} className={`flex items-center justify-between px-3.5 py-2.5 hover:bg-slate-800/30 transition-colors ${isOffline ? 'opacity-65' : ''}`}>
+                          <label className="flex items-center gap-2.5 cursor-pointer select-none text-xs text-slate-200 font-medium flex-1">
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {
+                                if (isChecked) {
+                                  setSelectedMachinesForUpdate(selectedMachinesForUpdate.filter(id => id !== machine.id))
+                                } else {
+                                  setSelectedMachinesForUpdate([...selectedMachinesForUpdate, machine.id])
+                                }
+                              }}
+                              className="rounded bg-slate-800 border-slate-700 text-blue-600 focus:ring-0"
+                            />
+                            <span>{machine.name}</span>
+                            {isOffline && (
+                              <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 font-bold uppercase tracking-wide">
+                                Offline
+                              </span>
+                            )}
+                          </label>
+                          <span className={`w-2 h-2 rounded-full ${isOffline ? 'bg-slate-700' : 'bg-emerald-500'}`} />
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div className="p-4 border-t border-slate-800 bg-slate-950/20 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowBatchUpdateModal(false)}
+                    className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={selectedMachinesForUpdate.length === 0}
+                    onClick={() => setShowUpdateConfirmation(true)}
+                    className="px-3.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-950/30 disabled:text-emerald-800/60 disabled:cursor-not-allowed text-xs font-semibold text-white transition-all shadow-lg shadow-emerald-900/20"
+                  >
+                    Next
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-5 flex-1 space-y-4">
+                  <div className="flex items-start gap-3 bg-amber-950/20 border border-amber-800/30 rounded-lg p-3.5 text-xs text-amber-300">
+                    <AlertTriangle className="flex-shrink-0 text-amber-500 mt-0.5" size={18} />
+                    <div>
+                      <span className="font-bold block">Important Notice</span>
+                      <span>
+                        Triggering updates on active machines will cause them to download the package, close running sessions, and restart immediately if an update is found.
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <span className="text-xs text-slate-400 font-bold block uppercase tracking-wide">
+                      Selected Terminals for Update ({selectedMachinesForUpdate.length})
+                    </span>
+                    <div className="bg-slate-950/40 border border-slate-850 rounded-lg p-3 max-h-[25vh] overflow-y-auto text-xs text-slate-300 flex flex-wrap gap-2">
+                      {selectedMachinesForUpdate.map(id => {
+                        const m = machines.find((mach: any) => mach.id === id)
+                        return (
+                          <span key={id} className="bg-slate-850 border border-slate-700/60 rounded px-2.5 py-1 text-white font-medium">
+                            {m ? m.name : `PC ${id}`}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-400">
+                    Are you sure you want to proceed? This will send a broadcast update check command to the selected terminals.
+                  </p>
+                </div>
+
+                <div className="p-4 border-t border-slate-800 bg-slate-950/20 flex justify-between items-center">
+                  <button
+                    type="button"
+                    onClick={() => setShowUpdateConfirmation(false)}
+                    className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-750 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                  >
+                    Back
+                  </button>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowBatchUpdateModal(false)}
+                      className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setShowBatchUpdateModal(false)
+                        if (window.ipcRenderer) {
+                          await window.ipcRenderer.invoke('trigger-client-update-batch', selectedMachinesForUpdate)
+                        }
+                        alert(`Sent update check broadcast to ${selectedMachinesForUpdate.length} terminals.`)
+                      }}
+                      className="px-4 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-colors shadow-lg shadow-emerald-900/30"
+                    >
+                      Confirm Update
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Session App Activity Log Modal */}
       {isAppLogModalOpen && selectedSessionForLog && (
