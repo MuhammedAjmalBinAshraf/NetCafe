@@ -111,6 +111,16 @@ export default function App() {
   const [isExecutingCommand, setIsExecutingCommand] = useState(false)
   const [safetyAlerts, setSafetyAlerts] = useState<any[]>([])
 
+  // Password Visibility States
+  const [showLoginPassword, setShowLoginPassword] = useState(false)
+  const [showAdminVerifyPassword, setShowAdminVerifyPassword] = useState(false)
+  const [showAdminCurrentPassword, setShowAdminCurrentPassword] = useState(false)
+  const [showAdminNewPassword, setShowAdminNewPassword] = useState(false)
+  const [showAdminConfirmPassword, setShowAdminConfirmPassword] = useState(false)
+  const [showOperatorCurrentPin, setShowOperatorCurrentPin] = useState(false)
+  const [showOperatorNewPin, setShowOperatorNewPin] = useState(false)
+  const [showUserPassword, setShowUserPassword] = useState(false)
+
   // Remote monitoring states
   const [screenshotBase64, setScreenshotBase64] = useState<string>('')
   const [screenshotLoading, setScreenshotLoading] = useState(false)
@@ -1279,16 +1289,24 @@ export default function App() {
             </div>
             <div className="space-y-1">
               <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Password</label>
-              <input
-                type="password"
-                required
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-              />
+              <div className="relative flex items-center">
+                <input
+                  type={showLoginPassword ? "text" : "password"}
+                  required
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPassword(!showLoginPassword)}
+                  className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                >
+                  {showLoginPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
-
             {authError && (
               <div className="flex flex-col gap-1 text-xs bg-red-950/40 border border-red-800/50 p-3 rounded text-red-400">
                 <div className="flex items-center gap-2">
@@ -2717,13 +2735,22 @@ Respond strictly in JSON format:
                   <div className="space-y-3">
                     <label className="text-xs font-bold uppercase text-slate-400">Change Admin Username</label>
                     <div className="space-y-2">
-                      <input
-                        type="password"
-                        placeholder="Current password to confirm"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secChangeUsernamePass}
-                        onChange={(e) => setSecChangeUsernamePass(e.target.value)}
-                      />
+                      <div className="relative flex items-center">
+                        <input
+                          type={showAdminVerifyPassword ? "text" : "password"}
+                          placeholder="Current password to confirm"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secChangeUsernamePass}
+                          onChange={(e) => setSecChangeUsernamePass(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminVerifyPassword(!showAdminVerifyPassword)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showAdminVerifyPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
                       <input
                         type="text"
                         placeholder="New username (min 3 chars)"
@@ -2758,27 +2785,54 @@ Respond strictly in JSON format:
                   <div className="space-y-3">
                     <label className="text-xs font-bold uppercase text-slate-400">Change Admin Password</label>
                     <div className="space-y-2">
-                      <input
-                        type="password"
-                        placeholder="Current password"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secCurPassword}
-                        onChange={(e) => setSecCurPassword(e.target.value)}
-                      />
-                      <input
-                        type="password"
-                        placeholder="New password (min 3 chars)"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secNewPassword}
-                        onChange={(e) => setSecNewPassword(e.target.value)}
-                      />
-                      <input
-                        type="password"
-                        placeholder="Confirm new password"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secConfirmPassword}
-                        onChange={(e) => setSecConfirmPassword(e.target.value)}
-                      />
+                      <div className="relative flex items-center">
+                        <input
+                          type={showAdminCurrentPassword ? "text" : "password"}
+                          placeholder="Current password"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secCurPassword}
+                          onChange={(e) => setSecCurPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminCurrentPassword(!showAdminCurrentPassword)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showAdminCurrentPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showAdminNewPassword ? "text" : "password"}
+                          placeholder="New password (min 3 chars)"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secNewPassword}
+                          onChange={(e) => setSecNewPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminNewPassword(!showAdminNewPassword)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showAdminNewPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showAdminConfirmPassword ? "text" : "password"}
+                          placeholder="Confirm new password"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secConfirmPassword}
+                          onChange={(e) => setSecConfirmPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowAdminConfirmPassword(!showAdminConfirmPassword)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showAdminConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
                     </div>
                     <button
                       onClick={async () => {
@@ -2811,20 +2865,38 @@ Respond strictly in JSON format:
                     <label className="text-xs font-bold uppercase text-slate-400">Change Operator Terminal Password</label>
                     <p className="text-[11px] text-slate-500">This is the PIN clients use in the ⚙️ settings gear on their terminal to access operator options.</p>
                     <div className="space-y-2">
-                      <input
-                        type="password"
-                        placeholder="Current operator password"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secCurOpPassword}
-                        onChange={(e) => setSecCurOpPassword(e.target.value)}
-                      />
-                      <input
-                        type="password"
-                        placeholder="New operator password (min 3 chars)"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-sm"
-                        value={secNewOpPassword}
-                        onChange={(e) => setSecNewOpPassword(e.target.value)}
-                      />
+                      <div className="relative flex items-center">
+                        <input
+                          type={showOperatorCurrentPin ? "text" : "password"}
+                          placeholder="Current operator password"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secCurOpPassword}
+                          onChange={(e) => setSecCurOpPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowOperatorCurrentPin(!showOperatorCurrentPin)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showOperatorCurrentPin ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <div className="relative flex items-center">
+                        <input
+                          type={showOperatorNewPin ? "text" : "password"}
+                          placeholder="New operator password (min 3 chars)"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-2 text-white outline-none transition-colors text-sm"
+                          value={secNewOpPassword}
+                          onChange={(e) => setSecNewOpPassword(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowOperatorNewPin(!showOperatorNewPin)}
+                          className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                        >
+                          {showOperatorNewPin ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
                     </div>
                     <button
                       onClick={async () => {
@@ -3372,6 +3444,7 @@ Respond strictly in JSON format:
                         ) : (
                           filteredLogs.map((log: any) => {
                             const isYoutube = log.app_title && log.app_title.toLowerCase().includes('youtube')
+                            const isSearch = log.type === 'search'
                             return (
                               <tr key={log.id} className="hover:bg-slate-900/30 transition-colors">
                                 <td className="p-3 font-mono text-slate-400">
@@ -3396,20 +3469,58 @@ Respond strictly in JSON format:
                                   {log.ad_no || <span className="text-slate-600 italic">—</span>}
                                 </td>
                                 <td className="p-3">
-                                  <div className="flex items-center gap-1.5 max-w-[280px] truncate">
-                                    {isYoutube ? (
-                                      <span className="flex-shrink-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" title="YouTube video active" />
-                                    ) : null}
-                                    <span className={isYoutube ? "text-red-400 font-bold" : "text-white"}>
-                                      {log.app_title}
-                                    </span>
-                                  </div>
+                                  {isSearch ? (
+                                    <div className="space-y-1 py-1 max-w-[400px]">
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="px-1.5 py-0.5 bg-indigo-950/80 text-indigo-400 font-bold rounded text-[10px] uppercase border border-indigo-900/40">Search</span>
+                                        <span className="text-white font-bold">{log.search_query}</span>
+                                      </div>
+                                      <div className="text-[11px] truncate text-slate-300" title={log.search_url}>
+                                        <span className="text-slate-500 mr-1 font-semibold">URL:</span>
+                                        <a
+                                          href="#"
+                                          onClick={(e) => {
+                                            e.preventDefault()
+                                            if (window.ipcRenderer) {
+                                              window.ipcRenderer.invoke('open-external-url', log.search_url)
+                                            }
+                                          }}
+                                          className="text-blue-400 hover:text-blue-350 underline font-normal"
+                                        >
+                                          {log.search_url}
+                                        </a>
+                                      </div>
+                                      {log.search_ip && (
+                                        <div className="text-[11px] font-mono text-slate-300">
+                                          <span className="text-slate-500 font-sans mr-1 font-semibold">Website IP:</span>
+                                          {log.search_ip}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-1.5 max-w-[280px] truncate">
+                                      {isYoutube ? (
+                                        <span className="flex-shrink-0 w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" title="YouTube video active" />
+                                      ) : null}
+                                      <span className={isYoutube ? "text-red-400 font-bold" : "text-white"}>
+                                        {log.app_title}
+                                      </span>
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="p-3 text-right font-mono font-bold text-slate-200">
-                                  {log.duration_seconds ? `${Math.round(log.duration_seconds / 60)}m ${log.duration_seconds % 60}s` : '0s'}
+                                  {isSearch ? (
+                                    <span className="text-slate-650 italic">—</span>
+                                  ) : (
+                                    log.duration_seconds ? `${Math.round(log.duration_seconds / 60)}m ${log.duration_seconds % 60}s` : '0s'
+                                  )}
                                 </td>
                                 <td className="p-3 text-center font-mono text-slate-400">
-                                  {log.focus_count || 1}
+                                  {isSearch ? (
+                                    <span className="text-slate-650 italic">—</span>
+                                  ) : (
+                                    log.focus_count || 1
+                                  )}
                                 </td>
                               </tr>
                             )
@@ -4448,14 +4559,23 @@ Respond strictly in JSON format:
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
                     Password {editingUser ? '(leave blank to keep)' : '*'}
                   </label>
-                  <input
-                    type="password"
-                    required={!editingUser}
-                    placeholder="••••••••"
-                    value={userPassword}
-                    onChange={(e) => setUserPassword(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
-                  />
+                  <div className="relative flex items-center">
+                    <input
+                      type={showUserPassword ? "text" : "password"}
+                      required={!editingUser}
+                      placeholder="••••••••"
+                      value={userPassword}
+                      onChange={(e) => setUserPassword(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded pl-3 pr-10 py-1.5 text-white outline-none text-sm transition-colors"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowUserPassword(!showUserPassword)}
+                      className="absolute right-3 text-slate-500 hover:text-slate-300 transition-colors focus:outline-none"
+                    >
+                      {showUserPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
                 </div>
               </div>
 

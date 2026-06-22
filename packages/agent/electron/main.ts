@@ -649,7 +649,10 @@ function createLockWindow() {
       </div>
       <div class="input-group">
         <label class="input-label" for="password">Password</label>
-        <input type="password" id="password" placeholder="Enter your password" autocomplete="off" />
+        <div style="position: relative; display: flex; align-items: center; width: 100%;">
+          <input type="password" id="password" placeholder="Enter your password" autocomplete="off" style="width: 100%; padding-right: 32px;" />
+          <button type="button" id="togglePassword" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+        </div>
       </div>
       <button class="login-btn" id="loginBtn">Start Session</button>
       <div class="error-msg" id="errorMsg"></div>
@@ -683,8 +686,11 @@ function createLockWindow() {
       <div id="pinGate">
         <div style="margin-bottom:0.75rem;">
           <label style="font-size:0.7rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#64748b;display:block;margin-bottom:0.35rem;">Operator PIN</label>
-          <input type="password" id="pinInput" placeholder="Enter operator PIN" autocomplete="off"
-            style="width:100%;padding:0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.9rem;outline:none;" />
+          <div style="position: relative; display: flex; align-items: center; width: 100%;">
+            <input type="password" id="pinInput" placeholder="Enter operator PIN" autocomplete="off"
+              style="width:100%;padding:0.65rem 32px 0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.9rem;outline:none;" />
+            <button type="button" id="togglePin" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+          </div>
           <div id="pinError" style="margin-top:0.5rem;color:#fca5a5;font-size:0.78rem;display:none;"></div>
         </div>
         <button id="pinUnlockBtn"
@@ -817,6 +823,24 @@ function createLockWindow() {
       loginBtn.addEventListener('click', attemptLogin);
       passwordEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptLogin(); });
       usernameEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') passwordEl.focus(); });
+
+      // Password Eye Toggles
+      const togglePassword = document.getElementById('togglePassword');
+      if (togglePassword) {
+        togglePassword.addEventListener('click', () => {
+          const isPw = passwordEl.type === 'password';
+          passwordEl.type = isPw ? 'text' : 'password';
+          togglePassword.textContent = isPw ? '🙈' : '👁️';
+        });
+      }
+      const togglePin = document.getElementById('togglePin');
+      if (togglePin) {
+        togglePin.addEventListener('click', () => {
+          const isPw = pinInput.type === 'password';
+          pinInput.type = isPw ? 'text' : 'password';
+          togglePin.textContent = isPw ? '🙈' : '👁️';
+        });
+      }
 
       // ── Shutdown Button Logic ────────────────────────────────────────────────
       const shutdownBtn = document.getElementById('shutdownBtn');
@@ -2386,7 +2410,7 @@ Add-Type -TypeDefinition $csharpSource
   }
 }
 
-function checkQuerySafety(query: string): Promise<boolean> {
+function checkQuerySafety(query: string, url: string, ip: string): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const startTime = Date.now();
 
@@ -2478,7 +2502,7 @@ function checkQuerySafety(query: string): Promise<boolean> {
     logToUI(`[MITM] Sending query check request to server: "${query}" (ID: ${requestId})`);
     sendToServer({
       type: 'query-check-request',
-      payload: { query, requestId }
+      payload: { query, url, ip, requestId }
     });
   });
 }
@@ -2584,9 +2608,9 @@ app.whenReady().then(async () => {
     try {
       mitmProxy = new MitmProxy(
         app.getPath('userData'),
-        async (query: string) => {
-          logToUI(`[MITM] Browser query intercepted: "${query}"`);
-          const allowed = await checkQuerySafety(query);
+        async (query: string, url: string, ip: string) => {
+          logToUI(`[MITM] Browser query intercepted: "${query}" URL: "${url}" IP: "${ip}"`);
+          const allowed = await checkQuerySafety(query, url, ip);
           logToUI(`[MITM] Safety check result for "${query}": ${allowed ? 'ALLOWED' : 'BLOCKED'}`);
           return allowed;
         },
@@ -3347,15 +3371,24 @@ function getIslandHtml(sessionData?: any): string {
         <div class="tab-content" id="tab-password">
           <div class="form-group">
             <label>Current Password</label>
-            <input type="password" id="pw-old" placeholder="••••">
+            <div style="position: relative; display: flex; align-items: center; width: 100%;">
+              <input type="password" id="pw-old" placeholder="••••" style="width: 100%; padding-right: 32px;">
+              <button type="button" id="togglePwOld" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+            </div>
           </div>
           <div class="form-group">
             <label>New Password</label>
-            <input type="password" id="pw-new" placeholder="••••">
+            <div style="position: relative; display: flex; align-items: center; width: 100%;">
+              <input type="password" id="pw-new" placeholder="••••" style="width: 100%; padding-right: 32px;">
+              <button type="button" id="togglePwNew" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+            </div>
           </div>
           <div class="form-group">
             <label>Confirm Password</label>
-            <input type="password" id="pw-confirm" placeholder="••••">
+            <div style="position: relative; display: flex; align-items: center; width: 100%;">
+              <input type="password" id="pw-confirm" placeholder="••••" style="width: 100%; padding-right: 32px;">
+              <button type="button" id="togglePwConfirm" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+            </div>
           </div>
           <div class="pw-status" id="pw-status">Status message</div>
           <button class="submit-btn" id="pw-btn" onclick="doChangePassword()">Change Password</button>
@@ -3518,10 +3551,27 @@ function getIslandHtml(sessionData?: any): string {
     function openProfile() {
       isProfileOpen = true;
       isHovered = false;
-      tick();
+      showTab(activeTab);
       populateActivity();
       populateSessions();
       populateUsage();
+      setupPwToggles();
+      tick();
+    }
+    function setupPwToggles() {
+      ['pw-old', 'pw-new', 'pw-confirm'].forEach(id => {
+        const input = document.getElementById(id);
+        const btn = document.getElementById('toggle' + id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''));
+        if (input && btn) {
+          const newBtn = btn.cloneNode(true);
+          btn.parentNode.replaceChild(newBtn, btn);
+          newBtn.addEventListener('click', () => {
+            const isPw = input.type === 'password';
+            input.type = isPw ? 'text' : 'password';
+            newBtn.textContent = isPw ? '🙈' : '👁️';
+          });
+        }
+      });
     }
     function closeProfile() {
       isProfileOpen = false;
@@ -3546,7 +3596,7 @@ function getIslandHtml(sessionData?: any): string {
       if (!oldPw || !newPw || !confPw) { showPwStatus('All fields are required.', false); return; }
       if (newPw !== confPw) { showPwStatus('New passwords do not match.', false); return; }
       if (newPw.length < 4) { showPwStatus('Password must be at least 4 characters.', false); return; }
-      const username = (session && session.user) || '';
+      const username = (session && session.username) || (session && session.user) || '';
       if (!username) { showPwStatus('Session user not found.', false); return; }
       btn.disabled = true; btn.textContent = 'Changing...';
       try {

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'path'
 import { fileURLToPath } from 'url'
@@ -42,6 +42,51 @@ let mainWindow: BrowserWindow | null = null
 // Initialize SQLite Database
 let db: any = null;
 const dbPath = path.join(app.getPath('userData'), 'netcafe.db')
+
+function refundLeftoverPrepaidTime(sessionId: number) {
+  if (!db) return
+  try {
+    const sess = db.prepare(`
+      SELECT s.id, s.customer_name, s.mode, s.status, s.custom_duration, 
+             strftime('%s', s.start_time) as start_time_epoch,
+             s.paused_duration
+      FROM sessions s
+      WHERE s.id = ?
+    `).get(sessionId) as any
+
+    if (!sess || sess.mode !== 'prepaid') return
+
+    let elapsedSeconds = 0
+    const nowEpoch = Math.floor(Date.now() / 1000)
+    const startEpoch = Number(sess.start_time_epoch)
+
+    if (sess.status === 'paused' && sess.paused_duration) {
+      elapsedSeconds = Number(sess.paused_duration) - startEpoch
+    } else {
+      elapsedSeconds = nowEpoch - startEpoch
+    }
+
+    if (elapsedSeconds < 0) elapsedSeconds = 0
+
+    const totalMinutes = sess.custom_duration || 0
+    const totalSeconds = totalMinutes * 60
+    const remainingSeconds = totalSeconds - elapsedSeconds
+    const remainingMinutes = Math.max(0, Math.floor(remainingSeconds / 60))
+
+    if (remainingMinutes > 0) {
+      const user = db.prepare('SELECT id, username, balance_minutes FROM users WHERE username = ? OR display_name = ?').get(sess.customer_name, sess.customer_name) as any
+      if (user) {
+        const newBalance = user.balance_minutes + remainingMinutes
+        db.prepare('UPDATE users SET balance_minutes = ? WHERE id = ?').run(newBalance, user.id)
+        logToUI(`[Refund] Refunded ${remainingMinutes} leftover minutes to user "${user.username}" (New balance: ${newBalance} mins).`)
+      } else {
+        logToUI(`[Refund] No matching user found for customer name "${sess.customer_name}" to refund ${remainingMinutes} mins.`)
+      }
+    }
+  } catch (err: any) {
+    console.error('Error refunding leftover prepaid time:', err)
+  }
+}
 
 function setupDatabase() {
   db = new Database(dbPath)
@@ -156,6 +201,20 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE safety_alerts ADD COLUMN user_details TEXT;")
   } catch {}
+
+  // Create member search logs table (Case Sensitive queries, URLs, and target website IPs)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS member_search_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER,
+      query TEXT,
+      url TEXT,
+      ip TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
+    );
+  `)
+
   // AI safety settings defaults
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_safety_enabled', 'false');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('gemini_api_key', '');")
@@ -169,6 +228,18 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_custom_context', '');")
   // Operator (client-side) PIN password
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('operator_password', 'admin');")
+
+  // Refund and complete any active sessions at startup, set machines to available so they lock
+  try {
+    const activeSessions = db.prepare("SELECT id FROM sessions WHERE end_time IS NULL").all() as any[]
+    for (const s of activeSessions) {
+      refundLeftoverPrepaidTime(s.id)
+    }
+    db.prepare("UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE end_time IS NULL").run()
+    db.prepare("UPDATE machines SET status = 'available' WHERE status != 'offline'").run()
+  } catch (err: any) {
+    console.error('Error cleaning up active sessions on startup:', err)
+  }
 }
 
 // TCP Server & Metrics Maps
@@ -312,6 +383,11 @@ function handleClientMessage(socket: net.Socket, data: any) {
     `).get(machine.id)
 
     if (activeSession) {
+      let sessionUsername = ''
+      if (activeSession.mode === 'prepaid') {
+        const u = db.prepare("SELECT username FROM users WHERE username = ? OR display_name = ?").get(activeSession.customer_name, activeSession.customer_name) as any
+        if (u) sessionUsername = u.username
+      }
       socket.write(JSON.stringify({
         command: 'unlock',
         user: activeSession.customer_name || 'Guest',
@@ -320,7 +396,9 @@ function handleClientMessage(socket: net.Socket, data: any) {
           mode: activeSession.mode || 'postpaid',
           durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
           planPrice: activeSession.price || null,
-          customDuration: activeSession.custom_duration || null
+          customDuration: activeSession.custom_duration || null,
+          user: activeSession.customer_name || 'Guest',
+          username: sessionUsername
         }
       }) + '\n')
     } else {
@@ -592,7 +670,18 @@ function handleClientMessage(socket: net.Socket, data: any) {
     logToUI(`[MITM] Received query-check-request: machineId=${machineId}, db=${!!db}`)
     if (!machineId || !db) return
     const query: string = data.payload?.query || ''
+    const url: string = data.payload?.url || ''
+    const ip: string = data.payload?.ip || ''
     const requestId: string = data.payload?.requestId || ''
+
+    const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+    if (activeSession && query) {
+      try {
+        db.prepare("INSERT INTO member_search_logs (session_id, query, url, ip) VALUES (?, ?, ?, ?)").run(activeSession.id, query, url, ip)
+      } catch (err: any) {
+        console.error('Failed to log search query:', err)
+      }
+    }
     
     // Check if AI safety is enabled
     const safetyEnabled = (db.prepare("SELECT value FROM settings WHERE key = 'ai_safety_enabled'").get() as any)?.value === 'true'
@@ -748,16 +837,20 @@ function handleClientMessage(socket: net.Socket, data: any) {
         socket.write(JSON.stringify({ command: 'login-fail', message: 'No balance remaining. Please top up at the front desk.' }) + '\n')
       } else {
         // Close any existing open session for this machine
+        const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+        if (activeSess) {
+          refundLeftoverPrepaidTime(activeSess.id)
+        }
         db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
         // Open a new prepaid session using the user's full balance
         db.prepare(`
           INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, mode, status, custom_duration)
           VALUES (?, ?, NULL, datetime('now', '+9 seconds'), 'prepaid', 'active', ?)
-        `).run(machineId, user.display_name || user.username, user.balance_minutes)
+        `).run(machineId, user.username, user.balance_minutes)
         db.prepare("UPDATE machines SET status = 'in_use' WHERE id = ?").run(machineId)
         // Deduct balance
         db.prepare('UPDATE users SET balance_minutes = 0 WHERE id = ?').run(user.id)
-        socket.write(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, duration: user.balance_minutes }) + '\n')
+        socket.write(JSON.stringify({ command: 'login-success', user: user.display_name || user.username, username: user.username, duration: user.balance_minutes }) + '\n')
         broadcastMachines()
       }
     }
@@ -828,6 +921,10 @@ tcpServer.on('connection', (socket) => {
     if (machineId) {
       db.prepare("UPDATE machines SET status = 'offline' WHERE id = ?").run(machineId)
       try {
+        const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+        if (activeSess) {
+          refundLeftoverPrepaidTime(activeSess.id)
+        }
         db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
         logToUI(`Automatically ended active billing session for machine ID ${machineId} on disconnect.`)
       } catch (err: any) {
@@ -1483,6 +1580,10 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
   }
   
   // Close any existing active sessions to prevent duplicate cards
+  const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+  if (activeSess) {
+    refundLeftoverPrepaidTime(activeSess.id)
+  }
   const closeResult = db.prepare(`UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE machine_id = ? AND end_time IS NULL`).run(machineId)
   if (closeResult.changes > 0) {
     logToUI(`Cleaned up ${closeResult.changes} stale active sessions for machine ID ${machineId}`)
@@ -1504,6 +1605,11 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
   `).get(machineId)
 
   if (activeSession) {
+    let sessionUsername = ''
+    if (activeSession.mode === 'prepaid') {
+      const u = db.prepare("SELECT username FROM users WHERE username = ? OR display_name = ?").get(activeSession.customer_name, activeSession.customer_name) as any
+      if (u) sessionUsername = u.username
+    }
     sendCommandToMachine(machineId, {
       command: 'unlock',
       user: activeSession.customer_name || 'Guest',
@@ -1512,7 +1618,9 @@ ipcMain.handle('open-session', (_, machineId, customerName, planId, mode, custom
         mode: activeSession.mode || 'postpaid',
         durationMinutes: activeSession.custom_duration || activeSession.plan_duration || null,
         planPrice: activeSession.price || null,
-        customDuration: activeSession.custom_duration || null
+        customDuration: activeSession.custom_duration || null,
+        user: activeSession.customer_name || 'Guest',
+        username: sessionUsername
       }
     })
   } else {
@@ -1613,6 +1721,10 @@ ipcMain.handle('extend-session', (_, machineId, extraMinutes) => {
 
 ipcMain.handle('close-session', (_, machineId, totalAmount, discount, paymentMethod) => {
   db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
+  const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+  if (activeSess) {
+    refundLeftoverPrepaidTime(activeSess.id)
+  }
   db.prepare(`
     UPDATE sessions 
     SET end_time = datetime('now'), 
@@ -1627,7 +1739,17 @@ ipcMain.handle('close-session', (_, machineId, totalAmount, discount, paymentMet
 })
 
 ipcMain.handle('lock-machine', (_, machineId) => {
+  const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+  if (activeSession) {
+    db.prepare("UPDATE machines SET status = 'paused' WHERE id = ?").run(machineId)
+    const now = Math.floor(Date.now() / 1000)
+    db.prepare("UPDATE sessions SET status = 'paused', paused_duration = ? WHERE machine_id = ? AND end_time IS NULL").run(now, machineId)
+    logToUI(`[Lock Screen] Paused active session for machine ID ${machineId}`)
+  } else {
+    db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
+  }
   sendCommandToMachine(machineId, { command: 'lock' })
+  broadcastMachines()
 })
 
 ipcMain.handle('message-machine', (_, machineId, message) => {
@@ -1930,7 +2052,41 @@ ipcMain.handle('delete-user', (_, id: number) => {
 
 ipcMain.handle('topup-user', (_, id: number, minutes: number) => {
   try {
-    db.prepare('UPDATE users SET balance_minutes = balance_minutes + ? WHERE id = ?').run(minutes, id)
+    const user = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(id) as any
+    if (user) {
+      const activeSession = db.prepare(`
+        SELECT id, machine_id, custom_duration, start_time, mode, price
+        FROM sessions
+        WHERE (customer_name = ? OR customer_name = ?) AND end_time IS NULL
+      `).get(user.username, user.display_name) as any
+
+      if (activeSession) {
+        const newDuration = (activeSession.custom_duration || 0) + minutes
+        db.prepare("UPDATE sessions SET custom_duration = ? WHERE id = ?").run(newDuration, activeSession.id)
+        
+        let sessionUsername = ''
+        if (activeSession.mode === 'prepaid') {
+          const u = db.prepare("SELECT username FROM users WHERE username = ? OR display_name = ?").get(activeSession.customer_name, activeSession.customer_name) as any
+          if (u) sessionUsername = u.username
+        }
+        sendCommandToMachine(activeSession.machine_id, {
+          command: 'sync-session',
+          session: {
+            startTime: activeSession.start_time,
+            mode: activeSession.mode || 'postpaid',
+            durationMinutes: newDuration,
+            planPrice: activeSession.price || null,
+            customDuration: newDuration,
+            user: activeSession.customer_name || 'Guest',
+            username: sessionUsername
+          }
+        })
+        logToUI(`[Topup] Extended active session for user "${user.username}" by ${minutes} minutes.`)
+      } else {
+        db.prepare('UPDATE users SET balance_minutes = balance_minutes + ? WHERE id = ?').run(minutes, id)
+        logToUI(`[Topup] Added ${minutes} minutes to user "${user.username}" balance.`)
+      }
+    }
     return { success: true }
   } catch (e: any) {
     return { success: false, error: e.message }
@@ -1949,8 +2105,43 @@ ipcMain.handle('bulk-delete-users', (_, ids: number[]) => {
 
 ipcMain.handle('bulk-topup-users', (_, ids: number[], minutes: number) => {
   try {
-    const placeholders = ids.map(() => '?').join(',')
-    db.prepare(`UPDATE users SET balance_minutes = balance_minutes + ? WHERE id IN (${placeholders})`).run(minutes, ...ids)
+    for (const id of ids) {
+      const user = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(id) as any
+      if (user) {
+        const activeSession = db.prepare(`
+          SELECT id, machine_id, custom_duration, start_time, mode, price
+          FROM sessions
+          WHERE (customer_name = ? OR customer_name = ?) AND end_time IS NULL
+        `).get(user.username, user.display_name) as any
+
+        if (activeSession) {
+          const newDuration = (activeSession.custom_duration || 0) + minutes
+          db.prepare("UPDATE sessions SET custom_duration = ? WHERE id = ?").run(newDuration, activeSession.id)
+          
+          let sessionUsername = ''
+          if (activeSession.mode === 'prepaid') {
+            const u = db.prepare("SELECT username FROM users WHERE username = ? OR display_name = ?").get(activeSession.customer_name, activeSession.customer_name) as any
+            if (u) sessionUsername = u.username
+          }
+          sendCommandToMachine(activeSession.machine_id, {
+            command: 'sync-session',
+            session: {
+              startTime: activeSession.start_time,
+              mode: activeSession.mode || 'postpaid',
+              durationMinutes: newDuration,
+              planPrice: activeSession.price || null,
+              customDuration: newDuration,
+              user: activeSession.customer_name || 'Guest',
+              username: sessionUsername
+            }
+          })
+          logToUI(`[Bulk Topup] Extended active session for user "${user.username}" by ${minutes} minutes.`)
+        } else {
+          db.prepare('UPDATE users SET balance_minutes = balance_minutes + ? WHERE id = ?').run(minutes, id)
+          logToUI(`[Bulk Topup] Added ${minutes} minutes to user "${user.username}" balance.`)
+        }
+      }
+    }
     return { success: true }
   } catch (e: any) {
     return { success: false, error: e.message }
@@ -2304,7 +2495,7 @@ ipcMain.handle('get-all-activity-logs', () => {
   try {
     return db.prepare(`
       SELECT 
-        sal.id,
+        'app_' || sal.id as id,
         sal.session_id,
         sal.app_title,
         sal.duration_seconds,
@@ -2317,17 +2508,58 @@ ipcMain.handle('get-all-activity-logs', () => {
         m.name as machine_name,
         u.class,
         u.ad_no,
-        u.username
+        u.username,
+        NULL as search_query,
+        NULL as search_url,
+        NULL as search_ip,
+        'app' as type
       FROM session_app_logs sal
       JOIN sessions s ON sal.session_id = s.id
       LEFT JOIN machines m ON s.machine_id = m.id
       LEFT JOIN users u ON (u.username = s.customer_name OR u.display_name = s.customer_name)
-      ORDER BY sal.last_seen DESC
+      
+      UNION ALL
+      
+      SELECT 
+        'search_' || msl.id as id,
+        msl.session_id,
+        'Search: ' || msl.query as app_title,
+        0 as duration_seconds,
+        1 as focus_count,
+        msl.timestamp as first_seen,
+        msl.timestamp as last_seen,
+        s.customer_name,
+        s.start_time,
+        s.machine_id,
+        m.name as machine_name,
+        u.class,
+        u.ad_no,
+        u.username,
+        msl.query as search_query,
+        msl.url as search_url,
+        msl.ip as search_ip,
+        'search' as type
+      FROM member_search_logs msl
+      JOIN sessions s ON msl.session_id = s.id
+      LEFT JOIN machines m ON s.machine_id = m.id
+      LEFT JOIN users u ON (u.username = s.customer_name OR u.display_name = s.customer_name)
+      
+      ORDER BY last_seen DESC
       LIMIT 2000
     `).all()
   } catch (e: any) {
     console.error('get-all-activity-logs failed:', e)
     return []
+  }
+})
+
+ipcMain.handle('open-external-url', (_, url) => {
+  if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+    try {
+      shell.openExternal(url)
+    } catch (err) {
+      console.error('Failed to open external url:', err)
+    }
   }
 })
 

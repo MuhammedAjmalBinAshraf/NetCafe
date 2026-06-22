@@ -259,7 +259,7 @@ export class MitmProxy {
 
   constructor(
     private readonly dataDir: string,
-    private readonly onQuery: (query: string) => Promise<boolean>,
+    private readonly onQuery: (query: string, url: string, ip: string) => Promise<boolean>,
     private readonly log: (msg: string) => void,
     private readonly isDomainBlocked?: (domain: string) => boolean,
     private readonly onDomainViolation?: (domain: string) => void
@@ -474,7 +474,9 @@ export class MitmProxy {
           return;
         }
         try {
-          const allowed = await this.onQuery(query);
+          const fullUrl = `http://${hostname}${parsed.pathname}${parsed.search}`;
+          const targetIp = req.socket.remoteAddress || '';
+          const allowed = await this.onQuery(query, fullUrl, targetIp);
           if (!allowed) {
             this.blockedQueries.add(query.toLowerCase());
             const blockHtml = getBlockPageHtml(query);
@@ -649,7 +651,9 @@ export class MitmProxy {
                 
                 (async () => {
                   try {
-                    const allowed = await this.onQuery(query);
+                    const fullUrl = `https://${hostname}${match[1]}`;
+                    const targetIp = realSocket.remoteAddress || '';
+                    const allowed = await this.onQuery(query, fullUrl, targetIp);
                     if (allowed) {
                       this.addRecentlyAllowed(query);
                       const redirectUrl = `https://${hostname}${match[1]}`;
