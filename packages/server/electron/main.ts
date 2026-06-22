@@ -41,7 +41,8 @@ let mainWindow: BrowserWindow | null = null
 
 // Initialize SQLite Database
 let db: any = null;
-const dbPath = path.join(app.getPath('userData'), 'netcafe.db')
+const dbFolder = process.platform === 'win32' ? 'C:\\NetCafe' : app.getPath('userData');
+const dbPath = path.join(dbFolder, 'netcafe.db');
 
 function refundLeftoverPrepaidTime(sessionId: number) {
   if (!db) return
@@ -89,6 +90,10 @@ function refundLeftoverPrepaidTime(sessionId: number) {
 }
 
 function setupDatabase() {
+  const dir = path.dirname(dbPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
   db = new Database(dbPath)
   const tableCheck = db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='machines'").get();
   if (tableCheck.count === 0) {
@@ -713,7 +718,11 @@ function handleClientMessage(socket: net.Socket, data: any) {
     try { customTerms = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get() as any)?.value || '[]') } catch {}
     const lowerQ = query.toLowerCase()
     const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
-    if (hit) {
+    
+    const apiKey = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
+    // Only run instant block if AI safety filter is disabled or Gemini API key is missing.
+    // If Gemini is active, we delegate the check to Gemini so it can analyze context (e.g. esoteric study vs entertainment).
+    if (hit && (!safetyEnabled || !apiKey)) {
       // Resolve active user for this machine
       let hitUserDetails2 = 'Walk-in User'
       try {
@@ -747,7 +756,6 @@ function handleClientMessage(socket: net.Socket, data: any) {
     }
 
     // Layer 2: Gemini AI check (only if API key configured)
-    const apiKey = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
     if (!apiKey) {
       emitLog('allow', `[MITM] LAYER 2 SKIPPED — No Gemini API key configured`)
       if (!socket.destroyed) {
@@ -872,6 +880,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
   else if (data.type === 'client-request-close') {
     const machineId = clients.get(socket)
     if (machineId && db) {
+      const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+      if (activeSess) {
+        refundLeftoverPrepaidTime(activeSess.id)
+      }
       db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
       db.prepare(`
         UPDATE sessions 
@@ -2357,7 +2369,7 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");

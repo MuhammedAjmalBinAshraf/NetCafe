@@ -19,51 +19,16 @@ interface ReceiptModalProps {
 }
 
 export default function ReceiptModal({ isOpen, machine, plans, labName, onClose, onConfirm }: ReceiptModalProps) {
-  const [subtotal, setSubtotal] = useState(0)
-  const [discount, setDiscount] = useState(0)
-  const [total, setTotal] = useState(0)
-  const [paymentMethod, setPaymentMethod] = useState('Cash')
   const [isPrintPreview, setIsPrintPreview] = useState(false)
   const printRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (isOpen && machine) {
-      // Calculate billing subtotal
-      let calculatedSubtotal = 0
-      
-      if (machine.plan_id) {
-        const plan = plans.find(p => p.id === machine.plan_id)
-        if (plan) {
-          calculatedSubtotal = plan.price
-        }
-      } else {
-        // Standard rate of $5.00/hour for custom or postpaid sessions
-        const elapsedMinutes = (machine.timeRemaining || 0) / 60 // Wait, for postpaid timeRemaining = timeElapsed (seconds)
-        const ratePerMinute = 5.00 / 60
-        calculatedSubtotal = parseFloat((elapsedMinutes * ratePerMinute).toFixed(2))
-      }
-      
-      setSubtotal(calculatedSubtotal)
-      setDiscount(0)
-      setTotal(calculatedSubtotal)
-      setPaymentMethod('Cash')
       setIsPrintPreview(false)
     }
   }, [isOpen, machine, plans])
 
   if (!isOpen || !machine) return null
-
-  const handleDiscountChange = (val: string) => {
-    const disc = parseFloat(val) || 0
-    setDiscount(disc)
-    setTotal(Math.max(0, subtotal - disc))
-  }
-
-  const handleTotalChange = (val: string) => {
-    const tot = parseFloat(val) || 0
-    setTotal(tot)
-    setDiscount(Math.max(0, subtotal - tot))
-  }
 
   const handlePrint = () => {
     const printContent = printRef.current?.innerHTML
@@ -73,7 +38,7 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
         win.document.write(`
           <html>
             <head>
-              <title>Receipt - Machine ${machine.name}</title>
+              <title>Session Summary - Machine ${machine.name}</title>
               <style>
                 body { font-family: monospace; font-size: 12px; padding: 20px; text-align: center; }
                 .divider { border-top: 1px dashed black; margin: 10px 0; }
@@ -110,7 +75,7 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
         {/* Modal Header */}
         <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
           <h3 className="text-xl font-bold text-white">
-            {isPrintPreview ? 'Receipt Preview' : 'Close Session & Billing'}
+            {isPrintPreview ? 'Summary Preview' : 'Close Session'}
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors">
             <X size={20} />
@@ -126,7 +91,7 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
               className="bg-white text-black p-6 rounded-lg font-mono text-sm border border-slate-300 shadow-inner space-y-2 text-center"
             >
               <div className="text-lg font-bold uppercase tracking-wider">{labName}</div>
-              <div className="text-xs text-slate-500">NetCafe Operator Receipt</div>
+              <div className="text-xs text-slate-500">NetCafe Operator Summary</div>
               <div className="border-t border-dashed border-slate-400 my-2" />
               
               <div className="text-left space-y-1 text-xs">
@@ -159,35 +124,11 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
               </div>
 
               <div className="border-t border-dashed border-slate-400 my-2" />
-              
-              <div className="text-left space-y-1 text-xs">
-                <div className="flex justify-between">
-                  <span>Subtotal:</span>
-                  <span>${subtotal.toFixed(2)}</span>
-                </div>
-                {discount > 0 && (
-                  <div className="flex justify-between text-red-600">
-                    <span>Discount:</span>
-                    <span>-${discount.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="border-t border-dashed border-slate-400/50 my-1" />
-                <div className="flex justify-between font-bold text-sm">
-                  <span>Total Due:</span>
-                  <span>${total.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-xs text-slate-500">
-                  <span>Method:</span>
-                  <span>{paymentMethod}</span>
-                </div>
-              </div>
-
-              <div className="border-t border-dashed border-slate-400 my-2" />
               <div className="text-xs font-bold uppercase tracking-tight">Thank you for visiting!</div>
               <div className="text-[10px] text-slate-500">Powered by NetCafe Manager</div>
             </div>
           ) : (
-            /* Editing Billing and Discounts */
+            /* Editing Billing and Discounts (REMOVED - just summary) */
             <div className="space-y-4">
               {/* Session Meta */}
               <div className="bg-slate-950/60 p-4 border border-slate-800/50 rounded-lg text-sm space-y-2">
@@ -205,61 +146,15 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
                     {machine.mode || 'Postpaid'}
                   </span>
                 </div>
+                {selectedPlan && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Plan:</span>
+                    <span className="text-slate-200 font-medium">{selectedPlan.name}</span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-slate-400">Session Elapsed:</span>
                   <span className="text-white font-mono font-semibold">{formatTime(elapsedSeconds)}</span>
-                </div>
-              </div>
-
-              {/* Billing Forms */}
-              <div className="space-y-3">
-                {/* Subtotal */}
-                <div className="flex justify-between items-center bg-slate-950 px-3 py-2 border border-slate-900 rounded">
-                  <span className="text-sm text-slate-400">Subtotal Amount</span>
-                  <span className="text-base text-slate-200 font-bold">${subtotal.toFixed(2)}</span>
-                </div>
-
-                {/* Discount */}
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-slate-300 block">Apply Discount ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    max={subtotal}
-                    value={discount || ''}
-                    onChange={(e) => handleDiscountChange(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-                  />
-                </div>
-
-                {/* Final Total */}
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-slate-300 block">Final Total Due ($)</label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value={total || ''}
-                    onChange={(e) => handleTotalChange(e.target.value)}
-                    placeholder="0.00"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none font-bold text-lg text-blue-400 transition-colors"
-                  />
-                </div>
-
-                {/* Payment Method */}
-                <div className="space-y-1.5">
-                  <label className="text-sm font-semibold text-slate-300 block">Payment Method</label>
-                  <select
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="UPI">UPI</option>
-                    <option value="Card">Card</option>
-                  </select>
                 </div>
               </div>
             </div>
@@ -274,14 +169,14 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
                 onClick={() => setIsPrintPreview(false)}
                 className="px-4 py-2 border border-slate-800 hover:bg-slate-800 text-slate-400 hover:text-white rounded text-sm font-medium transition-colors"
               >
-                Back to Edit
+                Back to View
               </button>
             ) : (
               <button
                 onClick={() => setIsPrintPreview(true)}
                 className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded text-sm font-medium transition-colors"
               >
-                <Printer size={16} /> Receipt Preview
+                <Printer size={16} /> Summary Preview
               </button>
             )}
           </div>
@@ -295,7 +190,7 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
               </button>
             )}
             <button
-              onClick={() => onConfirm(total, discount, paymentMethod)}
+              onClick={() => onConfirm(0, 0, 'None')}
               className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors"
             >
               <Check size={16} /> Complete & Lock

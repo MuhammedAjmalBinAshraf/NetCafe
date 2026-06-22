@@ -1999,8 +1999,6 @@ export default function App() {
                         <th className="p-4">Mode</th>
                         <th className="p-4">Start Time</th>
                         <th className="p-4">End Time</th>
-                        <th className="p-4 text-right">Discount</th>
-                        <th className="p-4 text-right">Amount</th>
                         <th className="p-4">Payment</th>
                         <th className="p-4">Activity</th>
                       </tr>
@@ -2008,7 +2006,7 @@ export default function App() {
                     <tbody className="divide-y divide-slate-900 text-slate-200">
                       {filteredSessions.length === 0 ? (
                         <tr>
-                          <td colSpan={10} className="p-8 text-center text-slate-500 italic">No matching sessions found.</td>
+                          <td colSpan={8} className="p-8 text-center text-slate-500 italic">No matching sessions found.</td>
                         </tr>
                       ) : (
                         filteredSessions.map((sess: any) => (
@@ -2019,8 +2017,6 @@ export default function App() {
                             <td className="p-4"><span className="text-[10px] font-bold uppercase bg-slate-800 px-2 py-0.5 rounded text-slate-300">{sess.mode}</span></td>
                             <td className="p-4 font-mono text-xs">{sess.start_time}</td>
                             <td className="p-4 font-mono text-xs">{sess.end_time || <span className="text-blue-400 font-bold">Active</span>}</td>
-                            <td className="p-4 text-right text-red-400 font-semibold">${(sess.discount || 0).toFixed(2)}</td>
-                            <td className="p-4 text-right font-bold text-white">${(sess.total_amount || 0).toFixed(2)}</td>
                             <td className="p-4 text-xs font-semibold text-slate-300">{sess.payment_method || '-'}</td>
                             <td className="p-4">
                               <button
@@ -2062,10 +2058,6 @@ export default function App() {
                         <div className="flex justify-between">
                           <span>Billing Rate:</span>
                           <span className="text-white font-semibold capitalize">{plan.rate_type}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span>Price:</span>
-                          <span className="text-emerald-400 font-bold text-base">${plan.price.toFixed(2)}</span>
                         </div>
                         {plan.duration_minutes && (
                           <div className="flex justify-between">
@@ -2490,8 +2482,8 @@ Respond strictly in JSON format:
           {activeTab === 'reports' && (
             <div className="space-y-6">
               <div className="pb-4 border-b border-slate-900">
-                <h2 className="text-xl font-bold">Revenue & analytics</h2>
-                <p className="text-slate-400 text-sm mt-1">Check today's revenue summaries and client performance insights.</p>
+                <h2 className="text-xl font-bold">System Analytics</h2>
+                <p className="text-slate-400 text-sm mt-1">Check today's session summaries and client performance insights.</p>
               </div>
 
               {/* KPI Cards */}
@@ -2503,7 +2495,7 @@ Respond strictly in JSON format:
                 </div>
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-2">
                   <div className="text-slate-400 text-xs font-bold uppercase tracking-wider">Total Revenue</div>
-                  <div className="text-3xl font-extrabold text-emerald-400">${reportsData.totalRevenue.toFixed(2)}</div>
+                  <div className="text-3xl font-extrabold text-emerald-400">N/A</div>
                   <div className="text-[10px] text-slate-500">Aggregated sales from all logs.</div>
                 </div>
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-2">
@@ -2522,7 +2514,6 @@ Respond strictly in JSON format:
                       <div className="font-semibold text-white">{mach.name}</div>
                       <div className="flex gap-6 text-xs text-slate-400">
                         <div>Sessions: <span className="text-slate-200 font-semibold">{mach.sessions_count}</span></div>
-                        <div>Revenue: <span className="text-emerald-400 font-bold">${mach.total_revenue.toFixed(2)}</span></div>
                       </div>
                     </div>
                   ))}
@@ -3908,19 +3899,6 @@ Respond strictly in JSON format:
                   <option value="fixed">Fixed Duration (Prepaid)</option>
                   <option value="hourly">Hourly Rate (Postpaid)</option>
                 </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Price ($)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  required
-                  placeholder="5.00"
-                  value={planPrice}
-                  onChange={(e) => setPlanPrice(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-1.5 text-white outline-none text-sm transition-colors"
-                />
               </div>
 
               {planRateType === 'fixed' && (

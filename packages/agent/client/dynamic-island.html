@@ -872,6 +872,45 @@
       }
     });
 
+    // Position cycling state variables
+    let currentXPosition = 'centre';
+    let nextDirection = 'left';
+
+    // Click handler for position transition
+    island.addEventListener('click', (e) => {
+      // Ignore click if it's on interactive elements (buttons, inputs, tabs, etc.)
+      if (e.target.closest('button, input, a, .tab-btn, .pw-input, .toggle-opt')) {
+        return;
+      }
+
+      if (currentXPosition === 'centre') {
+        if (nextDirection === 'left') {
+          currentXPosition = 'left';
+          ipcRenderer.send('move-island', 'left');
+        } else if (nextDirection === 'right') {
+          currentXPosition = 'right';
+          ipcRenderer.send('move-island', 'right');
+        }
+      } else if (currentXPosition === 'right') {
+        currentXPosition = 'centre';
+        nextDirection = 'left';
+        ipcRenderer.send('move-island', 'centre');
+      }
+    });
+
+    // Double click handler for position transition
+    island.addEventListener('dblclick', (e) => {
+      if (e.target.closest('button, input, a, .tab-btn, .pw-input, .toggle-opt')) {
+        return;
+      }
+
+      if (currentXPosition === 'left') {
+        currentXPosition = 'centre';
+        nextDirection = 'right';
+        ipcRenderer.send('move-island', 'centre');
+      }
+    });
+
     // Button interactions
     document.getElementById('btn-exit').addEventListener('click', () => {
       ipcRenderer.send('exit-session-request');

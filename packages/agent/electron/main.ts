@@ -651,7 +651,7 @@ function createLockWindow() {
         <label class="input-label" for="password">Password</label>
         <div style="position: relative; display: flex; align-items: center; width: 100%;">
           <input type="password" id="password" placeholder="Enter your password" autocomplete="off" style="width: 100%; padding-right: 32px;" />
-          <button type="button" id="togglePassword" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+          <button type="button" id="togglePassword" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
         </div>
       </div>
       <button class="login-btn" id="loginBtn">Start Session</button>
@@ -689,7 +689,7 @@ function createLockWindow() {
           <div style="position: relative; display: flex; align-items: center; width: 100%;">
             <input type="password" id="pinInput" placeholder="Enter operator PIN" autocomplete="off"
               style="width:100%;padding:0.65rem 32px 0.65rem 0.9rem;background:rgba(15,23,42,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:10px;color:#e2e8f0;font-size:0.9rem;outline:none;" />
-            <button type="button" id="togglePin" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+            <button type="button" id="togglePin" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
           </div>
           <div id="pinError" style="margin-top:0.5rem;color:#fca5a5;font-size:0.78rem;display:none;"></div>
         </div>
@@ -780,6 +780,8 @@ function createLockWindow() {
   <script>
     (function() {
       const { ipcRenderer } = require('electron');
+      const eyeOnSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+      const eyeOffSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
       const usernameEl = document.getElementById('username');
       const passwordEl = document.getElementById('password');
       const loginBtn = document.getElementById('loginBtn');
@@ -830,7 +832,7 @@ function createLockWindow() {
         togglePassword.addEventListener('click', () => {
           const isPw = passwordEl.type === 'password';
           passwordEl.type = isPw ? 'text' : 'password';
-          togglePassword.textContent = isPw ? '🙈' : '👁️';
+          togglePassword.innerHTML = isPw ? eyeOffSvg : eyeOnSvg;
         });
       }
       const togglePin = document.getElementById('togglePin');
@@ -838,7 +840,7 @@ function createLockWindow() {
         togglePin.addEventListener('click', () => {
           const isPw = pinInput.type === 'password';
           pinInput.type = isPw ? 'text' : 'password';
-          togglePin.textContent = isPw ? '🙈' : '👁️';
+          togglePin.innerHTML = isPw ? eyeOffSvg : eyeOnSvg;
         });
       }
 
@@ -3344,10 +3346,6 @@ function getIslandHtml(sessionData?: any): string {
             <span class="card-label" style="margin-top:4px;">Started</span>
             <span class="card-val"   id="card-start">--:--</span>
           </div>
-          <div class="cost-col">
-            <div class="cost-label">Accrued</div>
-            <div class="cost-val" id="card-cost">$0.00</div>
-          </div>
         </div>
         <div id="dev-log-wrap" style="display:none;">
           <div class="dev-log" id="dev-log"></div>
@@ -3373,21 +3371,21 @@ function getIslandHtml(sessionData?: any): string {
             <label>Current Password</label>
             <div style="position: relative; display: flex; align-items: center; width: 100%;">
               <input type="password" id="pw-old" placeholder="••••" style="width: 100%; padding-right: 32px;">
-              <button type="button" id="togglePwOld" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+              <button type="button" id="togglePwOld" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
             </div>
           </div>
           <div class="form-group">
             <label>New Password</label>
             <div style="position: relative; display: flex; align-items: center; width: 100%;">
               <input type="password" id="pw-new" placeholder="••••" style="width: 100%; padding-right: 32px;">
-              <button type="button" id="togglePwNew" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+              <button type="button" id="togglePwNew" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
             </div>
           </div>
           <div class="form-group">
             <label>Confirm Password</label>
             <div style="position: relative; display: flex; align-items: center; width: 100%;">
               <input type="password" id="pw-confirm" placeholder="••••" style="width: 100%; padding-right: 32px;">
-              <button type="button" id="togglePwConfirm" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; font-size: 14px; outline: none; padding: 4px;">👁️</button>
+              <button type="button" id="togglePwConfirm" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
             </div>
           </div>
           <div class="pw-status" id="pw-status">Status message</div>
@@ -3505,9 +3503,6 @@ function getIslandHtml(sessionData?: any): string {
         const d = new Date(getStartMs());
         se.textContent = isNaN(d.getTime()) ? '--:--' : d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',hour12:false});
       }
-      const rate   = parseFloat(session.planPrice) || 5.0;
-      const costEl = document.getElementById('card-cost');
-      if (costEl) costEl.textContent = isPrepaid ? ('$' + rate.toFixed(2)) : ('$' + ((elapsed/3600)*rate).toFixed(2));
       tick();
     }
 
@@ -3559,6 +3554,8 @@ function getIslandHtml(sessionData?: any): string {
       tick();
     }
     function setupPwToggles() {
+      const eyeOnSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+      const eyeOffSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
       ['pw-old', 'pw-new', 'pw-confirm'].forEach(id => {
         const input = document.getElementById(id);
         const btn = document.getElementById('toggle' + id.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(''));
@@ -3568,7 +3565,7 @@ function getIslandHtml(sessionData?: any): string {
           newBtn.addEventListener('click', () => {
             const isPw = input.type === 'password';
             input.type = isPw ? 'text' : 'password';
-            newBtn.textContent = isPw ? '🙈' : '👁️';
+            newBtn.innerHTML = isPw ? eyeOffSvg : eyeOnSvg;
           });
         }
       });

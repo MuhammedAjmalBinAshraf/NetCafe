@@ -112,7 +112,7 @@ export default function SessionModal({ isOpen, machineName, plans, onClose, onCo
                   <option value="">-- Custom Duration --</option>
                   {plans.map((plan) => (
                     <option key={plan.id} value={plan.id}>
-                      {plan.name} ({plan.duration_minutes}m) - ${plan.price.toFixed(2)}
+                      {plan.name} ({plan.duration_minutes}m)
                     </option>
                   ))}
                 </select>
@@ -140,17 +140,11 @@ export default function SessionModal({ isOpen, machineName, plans, onClose, onCo
                     {selectedPlanId ? `${selectedPlan?.duration_minutes} Minutes` : customDuration ? `${customDuration} Minutes` : '0 Minutes'}
                   </span>
                 </div>
-                <div className="flex justify-between">
-                  <span>Price:</span>
-                  <span className="text-blue-400 font-bold text-sm">
-                    {selectedPlanId ? `$${selectedPlan?.price.toFixed(2)}` : '$0.00 (Standard rate applies)'}
-                  </span>
-                </div>
               </div>
             </div>
           ) : (
             <div className="bg-slate-950/50 rounded-lg p-4 border border-slate-800/30 text-center text-xs text-slate-400">
-              Session counts up. Charges will be calculated at session close based on elapsed time.
+              Session counts up based on elapsed time.
             </div>
           )}
         </div>

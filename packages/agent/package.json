@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.0.86",
+  "version": "1.0.87",
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
   "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
