@@ -2614,6 +2614,14 @@ app.whenReady().then(async () => {
           logToUI(`[MITM] Browser query intercepted: "${query}" URL: "${url}" IP: "${ip}"`);
           const allowed = await checkQuerySafety(query, url, ip);
           logToUI(`[MITM] Safety check result for "${query}": ${allowed ? 'ALLOWED' : 'BLOCKED'}`);
+          if (!allowed) {
+            if (islandWindow && !islandWindow.isDestroyed()) {
+              islandWindow.webContents.send('safety-violation', {
+                type: 'Safety Warning',
+                message: `Search query "${query}" violates safety rules and has been blocked.`
+              });
+            }
+          }
           return allowed;
         },
         logToUI,
@@ -3773,6 +3781,8 @@ async function runKioskSetup(): Promise<void> {
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "HideFastUserSwitching" -Value 1 -Type DWord
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Name "DisableCMD" -Value 1 -Type DWord
+    New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Internet Explorer\\Control Panel" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Internet Explorer\\Control Panel" -Name "Proxy" -Value 1 -Type DWord
     reg unload "HKU\\CafeKioskTemp"
     Write-Host "User-specific registry keys written and NTUSER.DAT unloaded successfully."
 

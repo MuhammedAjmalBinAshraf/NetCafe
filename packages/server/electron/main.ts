@@ -2067,7 +2067,7 @@ ipcMain.handle('topup-user', (_, id: number, minutes: number) => {
     const user = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(id) as any
     if (user) {
       const activeSession = db.prepare(`
-        SELECT id, machine_id, custom_duration, start_time, mode, price
+        SELECT id, machine_id, custom_duration, start_time, mode
         FROM sessions
         WHERE (customer_name = ? OR customer_name = ?) AND end_time IS NULL
       `).get(user.username, user.display_name) as any
@@ -2087,7 +2087,7 @@ ipcMain.handle('topup-user', (_, id: number, minutes: number) => {
             startTime: activeSession.start_time,
             mode: activeSession.mode || 'postpaid',
             durationMinutes: newDuration,
-            planPrice: activeSession.price || null,
+            planPrice: null,
             customDuration: newDuration,
             user: activeSession.customer_name || 'Guest',
             username: sessionUsername
@@ -2121,7 +2121,7 @@ ipcMain.handle('bulk-topup-users', (_, ids: number[], minutes: number) => {
       const user = db.prepare("SELECT username, display_name FROM users WHERE id = ?").get(id) as any
       if (user) {
         const activeSession = db.prepare(`
-          SELECT id, machine_id, custom_duration, start_time, mode, price
+          SELECT id, machine_id, custom_duration, start_time, mode
           FROM sessions
           WHERE (customer_name = ? OR customer_name = ?) AND end_time IS NULL
         `).get(user.username, user.display_name) as any
@@ -2141,7 +2141,7 @@ ipcMain.handle('bulk-topup-users', (_, ids: number[], minutes: number) => {
               startTime: activeSession.start_time,
               mode: activeSession.mode || 'postpaid',
               durationMinutes: newDuration,
-              planPrice: activeSession.price || null,
+              planPrice: null,
               customDuration: newDuration,
               user: activeSession.customer_name || 'Guest',
               username: sessionUsername

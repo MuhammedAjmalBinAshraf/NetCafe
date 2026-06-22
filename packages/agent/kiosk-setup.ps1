@@ -293,6 +293,12 @@ try {
                         -Path "$hivePath\Software\Policies\Microsoft\Windows\System" `
                         -Name  "DisableCMD" -Value 1 -Type DWord -Force
 
+                    New-Item -Path "$hivePath\Software\Policies\Microsoft\Internet Explorer\Control Panel" `
+                             -Force -ErrorAction SilentlyContinue | Out-Null
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Policies\Microsoft\Internet Explorer\Control Panel" `
+                        -Name  "Proxy" -Value 1 -Type DWord -Force
+
                     # Disable shutdown/restart/sleep from Start Menu and Ctrl+Alt+Del for kiosk user
                     New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
                              -Force -ErrorAction SilentlyContinue | Out-Null
@@ -376,6 +382,7 @@ try {
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "HideFastUserSwitching" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Windows\System" -Name "DisableCMD" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Internet Explorer\Control Panel" -Name "Proxy" -ErrorAction SilentlyContinue
                     
                     Log "OK:" "Restored default Shell and removed GPO policies for standard user '$username'"
                     
