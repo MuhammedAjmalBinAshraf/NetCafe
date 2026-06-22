@@ -2362,6 +2362,66 @@ async function checkQuerySafety(
   }
 }
 
+let cachedBestModel: string | null = null;
+let cachedApiKeyForModel: string | null = null;
+
+async function getBestModel(apiKey: string): Promise<string> {
+  if (cachedBestModel && cachedApiKeyForModel === apiKey) {
+    return cachedBestModel;
+  }
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
+    const res = await fetch(url);
+    if (!res.ok) {
+      throw new Error(`Failed to list models: HTTP ${res.status}`);
+    }
+    const data: any = await res.json();
+    if (data && Array.isArray(data.models)) {
+      const candidates = data.models
+        .filter((m: any) => m.supportedGenerationMethods?.includes('generateContent'))
+        .map((m: any) => m.name);
+
+      if (candidates.length > 0) {
+        const priorities = [
+          'models/gemini-3.5-flash',
+          'models/gemini-3.1-flash-lite',
+          'models/gemini-3-flash-preview',
+          'models/gemini-2.5-flash',
+          'models/gemini-2.0-flash',
+          'models/gemini-flash-latest',
+          'models/gemini-2.5-flash-lite',
+          'models/gemini-2.0-flash-lite',
+          'models/gemini-flash-lite-latest',
+          'models/gemini-2.5-pro',
+          'models/gemini-2.0-pro',
+          'models/gemini-pro-latest'
+        ];
+        for (const priority of priorities) {
+          if (candidates.includes(priority)) {
+            cachedBestModel = priority;
+            cachedApiKeyForModel = apiKey;
+            return priority;
+          }
+        }
+        const flashCandidate = candidates.find((name: string) => name.toLowerCase().includes('flash'));
+        if (flashCandidate) {
+          cachedBestModel = flashCandidate;
+          cachedApiKeyForModel = apiKey;
+          return flashCandidate;
+        }
+        cachedBestModel = candidates[0];
+        cachedApiKeyForModel = apiKey;
+        return candidates[0];
+      }
+    }
+  } catch (err) {
+    console.error('Error fetching models list, using fallback:', err);
+  }
+
+  return 'models/gemini-2.5-flash';
+}
+
 async function evaluateQuerySafety(
   query: string,
   apiKey: string,
@@ -2369,7 +2429,8 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+  const model = await getBestModel(apiKey);
+  const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
   
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");
@@ -2583,7 +2644,8 @@ ipcMain.handle('ai-search-logs', async (_event, searchQuery: string, logs: any[]
     throw new Error('Gemini API key is not configured. Please add it in Settings.')
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`
+  const model = await getBestModel(apiKey);
+  const url = `https://generativelanguage.googleapis.com/v1/${model}:generateContent?key=${apiKey}`;
   const prompt = `You are an AI assistant analyzing computer lab activity logs.
 The administrator wants to filter/search the logs using this request: "${searchQuery}".
 

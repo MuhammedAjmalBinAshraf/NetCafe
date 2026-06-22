@@ -1225,6 +1225,7 @@
     ipcRenderer.on('sync-session-data', handleSessionUpdate);
 
     ipcRenderer.on('set-evaluating-state', (event, evaluating) => {
+      console.log('[Island] set-evaluating-state received:', evaluating, 'currentState:', currentState);
       if (evaluating) {
         collapsedState = 'check';
         if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {

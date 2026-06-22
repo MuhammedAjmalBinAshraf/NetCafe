@@ -1294,8 +1294,8 @@ async function handleServerMessage(msg: any) {
       const { requestId, allowed } = msg.payload || {};
       const pending = pendingQueryChecks.get(requestId);
       if (pending) {
-        pending.resolve(allowed);
         pendingQueryChecks.delete(requestId);
+        pending.resolve(allowed);
       }
       return;
     }
