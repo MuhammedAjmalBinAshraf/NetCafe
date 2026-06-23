@@ -52,7 +52,7 @@ skip_kiosk_setup:
 
   ; ── Register/Update the watchdog service for both silent and interactive installs ──
   DetailPrint "NetCafe: Installing watchdog service..."
-  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --install-watchdog`
+  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --install-watchdog --headless --disable-gpu --no-sandbox`
   Pop $0
   DetailPrint "NetCafe: Watchdog service install exited with code $0"
 !macroend
@@ -74,7 +74,7 @@ skip_kiosk_setup:
 
   ; ── Uninstall/Clean up the watchdog service ──
   DetailPrint "NetCafe: Uninstalling watchdog service..."
-  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --uninstall-watchdog`
+  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --uninstall-watchdog --headless --disable-gpu --no-sandbox`
   Pop $0
   DetailPrint "NetCafe: Watchdog service uninstall exited with code $0"
 !macroend
