@@ -440,7 +440,7 @@ export default function App() {
 
   // Broadcast Logic
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: any;
     if (activeTab === 'broadcast') {
       const fetchStats = () => {
         if (window.ipcRenderer) {

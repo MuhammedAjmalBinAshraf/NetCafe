@@ -1517,6 +1517,85 @@
       }
     });
 
+    /* Alert auto-dismiss countdown */
+    var _alertTimer = null;
+    function startAlertCountdown(seconds) {
+      var secs = seconds || 300;
+      clearInterval(_alertTimer);
+      _alertTimer = setInterval(function() {
+        secs--;
+        var m = Math.floor(secs / 60), s = secs % 60;
+        var el = document.getElementById('alert-countdown');
+        if (el) el.textContent = (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+        if (secs <= 0) { clearInterval(_alertTimer); dismissBroadcast(); }
+      }, 1000);
+    }
+
+    /* Student reply → IPC → server → operator dashboard */
+    function sendStudentReply() {
+      var inp = document.getElementById('msg-inp');
+      var bubbles = document.getElementById('msg-bubbles');
+      if (!inp || !inp.value.trim()) return;
+      var text = inp.value.trim();
+      var div = document.createElement('div');
+      div.className = 'msg-bubble-out';
+      div.textContent = text;
+      bubbles.appendChild(div);
+      inp.value = '';
+      inp.focus();
+      
+      // Send IPC to main process
+      ipcRenderer.send('student-reply', text);
+    }
+
+    /* Dismiss back to compact */
+    function dismissBroadcast() {
+      clearInterval(_alertTimer);
+      var nextState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+      setIslandState(nextState);
+    }
+
+    /* Extension of show capabilities for new states */
+    function showBroadcast(state, data) {
+      if (state === 'message' && data) {
+        var bubbles = document.getElementById('msg-bubbles');
+        if (bubbles) {
+          bubbles.innerHTML = '<div class="msg-bubble-in">'
+            + (data.text || data.body || '') + '</div>';
+        }
+        if (data.from_label) {
+          var lbl = document.getElementById('msg-from');
+          if (lbl) lbl.textContent = data.from_label;
+        }
+      }
+      if (state === 'alert' && data) {
+        if (data.title) document.getElementById('alert-title').textContent = data.title;
+        if (data.body)  document.getElementById('alert-body').textContent  = data.body;
+        startAlertCountdown(data.seconds || 300);
+      }
+      if (state === 'announcement' && data) {
+        if (data.body)       document.getElementById('ann-body').textContent = data.body;
+        if (data.from_label) document.getElementById('ann-from').textContent = '— ' + data.from_label;
+        if (data.time)       document.getElementById('ann-time').textContent = data.time || 'Now';
+      }
+      setIslandState(state);
+    }
+
+    // Register broadcast listener
+    ipcRenderer.on('broadcast-receive', (event, payload) => {
+      showBroadcast(payload.type, payload);
+    });
+
+    // Enter key listener for input
+    const msgInp = document.getElementById('msg-inp');
+    if (msgInp) {
+      msgInp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          sendStudentReply();
+        }
+      });
+    }
+
     ipcRenderer.on('session-end', () => {
       island.style.display = 'none';
     });
