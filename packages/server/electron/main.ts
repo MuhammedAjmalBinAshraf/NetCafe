@@ -782,10 +782,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
                 } else {
                   if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 PASSED — No custom term match for "${query}"`, machineId: Number(machineId), query })
                   
-                  const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
-                  const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false'
-                  const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false'
-                  const filterIllegal = db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get()?.value !== 'false'
+                  const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false';
+                  const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false';
+                  const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false';
+                  const filterIllegal = db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get()?.value !== 'false';
                   checkQuerySafety(Number(machineId), query, apiKey, {
                     porn: filterPorn,
                     violence: filterViolence,
@@ -889,23 +889,23 @@ function handleClientMessage(socket: net.Socket, data: any) {
         if (!socket.destroyed) socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId: '', allowed: false } }) + '\n')
       } else {
         // Repeat offence — lock machine
-        sendCommandToMachine(Number(machineId), { command: 'lock' })
-        sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` })
-        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails })
-        broadcastMachines()
+        sendCommandToMachine(Number(machineId), { command: 'lock' });
+        sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` });
+        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails });
+        broadcastMachines();
       }
       return
     }
 
     // Layer 2: Gemini AI check (only if API key configured)
-    if (!apiKey) return
-    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false'
-    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false'
-    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false'
-    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false'
+    if (!apiKey) return;
+    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false';
+    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false';
+    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false';
+    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false';
     checkQuerySafety(Number(machineId), query, apiKey, {
       porn: filterPorn, violence: filterViolence, selfHarm: filterSelfHarm, illegal: filterIllegal, customTerms
-    })
+    });
   }
   else if (data.type === 'query-check-request') {
     const machineId = clients.get(socket)
@@ -994,10 +994,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
       return
     }
 
-    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false'
-    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false'
-    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false'
-    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false'
+    const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false';
+    const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false';
+    const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false';
+    const filterIllegal  = (db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get() as any)?.value !== 'false';
 
     // Run AI evaluation asynchronously so we don't block the main event loop
     (async () => {
@@ -3071,7 +3071,7 @@ async function evaluateQuerySafety(
   }, 12000);
 
   try {
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -3080,6 +3080,24 @@ async function evaluateQuerySafety(
       }),
       signal: controller.signal
     });
+
+    if (res.status === 503 || res.status === 429) {
+      const status = res.status;
+      let errMsg = '';
+      try { errMsg = await res.text(); } catch {}
+      emitLog?.('warn', `LAYER 2 ERROR: HTTP ${status}: ${errMsg || 'Unavailable'}. Retrying query in 1000ms...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        }),
+        signal: controller.signal
+      });
+    }
+
     clearTimeout(timeoutId);
     emitLog?.('info', `LAYER 2: Gemini responded (HTTP ${res.status})`)
     if (res.ok) {
