@@ -96,8 +96,8 @@ export default function App() {
   const [filterViolence, setFilterViolence] = useState(true)
   const [filterSelfHarm, setFilterSelfHarm] = useState(true)
   const [filterIllegal, setFilterIllegal] = useState(true)
-  const [customFilterTerms, setCustomFilterTerms] = useState<string[]>([])
-  const [newCustomTerm, setNewCustomTerm] = useState('')
+  const [blockedQueries, setBlockedQueries] = useState<Array<{id: number, query: string}>>([])
+  const [newBlockedQuery, setNewBlockedQuery] = useState('')
   const [violationPenaltyMinutes, setViolationPenaltyMinutes] = useState('5')
   const [safeQueries, setSafeQueries] = useState<Array<{id: number, query: string}>>([])
   const [newSafeQuery, setNewSafeQuery] = useState('')
@@ -337,10 +337,8 @@ export default function App() {
         setOpenRouterApiKey(fresh.openrouter_api_key || '')
         setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
         setOpenRouterUrl(fresh.openrouter_url || 'https://openrouter.ai/api/v1/chat/completions')
-        try {
-          setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
-        } catch { setCustomFilterTerms([]) }
       })
+      window.ipcRenderer.invoke('get-blocked-queries').then(setBlockedQueries).catch(() => {})
       window.ipcRenderer.invoke('get-safe-queries').then(setSafeQueries).catch(() => {})
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
@@ -1223,9 +1221,7 @@ export default function App() {
       setOpenRouterApiKey(fresh.openrouter_api_key || '')
       setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
       setOpenRouterUrl(fresh.openrouter_url || 'https://openrouter.ai/api/v1/chat/completions')
-      try {
-        setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
-      } catch { setCustomFilterTerms([]) }
+      // Blocked queries are handled dynamically in blocked_queries table
     }
   }
 
@@ -1238,7 +1234,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'filter_violence', filterViolence ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_self_harm', filterSelfHarm ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
-        await window.ipcRenderer.invoke('update-settings', 'custom_filter_terms', JSON.stringify(customFilterTerms))
+        // Blocked queries are managed dynamically, no settings row needed
         await window.ipcRenderer.invoke('update-settings', 'ai_custom_context', aiCustomContext)
         await window.ipcRenderer.invoke('update-settings', 'violation_penalty_minutes', violationPenaltyMinutes)
         const fresh = await window.ipcRenderer.invoke('get-settings')
@@ -1315,24 +1311,28 @@ export default function App() {
     setAiSearchStatus('')
   }
 
-  const handleAddCustomTerm = () => {
-    const raw = newCustomTerm.trim()
-    if (!raw) return
-    const termsToAdd = raw.split(',').map(t => t.trim()).filter(t => t.length > 0)
-    setCustomFilterTerms(prev => {
-      let updated = [...prev]
-      for (const t of termsToAdd) {
-        if (!updated.includes(t)) {
-          updated.push(t)
-        }
+  const handleAddBlockedQuery = async () => {
+    const query = newBlockedQuery.trim()
+    if (query && window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('add-blocked-query', query)
+      if (res.success) {
+        setNewBlockedQuery('')
+        const fresh = await window.ipcRenderer.invoke('get-blocked-queries')
+        setBlockedQueries(fresh)
+      } else {
+        alert(res.error || 'Failed to add blocked query')
       }
-      return updated
-    })
-    setNewCustomTerm('')
+    }
   }
 
-  const handleRemoveCustomTerm = (term: string) => {
-    setCustomFilterTerms(prev => prev.filter(t => t !== term))
+  const handleDeleteBlockedQuery = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('delete-blocked-query', id)
+      if (res.success) {
+        const fresh = await window.ipcRenderer.invoke('get-blocked-queries')
+        setBlockedQueries(fresh)
+      }
+    }
   }
 
   const handleAddSafeQuery = async () => {
@@ -2603,47 +2603,61 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Custom Filter Terms */}
+                    {/* Blocked Queries (Blacklist) */}
                     <div className="space-y-3">
-                      <span className="text-xs font-bold uppercase text-slate-400 block">Custom Blocked Terms / Topics</span>
+                      <span className="text-xs font-bold uppercase text-slate-400 block">Blocked Queries (Blacklist)</span>
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          placeholder="e.g. proxy, tor, torrent..."
-                          value={newCustomTerm}
-                          onChange={(e) => setNewCustomTerm(e.target.value)}
+                          placeholder="Enter blocked term or site (e.g. proxy, tor, torrent)..."
+                          value={newBlockedQuery}
+                          onChange={(e) => setNewBlockedQuery(e.target.value)}
                           onKeyDown={(e) => {
                             if (e.key === 'Enter') {
                               e.preventDefault();
-                              handleAddCustomTerm();
+                              handleAddBlockedQuery();
                             }
                           }}
                           className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
                         />
                         <button
-                          onClick={handleAddCustomTerm}
-                          className="p-2 bg-blue-600 hover:bg-blue-505 text-white rounded-lg transition-colors flex items-center justify-center shrink-0"
+                          onClick={handleAddBlockedQuery}
+                          className="px-3 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg transition-colors flex items-center gap-1 shrink-0 text-xs font-bold"
                         >
-                          <Plus size={16} />
+                          <Plus size={14} /> Add
                         </button>
                       </div>
 
-                      {customFilterTerms.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto bg-slate-950/45 border border-slate-800/40 p-2 rounded-lg">
-                          {customFilterTerms.map((term) => (
-                            <span
-                              key={term}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-slate-900 border border-slate-800 rounded-full text-[10px] text-slate-300 font-semibold"
-                            >
-                              {term}
-                              <button
-                                onClick={() => handleRemoveCustomTerm(term)}
-                                className="text-slate-500 hover:text-red-400 transition-colors"
-                              >
-                                <X size={10} />
-                              </button>
-                            </span>
-                          ))}
+                      {blockedQueries.length === 0 ? (
+                        <div className="text-slate-600 text-xs py-4 text-center">
+                          No blacklisted terms/queries added yet.
+                        </div>
+                      ) : (
+                        <div className="max-h-48 overflow-y-auto border border-slate-900 rounded-lg bg-slate-950/20">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-semibold">
+                                <th className="p-2.5">Blocked Term / Site</th>
+                                <th className="p-2.5 text-right w-16">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-900">
+                              {blockedQueries.map((q) => (
+                                <tr key={q.id} className="hover:bg-slate-900/40 transition-colors">
+                                  <td className="p-2.5 font-mono text-slate-300">{q.query}</td>
+                                  <td className="p-2.5 text-right">
+                                    <button
+                                      onClick={() => handleDeleteBlockedQuery(q.id)}
+                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                      title="Delete"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
                         </div>
                       )}
                     </div>
@@ -2706,8 +2720,8 @@ export default function App() {
                         settings.filter_violence !== 'false' ? 'severe violence/gore/terrorist activities' : null,
                         settings.filter_self_harm !== 'false' ? 'self-harm/suicide instructions' : null,
                         settings.filter_illegal !== 'false' ? 'illegal acts/weapons/hacking guides' : null,
-                        settings.custom_filter_terms && JSON.parse(settings.custom_filter_terms || '[]').length > 0
-                          ? `any of these specific blocked terms/topics: ${JSON.parse(settings.custom_filter_terms).join(', ')}`
+                        blockedQueries.length > 0
+                          ? `any of these specific blocked terms/topics: ${blockedQueries.map(b => b.query).join(', ')}`
                           : null
                       ].filter(Boolean).join(', ') || 'none'}.${
                         settings.ai_custom_context?.trim()

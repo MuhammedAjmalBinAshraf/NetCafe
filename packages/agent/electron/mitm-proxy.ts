@@ -553,182 +553,205 @@ export class MitmProxy {
     );
 
     // Inspect HTTP requests flowing from browser → real server
-    let reqBuffer = '';
-    clientTls.on('data', async (data: Buffer) => {
-      try {
-        // Parse first line of HTTP request to extract path
-        reqBuffer += data.toString('utf8', 0, Math.min(data.length, 2048));
-        const lineEnd = reqBuffer.indexOf('\r\n');
-        if (lineEnd !== -1) {
-          const firstLine = reqBuffer.substring(0, lineEnd);
-          reqBuffer = ''; // reset after reading first line
-          const match = firstLine.match(/^[A-Z]+ ([^\s]+) HTTP/);
-          if (match) {
-            // First check if the domain itself is blocked
-            if (this.isDomainBlocked && this.isDomainBlocked(hostname)) {
-              this.log(`[Proxy] Blocked HTTPS domain intercepted: "${hostname}". Instantly blocking.`);
-              clientTls.pause();
-              
-              if (this.onDomainViolation) {
-                this.onDomainViolation(hostname);
-              }
+    let reqBuffers: Buffer[] = [];
+    let reqLength = 0;
+    let isTunneling = false;
 
-              const blockHtml = getBlockPageHtml(hostname, true);
-              const blockResponse = [
-                'HTTP/1.1 200 OK',
-                'Content-Type: text/html; charset=utf-8',
-                'Connection: close',
-                `Content-Length: ${Buffer.byteLength(blockHtml)}`,
-                '',
-                blockHtml
-              ].join('\r\n');
+    clientTls.on('data', async (data: Buffer) => {
+      if (isTunneling) {
+        if (!realSocket.destroyed) realSocket.write(data);
+        return;
+      }
+
+      reqBuffers.push(data);
+      reqLength += data.length;
+
+      const merged = Buffer.concat(reqBuffers, reqLength);
+      const headerEndIdx = merged.indexOf('\r\n\r\n');
+
+      if (headerEndIdx === -1 && reqLength < 8192) {
+        return;
+      }
+
+      isTunneling = true;
+      const headersText = headerEndIdx !== -1 ? merged.toString('utf8', 0, headerEndIdx) : merged.toString('utf8');
+      const lines = headersText.split('\r\n');
+      const firstLine = lines[0];
+      const match = firstLine.match(/^([A-Z]+) ([^\s]+) HTTP/);
+
+      if (match) {
+        const method = match[1];
+        const urlPath = match[2];
+
+        // Parse headers
+        const headers: Record<string, string> = {};
+        for (let i = 1; i < lines.length; i++) {
+          const colonIdx = lines[i].indexOf(':');
+          if (colonIdx !== -1) {
+            const key = lines[i].substring(0, colonIdx).trim().toLowerCase();
+            const value = lines[i].substring(colonIdx + 1).trim();
+            headers[key] = value;
+          }
+        }
+
+        const isGet = method === 'GET';
+        const acceptHeader = headers['accept'] || '';
+        const isHtml = acceptHeader.includes('text/html');
+
+        const query = extractSearchQuery(hostname, urlPath);
+
+        if (isGet && (query || isHtml)) {
+          const target = query || hostname;
+          const isSite = !query;
+          const targetClean = target.trim().toLowerCase();
+
+          const isBlocked = isSite 
+            ? (this.isDomainBlocked && this.isDomainBlocked(hostname))
+            : (this.blockedQueries.has(targetClean));
+
+          if (isBlocked) {
+            this.log(`[Proxy] Blocked ${isSite ? 'HTTPS domain' : 'HTTPS query'} intercepted: "${target}". Instantly blocking.`);
+            clientTls.pause();
+            if (isSite && this.onDomainViolation) {
+              this.onDomainViolation(hostname);
+            }
+            const blockHtml = getBlockPageHtml(target, isSite);
+            const blockResponse = [
+              'HTTP/1.1 200 OK',
+              'Content-Type: text/html; charset=utf-8',
+              'Connection: close',
+              `Content-Length: ${Buffer.byteLength(blockHtml)}`,
+              '',
+              blockHtml
+            ].join('\r\n');
+            try {
+              if (!clientTls.destroyed) {
+                clientTls.write(blockResponse);
+                clientTls.end();
+              }
+            } catch (e: any) {
+              this.log(`[Proxy] Error writing block response: ${e.message}`);
+            } finally {
+              try { realSocket.end(); } catch {}
+              clientTls.resume();
+            }
+            return;
+          }
+
+          const isAllowedCached = this.isRecentlyAllowed(targetClean);
+          if (isAllowedCached) {
+            this.log(`[Proxy] ${isSite ? 'Domain' : 'Query'} "${target}" is recently allowed. Bypassing check.`);
+          } else {
+            this.log(`[Proxy] 🔍 Intercepted ${isSite ? 'direct domain' : 'search query'} (${hostname}): "${target}". Showing check screen...`);
+            clientTls.pause();
+
+            const checkHtml = getCheckingPageHtml(target);
+            const initialResponse = [
+              'HTTP/1.1 200 OK',
+              'Content-Type: text/html; charset=utf-8',
+              'Connection: close',
+              '',
+              checkHtml.replace(/<\/body>\s*<\/html>/gi, '')
+            ].join('\r\n');
+
+            try {
+              if (!clientTls.destroyed) {
+                clientTls.write(initialResponse);
+              }
+            } catch (e: any) {
+              this.log(`[Proxy] Error writing initial response: ${e.message}`);
+              realSocket.end();
+              clientTls.resume();
+              return;
+            }
+
+            (async () => {
               try {
-                if (!clientTls.destroyed) {
-                  clientTls.write(blockResponse);
-                  clientTls.end();
+                const fullUrl = `https://${hostname}${urlPath}`;
+                const targetIp = realSocket.remoteAddress || '';
+                const allowed = await this.onQuery(target, fullUrl, targetIp);
+                if (allowed) {
+                  this.addRecentlyAllowed(targetClean);
+                  const redirectUrl = `https://${hostname}${urlPath}`;
+                  const successScript = `
+                    <script>
+                      window.location.replace(${JSON.stringify(redirectUrl)});
+                      window.location.reload();
+                    </script>
+                    </body>
+                    </html>
+                  `;
+                  try {
+                    if (!clientTls.destroyed) {
+                      clientTls.write(successScript);
+                      clientTls.end();
+                    }
+                  } catch {}
+                } else {
+                  if (isSite) {
+                    if (this.onDomainViolation) {
+                      this.onDomainViolation(hostname);
+                    }
+                  } else {
+                    this.blockedQueries.add(targetClean);
+                  }
+
+                  const blockHtmlInner = `
+                    <div class="card" style="border-color: #ef4444;">
+                      <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>
+                      <h1 style="color: #f87171;">${isSite ? 'Website Blocked' : 'Search Query Blocked'}</h1>
+                      <p>${isSite ? 'The website you attempted to access is blocked by the NetCafe Safety Guard rules.' : 'The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.'}</p>
+                      <div class="query-tag" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25); color: #f87171;">"${escapeHtml(target)}"</div>
+                      <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+                    </div>
+                  `;
+                  const failScript = `
+                    <script>
+                      document.body.innerHTML = ${JSON.stringify(blockHtmlInner)};
+                    </script>
+                    </body>
+                    </html>
+                  `;
+                  try {
+                    if (!clientTls.destroyed) {
+                      clientTls.write(failScript);
+                      clientTls.end();
+                    }
+                  } catch {}
                 }
-              } catch (e: any) {
-                this.log(`[Proxy] Error writing block response: ${e.message}`);
+              } catch (err: any) {
+                this.log(`[Proxy] Safety check error: ${err.message}. Allowing for safety fallback.`);
+                this.addRecentlyAllowed(targetClean);
+                const redirectUrl = `https://${hostname}${urlPath}`;
+                const fallbackScript = `
+                  <script>
+                    window.location.replace(${JSON.stringify(redirectUrl)});
+                    window.location.reload();
+                  </script>
+                  </body>
+                  </html>
+                `;
+                try {
+                  if (!clientTls.destroyed) {
+                    clientTls.write(fallbackScript);
+                    clientTls.end();
+                  }
+                } catch {}
               } finally {
                 try { realSocket.end(); } catch {}
                 clientTls.resume();
               }
-              return;
-            }
-
-            const query = extractSearchQuery(hostname, match[1]);
-            if (query) {
-              if (this.blockedQueries.has(query.toLowerCase())) {
-                this.log(`[Proxy] HTTPS query "${query}" matches local blocked list. Instantly blocking.`);
-                clientTls.pause();
-                const blockHtml = getBlockPageHtml(query);
-                const blockResponse = [
-                  'HTTP/1.1 200 OK',
-                  'Content-Type: text/html; charset=utf-8',
-                  'Connection: close',
-                  `Content-Length: ${Buffer.byteLength(blockHtml)}`,
-                  '',
-                  blockHtml
-                ].join('\r\n');
-                try {
-                  if (!clientTls.destroyed) {
-                    clientTls.write(blockResponse);
-                    clientTls.end();
-                  }
-                } catch (e: any) {
-                  this.log(`[Proxy] Error writing block response: ${e.message}`);
-                } finally {
-                  try { realSocket.end(); } catch {}
-                  clientTls.resume();
-                }
-                return;
-              }
-              if (this.isRecentlyAllowed(query)) {
-                this.log(`[Proxy] Query "${query}" is recently allowed. Bypassing check.`);
-              } else {
-                this.log(`[Proxy] 🔍 HTTPS query intercepted (${hostname}): "${query}". Showing check screen...`);
-                clientTls.pause();
-                
-                const checkHtml = getCheckingPageHtml(query);
-                const initialResponse = [
-                  'HTTP/1.1 200 OK',
-                  'Content-Type: text/html; charset=utf-8',
-                  'Connection: close',
-                  '',
-                  checkHtml.replace(/<\/body>\s*<\/html>/gi, '') // strip closing tags to write redirect script later
-                ].join('\r\n');
-                
-                try {
-                  if (!clientTls.destroyed) {
-                    clientTls.write(initialResponse);
-                  }
-                } catch (e: any) {
-                  this.log(`[Proxy] Error writing initial response: ${e.message}`);
-                  realSocket.end();
-                  clientTls.resume();
-                  return;
-                }
-                
-                (async () => {
-                  try {
-                    const fullUrl = `https://${hostname}${match[1]}`;
-                    const targetIp = realSocket.remoteAddress || '';
-                    const allowed = await this.onQuery(query, fullUrl, targetIp);
-                    if (allowed) {
-                      this.addRecentlyAllowed(query);
-                      const redirectUrl = `https://${hostname}${match[1]}`;
-                      const successScript = `
-                        <script>
-                          window.location.replace(${JSON.stringify(redirectUrl)});
-                          window.location.reload();
-                        </script>
-                        </body>
-                        </html>
-                      `;
-                      try {
-                        if (!clientTls.destroyed) {
-                          clientTls.write(successScript);
-                          clientTls.end();
-                        }
-                      } catch {}
-                    } else {
-                      this.blockedQueries.add(query.toLowerCase());
-                      const blockHtmlInner = `
-                        <div class="card" style="border-color: #ef4444;">
-                          <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>
-                          <h1 style="color: #f87171;">Search Query Blocked</h1>
-                          <p>The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.</p>
-                          <div class="query-tag" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25); color: #f87171;">"${escapeHtml(query)}"</div>
-                          <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
-                        </div>
-                      `;
-                      const failScript = `
-                        <script>
-                          document.body.innerHTML = ${JSON.stringify(blockHtmlInner)};
-                        </script>
-                        </body>
-                        </html>
-                      `;
-                      try {
-                        if (!clientTls.destroyed) {
-                          clientTls.write(failScript);
-                          clientTls.end();
-                        }
-                      } catch {}
-                    }
-                  } catch (err: any) {
-                    this.log(`[Proxy] Safety check error: ${err.message}. Allowing query for safety fallback.`);
-                    this.addRecentlyAllowed(query);
-                    const redirectUrl = `https://${hostname}${match[1]}`;
-                    const fallbackScript = `
-                      <script>
-                        window.location.replace(${JSON.stringify(redirectUrl)});
-                        window.location.reload();
-                      </script>
-                      </body>
-                      </html>
-                    `;
-                    try {
-                      if (!clientTls.destroyed) {
-                        clientTls.write(fallbackScript);
-                        clientTls.end();
-                      }
-                    } catch {}
-                  } finally {
-                    try { realSocket.end(); } catch {}
-                    clientTls.resume();
-                  }
-                })();
-                return;
-              }
-            }
+            })();
+            return;
           }
         }
-      } catch (err: any) {
-        this.log(`[Proxy] Error parsing request data: ${err.message}`);
       }
 
-      if (!realSocket.destroyed) realSocket.write(data);
+      if (!realSocket.destroyed) {
+        realSocket.write(merged);
+      }
+      reqBuffers = [];
+      reqLength = 0;
     });
 
     // Forward responses from real server → browser
