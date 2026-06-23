@@ -2630,6 +2630,24 @@ app.whenReady().then(async () => {
     app.quit();
     return;
   }
+  if (process.argv.includes('--install-watchdog')) {
+    try {
+      await installWatchdogService();
+    } catch (e) {
+      console.error(e);
+    }
+    app.quit();
+    return;
+  }
+  if (process.argv.includes('--uninstall-watchdog')) {
+    try {
+      await uninstallWatchdogService();
+    } catch (e) {
+      console.error(e);
+    }
+    app.quit();
+    return;
+  }
 
   if (process.platform === 'win32') {
     initPowerShell();
@@ -3984,28 +4002,7 @@ async function runKioskSetup(): Promise<void> {
 
   // Install watchdog service
   try {
-    const { Service } = require('node-windows');
-    const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
-    const svc = new Service({
-      name: 'NetCafeAgentWatchdog',
-      description: 'NetCafe Agent Service Watchdog',
-      script: scriptPath,
-      nodePath: process.execPath,
-      env: [{
-        name: 'ELECTRON_RUN_AS_NODE',
-        value: '1'
-      }]
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      svc.on('install', () => {
-        svc.start();
-        resolve();
-      });
-      svc.on('alreadyinstalled', () => resolve());
-      svc.on('error', (err: any) => reject(err));
-      svc.install();
-    });
+    await installWatchdogService();
     logToUI('Watchdog Windows Service installed successfully.');
   } catch (e: any) {
     logToUI(`Failed to install watchdog service: ${e.message}`);
@@ -4069,23 +4066,57 @@ async function runKioskUninstall(): Promise<void> {
 
   // Uninstall watchdog service
   try {
-    const { Service } = require('node-windows');
-    const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
-    const svc = new Service({
-      name: 'NetCafeAgentWatchdog',
-      description: 'NetCafe Agent Service Watchdog',
-      script: scriptPath,
-      nodePath: process.execPath
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      svc.on('uninstall', () => resolve());
-      svc.on('alreadyuninstalled', () => resolve());
-      svc.on('error', (err: any) => reject(err));
-      svc.uninstall();
-    });
+    await uninstallWatchdogService();
     logToUI('Watchdog Windows Service uninstalled successfully.');
   } catch (e: any) {
     logToUI(`Failed to uninstall watchdog service: ${e.message}`);
   }
+}
+
+async function installWatchdogService(): Promise<void> {
+  console.log('Installing watchdog service...');
+  const { Service } = require('node-windows');
+  const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
+  const svc = new Service({
+    name: 'NetCafeAgentWatchdog',
+    description: 'NetCafe Agent Service Watchdog',
+    script: scriptPath,
+    nodePath: process.execPath,
+    env: [{
+      name: 'ELECTRON_RUN_AS_NODE',
+      value: '1'
+    }]
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    svc.on('install', () => {
+      svc.start();
+      resolve();
+    });
+    svc.on('alreadyinstalled', () => {
+      try { svc.start(); } catch {}
+      resolve();
+    });
+    svc.on('error', (err: any) => reject(err));
+    svc.install();
+  });
+}
+
+async function uninstallWatchdogService(): Promise<void> {
+  console.log('Uninstalling watchdog service...');
+  const { Service } = require('node-windows');
+  const scriptPath = path.join(app.getAppPath().replace('app.asar', 'app.asar.unpacked'), 'dist', 'watchdog.js');
+  const svc = new Service({
+    name: 'NetCafeAgentWatchdog',
+    description: 'NetCafe Agent Service Watchdog',
+    script: scriptPath,
+    nodePath: process.execPath
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    svc.on('uninstall', () => resolve());
+    svc.on('alreadyuninstalled', () => resolve());
+    svc.on('error', (err: any) => reject(err));
+    svc.uninstall();
+  });
 }

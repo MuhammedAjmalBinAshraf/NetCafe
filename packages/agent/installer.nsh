@@ -49,6 +49,12 @@ ps_ready:
   Pop $0
   DetailPrint "NetCafe: Kiosk setup exited with code $0"
 skip_kiosk_setup:
+
+  ; ── Register/Update the watchdog service for both silent and interactive installs ──
+  DetailPrint "NetCafe: Installing watchdog service..."
+  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --install-watchdog`
+  Pop $0
+  DetailPrint "NetCafe: Watchdog service install exited with code $0"
 !macroend
 
 !macro customUnInit
@@ -65,4 +71,10 @@ skip_kiosk_setup:
   !insertmacro runPowerShell "$INSTDIR\resources\kiosk-uninstall.ps1" "" "C:\NetCafe\logs\agent-uninstall.log"
   Pop $0
   DetailPrint "NetCafe: Kiosk uninstall exited with code $0"
+
+  ; ── Uninstall/Clean up the watchdog service ──
+  DetailPrint "NetCafe: Uninstalling watchdog service..."
+  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --uninstall-watchdog`
+  Pop $0
+  DetailPrint "NetCafe: Watchdog service uninstall exited with code $0"
 !macroend
