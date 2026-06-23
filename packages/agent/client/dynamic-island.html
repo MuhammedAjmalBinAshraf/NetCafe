@@ -1616,30 +1616,38 @@
     ipcRenderer.on('show-message', (event, msg) => {
       if (!msg) return;
       const isW = msg.toLowerCase().includes('safety') || msg.toLowerCase().includes('violation') || msg.toLowerCase().includes('blocked');
-      document.getElementById('banner-type').textContent = isW ? 'Safety Warning' : 'Operator Alert';
-      document.getElementById('banner-message').textContent = msg;
-      
-      collapsedState = 'banner';
-      setIslandState('banner');
-      
-      if (window.bannerTimeout) clearTimeout(window.bannerTimeout);
-      window.bannerTimeout = setTimeout(() => {
-        if (currentState === 'banner') {
-          collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
-          setIslandState(collapsedState);
-        }
-      }, 4000);
+      if (isW) {
+        showAnnouncementBlocker({
+          title: 'Safety Warning',
+          body: msg,
+          from_label: 'Safety Guard'
+        });
+      } else {
+        document.getElementById('banner-type').textContent = 'Operator Alert';
+        document.getElementById('banner-message').textContent = msg;
+        
+        collapsedState = 'banner';
+        setIslandState('banner');
+        
+        if (window.bannerTimeout) clearTimeout(window.bannerTimeout);
+        window.bannerTimeout = setTimeout(() => {
+          if (currentState === 'banner') {
+            collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+            setIslandState(collapsedState);
+          }
+        }, 4000);
+      }
     });
 
     ipcRenderer.on('safety-violation', (event, payload) => {
       const message = payload && payload.message ? payload.message : 'Violation detected!';
-      const type = payload && payload.type ? payload.type : 'Violation';
+      const type = payload && payload.type ? payload.type : 'Safety Warning';
       
-      document.getElementById('banner-type').textContent = type;
-      document.getElementById('banner-message').textContent = message;
-      
-      collapsedState = 'banner';
-      setIslandState('banner');
+      showAnnouncementBlocker({
+        title: type,
+        body: message,
+        from_label: 'Safety Guard'
+      });
     });
 
     ipcRenderer.on('session-warning', () => {

@@ -83,11 +83,15 @@ export default function App() {
   const [selectedConvKey, setSelectedConvKey] = useState<string>('all')
   const [msgInput, setMsgInput] = useState('')
   const [unreadCounts, setUnreadCounts] = useState<Record<string,number>>({})
-  const [broadcastTypeMsg, setBroadcastTypeMsg] = useState<'announcement'|'alert'|'message'>('message')
+  const [broadcastTypeMsg, setBroadcastTypeMsg] = useState<'announcement'|'message'>('message')
 
 
   // AI Safety local state inputs (prevents keystroke DB lag)
   const [apiKeyInput, setApiKeyInput] = useState('')
+  const [aiProvider, setAiProvider] = useState<'gemini' | 'openrouter'>('gemini')
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('')
+  const [openRouterModel, setOpenRouterModel] = useState('google/gemini-2.5-flash')
+  const [openRouterUrl, setOpenRouterUrl] = useState('https://openrouter.ai/api/v1/chat/completions')
   const [filterPorn, setFilterPorn] = useState(true)
   const [filterViolence, setFilterViolence] = useState(true)
   const [filterSelfHarm, setFilterSelfHarm] = useState(true)
@@ -329,6 +333,10 @@ export default function App() {
         setFilterSelfHarm(fresh.filter_self_harm !== 'false')
         setFilterIllegal(fresh.filter_illegal !== 'false')
         setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
+        setAiProvider(fresh.ai_provider || 'gemini')
+        setOpenRouterApiKey(fresh.openrouter_api_key || '')
+        setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
+        setOpenRouterUrl(fresh.openrouter_url || 'https://openrouter.ai/api/v1/chat/completions')
         try {
           setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
         } catch { setCustomFilterTerms([]) }
@@ -1211,6 +1219,10 @@ export default function App() {
       setFilterSelfHarm(fresh.filter_self_harm !== 'false')
       setFilterIllegal(fresh.filter_illegal !== 'false')
       setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
+      setAiProvider(fresh.ai_provider || 'gemini')
+      setOpenRouterApiKey(fresh.openrouter_api_key || '')
+      setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
+      setOpenRouterUrl(fresh.openrouter_url || 'https://openrouter.ai/api/v1/chat/completions')
       try {
         setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
       } catch { setCustomFilterTerms([]) }
@@ -1247,14 +1259,18 @@ export default function App() {
       setIsSavingSettings(true)
       setApiKeySaveStatus('Saving...')
       try {
+        await window.ipcRenderer.invoke('update-settings', 'ai_provider', aiProvider)
         await window.ipcRenderer.invoke('update-settings', 'gemini_api_key', apiKeyInput)
+        await window.ipcRenderer.invoke('update-settings', 'openrouter_api_key', openRouterApiKey)
+        await window.ipcRenderer.invoke('update-settings', 'openrouter_model', openRouterModel)
+        await window.ipcRenderer.invoke('update-settings', 'openrouter_url', openRouterUrl)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
         initSettingsState(fresh)
-        setApiKeySaveStatus('API Key saved successfully!')
+        setApiKeySaveStatus('Configuration saved successfully!')
         setTimeout(() => setApiKeySaveStatus(''), 3000)
       } catch (err) {
-        setApiKeySaveStatus('Failed to save API Key.')
+        setApiKeySaveStatus('Failed to save configuration.')
       } finally {
         setIsSavingSettings(false)
       }
@@ -2681,7 +2697,7 @@ export default function App() {
                       <h3 className="text-sm font-bold text-white flex items-center gap-2">
                         <Terminal size={16} className="text-blue-400" /> Active AI System Context
                       </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">The exact prompt context sent to Gemini 1.5 Flash for filtering:</p>
+                      <p className="text-xs text-slate-500 mt-0.5">The exact prompt context sent to {settings.ai_provider === 'openrouter' ? (settings.openrouter_model || 'OpenRouter') : 'Gemini'} for filtering:</p>
                     </div>
                     
                     <div className="bg-slate-950 border border-slate-800/60 rounded-lg p-3 font-mono text-[10px] text-slate-400 leading-relaxed whitespace-pre-wrap select-all max-h-48 overflow-y-auto">
@@ -2841,25 +2857,82 @@ Respond strictly in JSON format:
                   </h3>
                   
                   <div className="space-y-2">
-                    <label className="text-xs font-bold uppercase text-slate-400">Gemini API Key</label>
-                    <div className="relative">
-                      <input
-                        type={showApiKey ? "text" : "password"}
-                        placeholder="Enter Gemini API Key..."
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 pr-10 text-white outline-none transition-colors font-mono text-sm"
-                        value={apiKeyInput}
-                        onChange={(e) => setApiKeyInput(e.target.value)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowApiKey(!showApiKey)}
-                        className="absolute right-3 top-2.5 text-slate-505 hover:text-slate-300 transition-colors"
-                      >
-                        {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                      </button>
-                    </div>
-                    <p className="text-[10px] text-slate-500">Global Gemini API key used by all AI features (Filtering and Log Analysis).</p>
+                    <label className="text-xs font-bold uppercase text-slate-400">AI Service Provider</label>
+                    <select
+                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-xs font-semibold"
+                      value={aiProvider}
+                      onChange={(e) => setAiProvider(e.target.value as 'gemini' | 'openrouter')}
+                    >
+                      <option value="gemini">Google Gemini API (Direct)</option>
+                      <option value="openrouter">OpenRouter API Gateway</option>
+                    </select>
                   </div>
+
+                  {aiProvider === 'gemini' ? (
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase text-slate-400">Gemini API Key</label>
+                      <div className="relative">
+                        <input
+                          type={showApiKey ? "text" : "password"}
+                          placeholder="Enter Gemini API Key..."
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 pr-10 text-white outline-none transition-colors font-mono text-xs"
+                          value={apiKeyInput}
+                          onChange={(e) => setApiKeyInput(e.target.value)}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKey(!showApiKey)}
+                          className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300 transition-colors"
+                        >
+                          {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-slate-500">Global Gemini API key used by all AI features (Filtering and Log Analysis).</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase text-slate-400">OpenRouter API Key</label>
+                        <div className="relative">
+                          <input
+                            type={showApiKey ? "text" : "password"}
+                            placeholder="Enter OpenRouter API Key..."
+                            className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 pr-10 text-white outline-none transition-colors font-mono text-xs"
+                            value={openRouterApiKey}
+                            onChange={(e) => setOpenRouterApiKey(e.target.value)}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowApiKey(!showApiKey)}
+                            className="absolute right-3 top-2.5 text-slate-500 hover:text-slate-300 transition-colors"
+                          >
+                            {showApiKey ? <EyeOff size={16} /> : <Eye size={16} />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase text-slate-400">OpenRouter Model</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. google/gemini-2.5-flash"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-xs font-mono"
+                          value={openRouterModel}
+                          onChange={(e) => setOpenRouterModel(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold uppercase text-slate-400">Gateway URL</label>
+                        <input
+                          type="text"
+                          className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors text-xs font-mono"
+                          value={openRouterUrl}
+                          onChange={(e) => setOpenRouterUrl(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   <div className="flex items-center gap-3.5">
                     <button
@@ -2867,7 +2940,7 @@ Respond strictly in JSON format:
                       disabled={isSavingSettings}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 text-white rounded text-xs font-bold transition-all shadow-md"
                     >
-                      {isSavingSettings ? 'Saving...' : 'Save API Key'}
+                      {isSavingSettings ? 'Saving...' : 'Save Configuration'}
                     </button>
                     {apiKeySaveStatus && (
                       <span className="text-xs font-semibold text-emerald-400 font-bold">
@@ -3626,14 +3699,13 @@ Respond strictly in JSON format:
                     {selectedConvKey === 'all' && (
                       <div className="ml-auto flex items-center gap-2">
                         <span className="text-[10px] text-slate-500 font-semibold">Type:</span>
-                        {(['message','alert','announcement'] as const).map(t => (
+                        {(['message','announcement'] as const).map(t => (
                           <button
                             key={t}
                             onClick={() => setBroadcastTypeMsg(t)}
                             className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize transition-all ${
                               broadcastTypeMsg === t
                                 ? t === 'announcement' ? 'bg-purple-600 text-white'
-                                  : t === 'alert' ? 'bg-amber-600 text-white'
                                   : 'bg-blue-600 text-white'
                                 : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                             }`}

@@ -256,6 +256,10 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('custom_filter_terms', '[]');")
   // Admin-editable extra context injected into Gemini prompt
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_custom_context', '');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_provider', 'gemini');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('openrouter_api_key', '');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('openrouter_model', 'google/gemini-2.5-flash');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('openrouter_url', 'https://openrouter.ai/api/v1/chat/completions');")
   // Operator (client-side) PIN password
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('operator_password', 'admin');")
 
@@ -897,8 +901,11 @@ function handleClientMessage(socket: net.Socket, data: any) {
       return
     }
 
-    // Layer 2: Gemini AI check (only if API key configured)
-    if (!apiKey) return;
+    // Layer 2: Gemini / OpenRouter AI check (only if API key configured)
+    const provider = db.prepare("SELECT value FROM settings WHERE key = 'ai_provider'").get()?.value || 'gemini';
+    const openRouterKey = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_api_key'").get()?.value || '';
+    const isConfigured = provider === 'openrouter' ? !!openRouterKey : !!apiKey;
+    if (!isConfigured) return;
     const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false';
     const filterViolence = (db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get() as any)?.value !== 'false';
     const filterSelfHarm = (db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get() as any)?.value !== 'false';
@@ -985,13 +992,16 @@ function handleClientMessage(socket: net.Socket, data: any) {
       return
     }
 
-    // Layer 2: Gemini AI check (only if API key configured)
-    if (!apiKey) {
-      emitLog('allow', `[MITM] LAYER 2 SKIPPED — No Gemini API key configured`)
+    // Layer 2: Gemini / OpenRouter AI check (only if API key configured)
+    const provider = db.prepare("SELECT value FROM settings WHERE key = 'ai_provider'").get()?.value || 'gemini';
+    const openRouterKey = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_api_key'").get()?.value || '';
+    const isConfigured = provider === 'openrouter' ? !!openRouterKey : !!apiKey;
+    if (!isConfigured) {
+      emitLog('allow', `[MITM] LAYER 2 SKIPPED — No API key configured for ${provider}`);
       if (!socket.destroyed) {
-        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n');
       }
-      return
+      return;
     }
 
     const filterPorn     = (db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get() as any)?.value !== 'false';
@@ -3035,9 +3045,6 @@ async function evaluateQuerySafety(
   customTerms: string[] = [],
   emitLog?: (level: 'info' | 'warn' | 'block' | 'allow', msg: string) => void
 ): Promise<{ isUnsafe: boolean, category: string, reason?: string }> {
-  const model = await getBestModel(apiKey);
-  const url = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
-  
   let topics: string[] = [];
   if (filters.porn) topics.push("pornography/adult content");
   if (filters.violence) topics.push("severe violence/gore/terrorist activities");
@@ -3063,23 +3070,46 @@ async function evaluateQuerySafety(
   }
   Query: "${query}"`;
 
-  emitLog?.('info', `LAYER 2: Sending to Gemini (${topics.length} categories active)${customContext.trim() ? ' + custom context' : ''}`)
-  
+  const provider = db.prepare("SELECT value FROM settings WHERE key = 'ai_provider'").get()?.value || 'gemini';
+  const openRouterKey = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_api_key'").get()?.value || '';
+  const openRouterModel = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_model'").get()?.value || 'google/gemini-2.5-flash';
+  const openRouterUrl = db.prepare("SELECT value FROM settings WHERE key = 'openrouter_url'").get()?.value || 'https://openrouter.ai/api/v1/chat/completions';
+
+  emitLog?.('info', `LAYER 2: Sending to ${provider === 'openrouter' ? 'OpenRouter' : 'Gemini'} (${topics.length} categories active)${customContext.trim() ? ' + custom context' : ''}`)
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort();
   }, 12000);
 
-  try {
-    let res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      }),
-      signal: controller.signal
+  const fetchOptions: any = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: controller.signal
+  };
+
+  let requestUrl = '';
+  if (provider === 'openrouter') {
+    requestUrl = openRouterUrl;
+    fetchOptions.headers['Authorization'] = `Bearer ${openRouterKey}`;
+    fetchOptions.headers['HTTP-Referer'] = 'https://github.com/MuhammedAjmalBinAshraf/NetCafe';
+    fetchOptions.headers['X-Title'] = 'NetCafe Safety Guard';
+    fetchOptions.body = JSON.stringify({
+      model: openRouterModel,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' }
     });
+  } else {
+    const model = await getBestModel(apiKey);
+    requestUrl = `https://generativelanguage.googleapis.com/v1beta/${model}:generateContent?key=${apiKey}`;
+    fetchOptions.body = JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: { responseMimeType: "application/json" }
+    });
+  }
+
+  try {
+    let res = await fetch(requestUrl, fetchOptions);
 
     if (res.status === 503 || res.status === 429) {
       const status = res.status;
@@ -3087,22 +3117,19 @@ async function evaluateQuerySafety(
       try { errMsg = await res.text(); } catch {}
       emitLog?.('warn', `LAYER 2 ERROR: HTTP ${status}: ${errMsg || 'Unavailable'}. Retrying query in 1000ms...`);
       await new Promise(resolve => setTimeout(resolve, 1000));
-      res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        }),
-        signal: controller.signal
-      });
+      res = await fetch(requestUrl, fetchOptions);
     }
 
     clearTimeout(timeoutId);
-    emitLog?.('info', `LAYER 2: Gemini responded (HTTP ${res.status})`)
+    emitLog?.('info', `LAYER 2: ${provider === 'openrouter' ? 'OpenRouter' : 'Gemini'} responded (HTTP ${res.status})`)
     if (res.ok) {
       const data: any = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      let text = '';
+      if (provider === 'openrouter') {
+        text = data.choices?.[0]?.message?.content || '';
+      } else {
+        text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      }
       // Clean JSON formatting if enclosed in code blocks
       const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
       return JSON.parse(cleaned);
@@ -3112,7 +3139,7 @@ async function evaluateQuerySafety(
     }
   } catch (e: any) {
     clearTimeout(timeoutId);
-    console.error('Gemini API call failed:', e);
+    console.error(`${provider === 'openrouter' ? 'OpenRouter' : 'Gemini'} API call failed:`, e);
     throw e;
   }
 }
