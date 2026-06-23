@@ -1021,7 +1021,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
         emitLog('info', `[MITM] LAYER 2: Evaluating query safety via Gemini for Machine ${machineId}: "${query}"`)
         const result = await evaluateQuerySafety(query, apiKey, {
           porn: filterPorn, violence: filterViolence, selfHarm: filterSelfHarm, illegal: filterIllegal
-        }, customTerms, emitLog)
+        }, [], emitLog)
 
         if (result.isUnsafe) {
           // Auto add to blacklist

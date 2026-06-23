@@ -51,6 +51,24 @@ function extractSearchQuery(hostname: string, urlPath: string): string | null {
   return null;
 }
 
+function forceConnectionClose(merged: Buffer, headerEndIdx: number): Buffer {
+  try {
+    const headersStr = merged.toString('utf8', 0, headerEndIdx);
+    const connectionHeaderRegex = /connection:\s*\S+/i;
+    let newHeadersStr = '';
+    if (connectionHeaderRegex.test(headersStr)) {
+      newHeadersStr = headersStr.replace(/connection:\s*\S+/gi, 'Connection: close');
+    } else {
+      newHeadersStr = headersStr + '\r\nConnection: close';
+    }
+    const headerBuffer = Buffer.from(newHeadersStr, 'utf8');
+    const bodyBuffer = merged.subarray(headerEndIdx + 4); // skip \r\n\r\n
+    return Buffer.concat([headerBuffer, Buffer.from('\r\n\r\n', 'utf8'), bodyBuffer]);
+  } catch {
+    return merged;
+  }
+}
+
 function getBlockPageHtml(target: string, isSite = false): string {
   const title = isSite ? 'Website Blocked' : 'Search Query Blocked';
   const desc = isSite 
@@ -641,6 +659,13 @@ export class MitmProxy {
           const isAllowedCached = this.isRecentlyAllowed(targetClean);
           if (isAllowedCached) {
             this.log(`[Proxy] ${isSite ? 'Domain' : 'Query'} "${target}" is recently allowed. Bypassing check.`);
+            const modifiedMerged = forceConnectionClose(merged, headerEndIdx);
+            if (!realSocket.destroyed) {
+              realSocket.write(modifiedMerged);
+            }
+            reqBuffers = [];
+            reqLength = 0;
+            return;
           } else {
             this.log(`[Proxy] 🔍 Intercepted ${isSite ? 'direct domain' : 'search query'} (${hostname}): "${target}". Showing check screen...`);
             clientTls.pause();

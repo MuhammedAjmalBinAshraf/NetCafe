@@ -1194,9 +1194,9 @@
         island.style.left = newLeft + 'px';
         island.style.transform = 'none';
       } else {
-        const ri = island.getBoundingClientRect(), rd = dot.getBoundingClientRect();
+        const ri = island.getBoundingClientRect();
         const inside = (x,y,r) => x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
-        ipcRenderer.send('island-mouse', !inside(e.clientX,e.clientY,ri) && !inside(e.clientX,e.clientY,rd));
+        ipcRenderer.send('island-mouse', !inside(e.clientX,e.clientY,ri));
       }
     });
 
@@ -1303,11 +1303,44 @@
       { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0 }
     ];
 
+    function getWeeklyDateString(label) {
+      const weekdays = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const targetDayIdx = weekdays.indexOf(label);
+      if (targetDayIdx === -1) return label;
+      
+      const today = new Date();
+      const currentDayIdx = today.getDay(); // 0 is Sun, 1 is Mon...
+      
+      // Calculate how many days ago this weekday was within the last 7 days
+      let diff = currentDayIdx - targetDayIdx;
+      if (diff < 0) {
+        diff += 7; // It was in the previous week
+      }
+      
+      const targetDate = new Date();
+      targetDate.setDate(today.getDate() - diff);
+      return targetDate.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+    }
+
+    function getMonthlyWeekRangeString(label) {
+      const today = new Date();
+      const monthName = today.toLocaleDateString(undefined, { month: 'short' });
+      const year = today.getFullYear();
+      
+      if (label === 'Wk 1') return `Week 1 (${monthName} 1 - 7)`;
+      if (label === 'Wk 2') return `Week 2 (${monthName} 8 - 14)`;
+      if (label === 'Wk 3') return `Week 3 (${monthName} 15 - 21)`;
+      if (label === 'Wk 4') {
+        const lastDay = new Date(year, today.getMonth() + 1, 0).getDate();
+        return `Week 4 (${monthName} 22 - ${lastDay})`;
+      }
+      return label;
+    }
+
     function renderUsageGraph(data) {
       const container = document.getElementById('graph-container');
       container.innerHTML = '';
 
-      // Create card background for stock graph
       const chartCard = document.createElement('div');
       chartCard.style.background = 'rgba(255, 255, 255, 0.02)';
       chartCard.style.border = '1px solid rgba(255, 255, 255, 0.05)';
@@ -1317,21 +1350,35 @@
       chartCard.style.display = 'flex';
       chartCard.style.flexDirection = 'column';
       chartCard.style.gap = '6px';
+      chartCard.style.position = 'relative';
 
       // Graph size parameters
       const width = 310;
       const height = 115;
-      const paddingLeft = 15;
+      const paddingLeft = 32; // Fit Y-axis labels
       const paddingRight = 15;
       const paddingTop = 12;
       const paddingBottom = 20;
       const plotWidth = width - paddingLeft - paddingRight;
       const plotHeight = height - paddingTop - paddingBottom;
 
+      const isWeekly = data.length === 7;
+
+      function getFullLabel(label) {
+        if (isWeekly) {
+          return getWeeklyDateString(label);
+        } else {
+          return getMonthlyWeekRangeString(label);
+        }
+      }
+
+      // Find max value in minutes to calculate Y-axis labels (studs)
+      const maxVal = Math.max(...data.map(d => d.value), 60);
+
       const points = data.map((item, i) => {
         const x = paddingLeft + (i * plotWidth) / (data.length - 1);
-        const y = height - paddingBottom - (item.pct / 100) * plotHeight;
-        return { x, y, label: item.label, time: item.time };
+        const y = height - paddingBottom - (item.value / maxVal) * plotHeight;
+        return { x, y, label: item.label, time: item.time, value: item.value };
       });
 
       let linePathD = '';
@@ -1349,8 +1396,20 @@
         areaPathD += ` L ${points[points.length - 1].x} ${height - paddingBottom} Z`;
       }
 
+      function formatYLabel(val) {
+        if (val === 0) return '0m';
+        if (val >= 60) {
+          const hrs = Math.floor(val / 60);
+          const mins = Math.round(val % 60);
+          return mins > 0 ? `${hrs}h${mins}m` : `${hrs}h`;
+        }
+        return `${Math.round(val)}m`;
+      }
+
+      const yTicks = [maxVal, maxVal / 2, 0];
+
       let svgHtml = `
-        <svg viewBox="0 0 ${width} ${height}" style="width:100%; height:${height}px; overflow:visible;">
+        <svg id="chart-svg" viewBox="0 0 ${width} ${height}" style="width:100%; height:${height}px; overflow:visible; cursor:crosshair;">
           <defs>
             <linearGradient id="chart-area-grad" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="#22c55e" stop-opacity="0.38"/>
@@ -1358,10 +1417,15 @@
             </linearGradient>
           </defs>
           
-          <!-- Dashed Grid Lines -->
+          <!-- Dashed Grid Lines and Y-Axis Studs (Labels) -->
           <line x1="${paddingLeft}" y1="${paddingTop}" x2="${width - paddingRight}" y2="${paddingTop}" stroke="rgba(255, 255, 255, 0.05)" stroke-dasharray="3,3" />
+          <text x="${paddingLeft - 6}" y="${paddingTop + 3}" fill="rgba(255,255,255,0.4)" font-size="8" font-weight="600" text-anchor="end">${formatYLabel(yTicks[0])}</text>
+
           <line x1="${paddingLeft}" y1="${paddingTop + plotHeight / 2}" x2="${width - paddingRight}" y2="${paddingTop + plotHeight / 2}" stroke="rgba(255, 255, 255, 0.05)" stroke-dasharray="3,3" />
+          <text x="${paddingLeft - 6}" y="${paddingTop + plotHeight / 2 + 3}" fill="rgba(255,255,255,0.4)" font-size="8" font-weight="600" text-anchor="end">${formatYLabel(yTicks[1])}</text>
+
           <line x1="${paddingLeft}" y1="${height - paddingBottom}" x2="${width - paddingRight}" y2="${height - paddingBottom}" stroke="rgba(255, 255, 255, 0.08)" />
+          <text x="${paddingLeft - 6}" y="${height - paddingBottom + 3}" fill="rgba(255,255,255,0.4)" font-size="8" font-weight="600" text-anchor="end">${formatYLabel(yTicks[2])}</text>
 
           <!-- Gradient Area -->
           <path d="${areaPathD}" fill="url(#chart-area-grad)" />
@@ -1369,37 +1433,61 @@
           <!-- Stroke Line -->
           <path d="${linePathD}" stroke="#22c55e" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round" />
 
+          <!-- Vertical Interactive Scrubber Line -->
+          <line id="scrubber-line" x1="0" y1="${paddingTop}" x2="0" y2="${height - paddingBottom}" stroke="rgba(34, 197, 94, 0.4)" stroke-width="1.5" stroke-dasharray="2,2" style="display:none;" />
+
+          <!-- Hover Highlight Circle -->
+          <circle id="scrubber-circle" cx="0" cy="0" r="5.5" fill="#22c55e" stroke="#ffffff" stroke-width="2" style="display:none;" />
+
           <!-- Points -->
       `;
 
       points.forEach((pt, idx) => {
-        const isLast = idx === points.length - 1;
-        if (isLast) {
-          svgHtml += `
-            <circle cx="${pt.x}" cy="${pt.y}" r="5.5" fill="#22c55e" stroke="#ffffff" stroke-width="2" />
-          `;
-        } else {
-          svgHtml += `
-            <circle cx="${pt.x}" cy="${pt.y}" r="2" fill="#22c55e" stroke="none" />
-          `;
-        }
         svgHtml += `
-          <text x="${pt.x}" y="${height - 6}" fill="rgba(255,255,255,0.4)" font-size="8.5" font-weight="600" text-anchor="middle">${pt.label}</text>
+          <circle class="graph-point" data-idx="${idx}" cx="${pt.x}" cy="${pt.y}" r="2.5" fill="#22c55e" stroke="rgba(0,0,0,0.5)" stroke-width="1" />
+          <text x="${pt.x}" y="${height - 6}" fill="rgba(255,255,255,0.4)" font-size="8" font-weight="600" text-anchor="middle">${pt.label}</text>
         `;
       });
 
       svgHtml += `</svg>`;
 
-      // Header row
-      const lastPoint = points[points.length - 1];
+      // Today's Date formatting
+      const today = new Date();
+      const formattedToday = today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+      // Determine default displayed data (today's weekday data if weekly)
+      let defaultLabel = `Today (${formattedToday})`;
+      let defaultTime = '0m';
+
+      if (isWeekly) {
+        const currentDayLabel = today.toLocaleDateString(undefined, { weekday: 'short' });
+        const matchedPoint = points.find(p => p.label === currentDayLabel);
+        if (matchedPoint) {
+          defaultTime = matchedPoint.time;
+          defaultLabel = `Today (${getFullLabel(matchedPoint.label)})`;
+        } else {
+          const lastPt = points[points.length - 1];
+          if (lastPt) {
+            defaultTime = lastPt.time;
+            defaultLabel = getFullLabel(lastPt.label);
+          }
+        }
+      } else {
+        const lastPt = points[points.length - 1];
+        if (lastPt) {
+          defaultTime = lastPt.time;
+          defaultLabel = getFullLabel(lastPt.label);
+        }
+      }
+
       const headerDiv = document.createElement('div');
       headerDiv.style.display = 'flex';
       headerDiv.style.justifyContent = 'space-between';
       headerDiv.style.alignItems = 'baseline';
       headerDiv.style.padding = '0 2px';
       headerDiv.innerHTML = `
-        <span style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 500;">Usage (${lastPoint.label})</span>
-        <span style="font-size: 13px; color: #22c55e; font-weight: 700;">${lastPoint.time}</span>
+        <span id="usage-title-label" style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 500;">${defaultLabel}</span>
+        <span id="usage-title-time" style="font-size: 13px; color: #22c55e; font-weight: 700;">${defaultTime}</span>
       `;
 
       chartCard.appendChild(headerDiv);
@@ -1407,6 +1495,80 @@
       svgWrap.innerHTML = svgHtml;
       chartCard.appendChild(svgWrap);
       container.appendChild(chartCard);
+
+      // Bind interaction event listeners
+      const svg = chartCard.querySelector('#chart-svg');
+      const scrubberLine = svg.querySelector('#scrubber-line');
+      const scrubberCircle = svg.querySelector('#scrubber-circle');
+      const titleLabel = chartCard.querySelector('#usage-title-label');
+      const titleTime = chartCard.querySelector('#usage-title-time');
+
+      function handleMove(clientX) {
+        const svgRect = svg.getBoundingClientRect();
+        const mouseX = clientX - svgRect.left;
+        
+        let nearestPt = null;
+        let minDiff = Infinity;
+        
+        points.forEach(pt => {
+          const diff = Math.abs(pt.x - mouseX);
+          if (diff < minDiff) {
+            minDiff = diff;
+            nearestPt = pt;
+          }
+        });
+
+        if (nearestPt) {
+          scrubberLine.setAttribute('x1', nearestPt.x);
+          scrubberLine.setAttribute('x2', nearestPt.x);
+          scrubberLine.style.display = 'block';
+
+          scrubberCircle.setAttribute('cx', nearestPt.x);
+          scrubberCircle.setAttribute('cy', nearestPt.y);
+          scrubberCircle.style.display = 'block';
+
+          const displayLabel = getFullLabel(nearestPt.label);
+          titleLabel.textContent = displayLabel;
+          titleTime.textContent = nearestPt.time;
+          titleTime.style.color = '#4ade80'; // light green highlight when scrubbing
+        }
+      }
+
+      function handleLeave() {
+        scrubberLine.style.display = 'none';
+        scrubberCircle.style.display = 'none';
+        titleLabel.textContent = defaultLabel;
+        titleTime.textContent = defaultTime;
+        titleTime.style.color = '#22c55e';
+      }
+
+      svg.addEventListener('mousemove', (e) => {
+        handleMove(e.clientX);
+      });
+
+      svg.addEventListener('mouseleave', () => {
+        handleLeave();
+      });
+
+      svg.addEventListener('click', (e) => {
+        handleMove(e.clientX);
+      });
+
+      svg.addEventListener('touchstart', (e) => {
+        if (e.touches && e.touches[0]) {
+          handleMove(e.touches[0].clientX);
+        }
+      }, { passive: true });
+
+      svg.addEventListener('touchmove', (e) => {
+        if (e.touches && e.touches[0]) {
+          handleMove(e.touches[0].clientX);
+        }
+      }, { passive: true });
+
+      svg.addEventListener('touchend', () => {
+        handleLeave();
+      });
     }
 
     // Default graph content
