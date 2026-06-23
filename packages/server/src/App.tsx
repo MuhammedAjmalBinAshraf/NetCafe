@@ -5140,7 +5140,7 @@ Respond strictly in JSON format:
       )}
 
       {/* Top-up Balance Modal */}
-      {isTopUpModalOpen && topUpUser && (
+      {isTopUpModalOpen && (topUpUser || selectedUserIds.length > 0) && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
           <form onSubmit={handleConfirmTopUp} className="bg-slate-900 border border-slate-800 rounded-xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col">
             <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-950/40">
@@ -5153,12 +5153,16 @@ Respond strictly in JSON format:
               <div className="bg-slate-950/50 p-3.5 rounded border border-slate-900 text-sm space-y-1">
                 <div className="flex justify-between">
                   <span className="text-slate-400">User:</span>
-                  <span className="font-bold text-white">{topUpUser.display_name || topUpUser.username}</span>
+                  <span className="font-bold text-white">
+                    {topUpUser ? (topUpUser.display_name || topUpUser.username) : `Batch Top-up (${selectedUserIds.length} users)`}
+                  </span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Current Balance:</span>
-                  <span className="font-bold text-emerald-400">{topUpUser.balance_minutes} minutes</span>
-                </div>
+                {topUpUser && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Current Balance:</span>
+                    <span className="font-bold text-emerald-400">{topUpUser.balance_minutes} minutes</span>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1">
