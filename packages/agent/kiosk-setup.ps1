@@ -286,6 +286,9 @@ try {
                     Set-ItemProperty `
                         -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
                         -Name  "HideFastUserSwitching" -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
+                        -Name  "DisableLockWorkstation" -Value 1 -Type DWord -Force
                     
                     New-Item -Path "$hivePath\Software\Policies\Microsoft\Windows\System" `
                              -Force -ErrorAction SilentlyContinue | Out-Null
@@ -381,6 +384,7 @@ try {
                     # Remove GPO policies
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "HideFastUserSwitching" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableLockWorkstation" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Windows\System" -Name "DisableCMD" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Internet Explorer\Control Panel" -Name "Proxy" -ErrorAction SilentlyContinue
                     
