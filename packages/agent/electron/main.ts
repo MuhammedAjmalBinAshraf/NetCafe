@@ -3914,6 +3914,15 @@ async function runKioskSetup(): Promise<void> {
         Write-Host "CafeKiosk user already exists."
     }
 
+    # Add CafeKiosk to Administrators group to allow remote updating
+    Write-Host "Ensuring CafeKiosk is in the Administrators group..."
+    try {
+        Add-LocalGroupMember -Group "Administrators" -Member "CafeKiosk" -ErrorAction SilentlyContinue
+        Write-Host "CafeKiosk user added to Administrators group successfully."
+    } catch {
+        Write-Host "Failed to add CafeKiosk to Administrators group: $_"
+    }
+
     # 2. Configure Auto-Logon
     Write-Host "Configuring HKLM Auto-Logon..."
     $winlogon = "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
@@ -3964,6 +3973,16 @@ async function runKioskSetup(): Promise<void> {
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "DisableTaskMgr" -Value 1 -Type DWord
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System" -Name "HideFastUserSwitching" -Value 1 -Type DWord
+    
+    # Explorer Policies (Shutdown, Control Panel, Run, Hotkeys)
+    New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoClose" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoLogOff" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoStartMenuMorePrograms" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoControlPanel" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoRun" -Value 1 -Type DWord
+    Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer" -Name "NoWinKeys" -Value 1 -Type DWord
+
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Force -ErrorAction SilentlyContinue
     Set-ItemProperty -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Windows\\System" -Name "DisableCMD" -Value 1 -Type DWord
     New-Item -Path "HKU:\\CafeKioskTemp\\Software\\Policies\\Microsoft\\Internet Explorer\\Control Panel" -Force -ErrorAction SilentlyContinue

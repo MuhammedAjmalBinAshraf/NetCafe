@@ -126,6 +126,11 @@ try {
     } else {
         Log "OK:" "Kiosk user '$KioskUser' already exists - skipping creation"
     }
+
+    # Add KioskUser to Administrators group to allow remote updating
+    Log "STEP:" "Ensuring $KioskUser is in the Administrators group..."
+    Add-LocalGroupMember -Group "Administrators" -Member $KioskUser -ErrorAction SilentlyContinue | Out-Null
+    Log "OK:" "$KioskUser is in the Administrators group"
 } catch {
     Log "ERROR:" "Failed to verify or create kiosk user '$KioskUser': $_"
 }
@@ -332,6 +337,15 @@ try {
                     Set-ItemProperty `
                         -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
                         -Name  "NoStartMenuMorePrograms" -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoControlPanel"   -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoRun"            -Value 1 -Type DWord -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoWinKeys"        -Value 1 -Type DWord -Force
 
                     Log "OK:" "GPO restriction policies (incl. NoClose/NoLogOff) written for standard Kiosk user '$username'"
                     
