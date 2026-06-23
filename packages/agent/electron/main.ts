@@ -1454,6 +1454,10 @@ async function handleServerMessage(msg: any) {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('broadcast-receive', msg.payload);
       }
+    } else if (msg.command === 'profile-data-response') {
+      if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('profile-data-response', msg.payload);
+      }
     } else if (msg.command === 'sync-session') {
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('sync-session-data', msg.session);
@@ -3168,6 +3172,12 @@ ipcMain.on('student-reply', (event, text) => {
     payload: {
       text: text
     }
+  });
+});
+
+ipcMain.on('get-client-profile-data', () => {
+  sendToServer({
+    type: 'get-profile-data'
   });
 });
 

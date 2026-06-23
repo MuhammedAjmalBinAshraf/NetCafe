@@ -149,8 +149,7 @@
 
     #island.state-banner {
       width: 372px;
-      height: auto;
-      min-height: 78px;
+      height: 120px;
       border-radius: 16px;
       border-color: rgba(239, 68, 68, 0.34);
     }
@@ -171,8 +170,7 @@
 
     #island.state-announcement {
       width: 372px;
-      height: auto;
-      min-height: 78px;
+      height: 120px;
       border-radius: 16px;
       border-color: rgba(127, 119, 221, 0.32);
     }
@@ -210,7 +208,7 @@
     .ann-icon { width: 28px; height: 28px; border-radius: 8px; background: rgba(127, 119, 221, 0.14); border: 0.5px solid rgba(127, 119, 221, 0.28); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #b8b3f0; }
     .ann-label { font-size: 11px; font-weight: 500; color: #b8b3f0; letter-spacing: 0.06em; text-transform: uppercase; }
     .ann-time { font-size: 10px; color: rgba(255, 255, 255, 0.4); }
-    .ann-body { font-size: 12px; color: rgba(255, 255, 255, 0.7); line-height: 1.55; word-break: break-word; }
+    .ann-body { font-size: 12px; color: rgba(255, 255, 255, 0.7); line-height: 1.55; word-break: break-word; max-height: 48px; overflow-y: auto; }
     .ann-footer { display: flex; align-items: center; justify-content: space-between; }
     .ann-from { font-size: 10px; color: rgba(255, 255, 255, 0.38); }
     .ann-dismiss { height: 22px; padding: 0 10px; border-radius: 6px; background: rgba(127, 119, 221, 0.16); border: 0.5px solid rgba(127, 119, 221, 0.28); color: #b8b3f0; font-size: 10px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
@@ -311,12 +309,14 @@
       height: 100%;
     }
     #panel-check .pill-row {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      width: 100%;
-      height: 100%;
+      display: flex !important;
+      flex-direction: row !important;
+      align-items: center !important;
+      justify-content: center !important;
+      gap: 8px !important;
+      width: 100% !important;
+      height: 100% !important;
+      flex-wrap: nowrap !important;
     }
     .spin {
       width: 13px; height: 13px;
@@ -665,6 +665,8 @@
       border-radius: 8px; padding: 8px 10px;
       width: 100%;
       text-align: left;
+      max-height: 40px;
+      overflow-y: auto;
     }
     .banner-dismiss {
       height: 28px; background: rgba(239,68,68,.16);
@@ -814,32 +816,14 @@
           <!-- Activity Panel -->
           <div class="tab-panel active" id="tab-activity">
             <div class="list-item">
-              <span class="item-label">Web Interception</span>
-              <span class="item-value">0 flagged queries</span>
-            </div>
-            <div class="list-item">
-              <span class="item-label">App Launch</span>
-              <span class="item-value">VS Code started</span>
-            </div>
-            <div class="list-item">
-              <span class="item-label">Last check</span>
-              <span class="item-value">Just now (OK)</span>
+              <span class="item-label">Loading activity...</span>
             </div>
           </div>
 
           <!-- Sessions Panel -->
           <div class="tab-panel" id="tab-sessions">
             <div class="list-item">
-              <span class="item-label">Current Session</span>
-              <span class="item-value" id="session-current-time">Active</span>
-            </div>
-            <div class="list-item">
-              <span class="item-label">Previous (Yesterday)</span>
-              <span class="item-value">2h 15m</span>
-            </div>
-            <div class="list-item">
-              <span class="item-label">Total Sessions</span>
-              <span class="item-value">14 sessions</span>
+              <span class="item-label">Loading sessions...</span>
             </div>
           </div>
 
@@ -968,7 +952,10 @@
       type: 'postpaid',
       name: 'Guest',
       cost: 0,
-      balance: 0
+      balance: 0,
+      planPrice: 0,
+      durationMinutes: 60,
+      startTime: null
     };
 
     // Helper: format duration in seconds to hh:mm:ss or mm:ss
@@ -1192,29 +1179,35 @@
         tabPanels.forEach(p => p.classList.remove('active'));
 
         btn.classList.add('active');
-        const targetPanel = document.getElementById(btn.getAttribute('data-tab'));
+        const dataTab = btn.getAttribute('data-tab');
+        const targetPanel = document.getElementById(dataTab);
         if (targetPanel) {
           targetPanel.classList.add('active');
+        }
+
+        if (dataTab === 'tab-usage') {
+          const isWeeklyActive = document.getElementById('btn-toggle-weekly').classList.contains('active');
+          renderUsageGraph(isWeeklyActive ? currentWeeklyData : currentMonthlyData);
         }
       });
     });
 
     // Usage Graph rendering (Weekly / Monthly Stock Chart style SVG)
-    const weeklyData = [
-      { label: 'Mon', time: '1h 20m', value: 80, pct: 40 },
-      { label: 'Tue', time: '2h 45m', value: 165, pct: 75 },
-      { label: 'Wed', time: '3h 10m', value: 190, pct: 90 },
-      { label: 'Thu', time: '1h 05m', value: 65, pct: 30 },
-      { label: 'Fri', time: '2h 15m', value: 135, pct: 60 },
-      { label: 'Sat', time: '4h 00m', value: 240, pct: 100 },
-      { label: 'Sun', time: '0h 45m', value: 45, pct: 20 }
+    let currentWeeklyData = [
+      { label: 'Mon', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Tue', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wed', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Thu', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Fri', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Sat', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Sun', time: '0h 00m', value: 0, pct: 0 }
     ];
 
-    const monthlyData = [
-      { label: 'Wk 1', time: '12h 30m', value: 750, pct: 70 },
-      { label: 'Wk 2', time: '18h 15m', value: 1095, pct: 100 },
-      { label: 'Wk 3', time: '8h 45m', value: 525, pct: 50 },
-      { label: 'Wk 4', time: '14h 20m', value: 860, pct: 80 }
+    let currentMonthlyData = [
+      { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0 }
     ];
 
     function renderUsageGraph(data) {
@@ -1324,18 +1317,18 @@
     }
 
     // Default graph content
-    renderUsageGraph(weeklyData);
+    renderUsageGraph(currentWeeklyData);
 
     document.getElementById('btn-toggle-weekly').addEventListener('click', (e) => {
       document.getElementById('btn-toggle-weekly').classList.add('active');
       document.getElementById('btn-toggle-monthly').classList.remove('active');
-      renderUsageGraph(weeklyData);
+      renderUsageGraph(currentWeeklyData);
     });
 
     document.getElementById('btn-toggle-monthly').addEventListener('click', (e) => {
       document.getElementById('btn-toggle-weekly').classList.remove('active');
       document.getElementById('btn-toggle-monthly').classList.add('active');
-      renderUsageGraph(monthlyData);
+      renderUsageGraph(currentMonthlyData);
     });
 
     // Update timers periodically (based on current sessionData cache)
@@ -1364,6 +1357,42 @@
       document.getElementById('compact-timer').textContent = displayTime;
       document.getElementById('split-timer').textContent = displayTime;
       document.getElementById('card-timer').textContent = displayTime;
+
+      // Update financial values dynamically in the interval
+      const finValue = document.getElementById('card-financial-value');
+      if (finValue) {
+        if (sessionData.type === 'prepaid') {
+          // Calculate remaining balance
+          let balance = 0;
+          if (sessionData.remainingSeconds !== null) {
+            const planPrice = parseFloat(sessionData.planPrice || 0);
+            const durationMin = parseFloat(sessionData.durationMinutes || 60);
+            if (planPrice > 0 && durationMin > 0) {
+              balance = (sessionData.remainingSeconds / 60) * (planPrice / durationMin);
+            } else {
+              // Default to $5.00/hour prepaid rate if not specified
+              balance = (sessionData.remainingSeconds / 3600) * 5.00;
+            }
+          }
+          finValue.textContent = `$${Math.max(0, balance).toFixed(2)}`;
+        } else {
+          // Calculate accrued cost for postpaid
+          let cost = 0;
+          const planPrice = parseFloat(sessionData.planPrice || 0);
+          if (planPrice > 0) {
+            const durationMin = parseFloat(sessionData.durationMinutes || 60);
+            if (durationMin > 0) {
+              cost = (sessionData.elapsedSeconds / 60) * (planPrice / durationMin);
+            } else {
+              cost = (sessionData.elapsedSeconds / 3600) * planPrice;
+            }
+          } else {
+            // Default to $5.00/hour postpaid rate if not specified
+            cost = (sessionData.elapsedSeconds / 3600) * 5.00;
+          }
+          finValue.textContent = `$${cost.toFixed(2)}`;
+        }
+      }
     }, 1000);
 
     // Change Password Form logic
@@ -1427,13 +1456,43 @@
     // IPC Main Listener bindings
     const handleSessionUpdate = (event, data) => {
       if (!data) return;
+
+      const type = data.type || data.mode || 'postpaid';
+      const name = data.name || data.user || 'Guest';
+      const planPrice = data.planPrice !== undefined ? data.planPrice : (sessionData.planPrice || 0);
+      const durationMinutes = data.durationMinutes !== undefined ? data.durationMinutes : (sessionData.durationMinutes || 60);
+      const startTime = data.startTime || sessionData.startTime;
+
+      // Calculate elapsedSeconds and remainingSeconds from startTime if provided
+      let elapsed = 0;
+      let remaining = null;
+      
+      if (startTime) {
+        let t = String(startTime).trim().replace(' ', 'T');
+        if (!/[Zz]|[+\-]\d{2}:?\d{2}$/.test(t)) t += 'Z';
+        const startMs = new Date(t).getTime();
+        if (!isNaN(startMs)) {
+          elapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+        }
+      } else if (data.elapsedSeconds !== undefined) {
+        elapsed = data.elapsedSeconds;
+      }
+      
+      if (type === 'prepaid') {
+        const durationMin = durationMinutes || 0;
+        remaining = Math.max(0, (durationMin * 60) - elapsed);
+      }
+      
       sessionData = {
-        elapsedSeconds: data.elapsedSeconds || 0,
-        remainingSeconds: data.remainingSeconds !== undefined ? data.remainingSeconds : null,
-        type: data.type || 'postpaid',
-        name: data.name || 'Guest',
+        elapsedSeconds: elapsed,
+        remainingSeconds: remaining,
+        type: type,
+        name: name,
         cost: data.cost || 0,
-        balance: data.balance || 0
+        balance: data.balance || 0,
+        planPrice: planPrice,
+        durationMinutes: durationMinutes,
+        startTime: startTime
       };
 
       // Update Card texts
@@ -1449,13 +1508,9 @@
       if (sessionData.type === 'prepaid') {
         timeLabel.textContent = 'Remaining Time';
         finLabel.textContent = 'Balance';
-        finValue.textContent = `$${parseFloat(sessionData.balance || 0).toFixed(2)}`;
-        finValue.style.color = '#ef4444'; // Red for prepaid balance depleting
       } else {
         timeLabel.textContent = 'Elapsed Time';
         finLabel.textContent = 'Session Cost';
-        finValue.textContent = `$${parseFloat(sessionData.cost || 0).toFixed(2)}`;
-        finValue.style.color = '#22c55e'; // Green for accrued cost
       }
 
       // Immediately tick the timers
@@ -1585,10 +1640,17 @@
         if (data.body)  document.getElementById('alert-body').textContent  = data.body;
         startAlertCountdown(data.seconds || 300);
       }
+      if (state === 'compact') {
+        clearInterval(_alertTimer);
+        var nextState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+        setIslandState(nextState);
+        return;
+      }
       if (state === 'announcement' && data) {
-        if (data.body)       document.getElementById('ann-body').textContent = data.body;
-        if (data.from_label) document.getElementById('ann-from').textContent = '— ' + data.from_label;
-        if (data.time)       document.getElementById('ann-time').textContent = data.time || 'Now';
+        var annBodyText = data.body || data.text || '';
+        document.getElementById('ann-body').textContent = annBodyText;
+        document.getElementById('ann-from').textContent = '— ' + (data.from_label || data.from || 'Lab Admin');
+        document.getElementById('ann-time').textContent = data.time || 'Now';
       }
       setIslandState(state);
     }
@@ -1596,6 +1658,52 @@
     // Register broadcast listener
     ipcRenderer.on('broadcast-receive', (event, payload) => {
       showBroadcast(payload.type, payload);
+    });
+
+    // Register profile data receiver
+    ipcRenderer.on('profile-data-response', (event, payload) => {
+      if (!payload) return;
+
+      // 1. Update Username Title in Header
+      const profTitle = document.getElementById('profile-user-title');
+      if (profTitle) {
+        profTitle.textContent = payload.customerName || sessionData.name || 'Your Profile';
+      }
+
+      // 2. Update Activity Panel
+      const actPanel = document.getElementById('tab-activity');
+      if (actPanel && payload.activity && payload.activity.length > 0) {
+        actPanel.innerHTML = payload.activity.map(act => `
+          <div class="list-item">
+            <span class="item-label">${act.label}</span>
+            <span class="item-value" style="color: ${act.color || '#fff'}">${act.value}</span>
+          </div>
+        `).join('');
+      }
+
+      // 3. Update Sessions Panel
+      const sesPanel = document.getElementById('tab-sessions');
+      if (sesPanel && payload.sessions && payload.sessions.length > 0) {
+        sesPanel.innerHTML = payload.sessions.map(sess => `
+          <div class="list-item">
+            <span class="item-label">${sess.label}</span>
+            <span class="item-value">${sess.value}</span>
+          </div>
+        `).join('');
+      }
+
+      // 4. Update Graph Data
+      if (payload.usage) {
+        if (payload.usage.weekly) {
+          currentWeeklyData = payload.usage.weekly;
+        }
+        if (payload.usage.monthly) {
+          currentMonthlyData = payload.usage.monthly;
+        }
+        // Re-render active toggle graph
+        const isWeeklyActive = document.getElementById('btn-toggle-weekly').classList.contains('active');
+        renderUsageGraph(isWeeklyActive ? currentWeeklyData : currentMonthlyData);
+      }
     });
 
     // Enter key listener for input

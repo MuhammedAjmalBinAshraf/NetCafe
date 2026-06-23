@@ -450,6 +450,20 @@ export default function App() {
       };
       fetchStats();
       interval = setInterval(fetchStats, 3000); // refresh queue/replies every 3 seconds
+
+      // Load schedule once when tab becomes active
+      if (window.ipcRenderer) {
+        window.ipcRenderer.invoke('get-broadcast-schedule').then((sched) => {
+          if (sched) {
+            if (sched.open_time) setOpenTime(sched.open_time);
+            if (sched.close_time) setCloseTime(sched.close_time);
+            if (sched.warn_minutes !== undefined && sched.warn_minutes !== null) setWarnMinutes(Number(sched.warn_minutes));
+            if (sched.repeat_days) {
+              setRepeatDays(sched.repeat_days.split(',').map(Number));
+            }
+          }
+        }).catch((err) => console.error("Failed to load broadcast schedule:", err));
+      }
     }
     return () => clearInterval(interval);
   }, [activeTab]);
@@ -518,10 +532,14 @@ export default function App() {
   }
 
   const repliesEndRef = useRef<HTMLDivElement>(null)
+  const lastRepliesLengthRef = useRef(0)
   useEffect(() => {
-    if (repliesEndRef.current) {
-      repliesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    if (studentReplies && studentReplies.length > lastRepliesLengthRef.current) {
+      if (repliesEndRef.current) {
+        repliesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+      }
     }
+    lastRepliesLengthRef.current = studentReplies ? studentReplies.length : 0
   }, [studentReplies])
 
   // Scroll developer console logs to bottom

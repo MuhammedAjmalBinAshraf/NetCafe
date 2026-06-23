@@ -480,6 +480,173 @@ function handleClientMessage(socket: net.Socket, data: any) {
       logToUI(`[Student Reply] ${machineName}: ${text}`);
     }
   }
+  else if (data.type === 'get-profile-data') {
+    const machineId = clients.get(socket);
+    if (machineId) {
+      // Fetch dynamic profile data for the active user/session on this machine
+      const activeSess = db.prepare("SELECT * FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any;
+      const customerName = activeSess ? activeSess.customer_name : 'Guest';
+      const sessionId = activeSess ? activeSess.id : null;
+
+      // 1. Fetch Activity
+      let activity: any[] = [];
+      if (sessionId) {
+        // Fetch top apps
+        const appLogs = db.prepare("SELECT app_title, duration_seconds FROM session_app_logs WHERE session_id = ? ORDER BY duration_seconds DESC LIMIT 2").all(sessionId) as any[];
+        appLogs.forEach(app => {
+          const mins = Math.round(app.duration_seconds / 60);
+          activity.push({
+            label: "App Usage",
+            value: `${app.app_title} (${mins}m)`
+          });
+        });
+
+        // Fetch safety alerts count
+        const alertCount = db.prepare("SELECT COUNT(*) as cnt FROM safety_alerts WHERE machine_id = ?").get(machineId) as any;
+        if (alertCount && alertCount.cnt > 0) {
+          activity.push({
+            label: "Safety Interceptions",
+            value: `${alertCount.cnt} violations`,
+            color: "#f87171"
+          });
+        }
+      }
+      
+      if (activity.length === 0) {
+        activity = [
+          { label: "Session status", value: activeSess ? "Active (No flagged acts)" : "No session" },
+          { label: "Last safety check", value: "Just now (OK)" }
+        ];
+      }
+
+      // 2. Fetch Sessions history
+      let sessions: any[] = [];
+      if (customerName && customerName !== 'Guest') {
+        const history = db.prepare(`
+          SELECT start_time, total_amount, (strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as duration
+          FROM sessions
+          WHERE customer_name = ?
+          ORDER BY start_time DESC
+          LIMIT 3
+        `).all(customerName) as any[];
+
+        if (history.length > 0) {
+          history.forEach((h, idx) => {
+            const dateLabel = idx === 0 ? "Current Session" : new Date(h.start_time).toLocaleDateString([], { month: 'short', day: 'numeric' });
+            const mins = Math.round(h.duration / 60);
+            const hrs = Math.floor(mins / 60);
+            const remainingMins = mins % 60;
+            const durStr = hrs > 0 ? `${hrs}h ${remainingMins}m` : `${remainingMins}m`;
+            sessions.push({
+              label: dateLabel,
+              value: durStr
+            });
+          });
+        }
+      }
+
+      if (sessions.length === 0) {
+        sessions = [
+          { label: "Current Session", value: activeSess ? "Active" : "No active session" },
+          { label: "Previous sessions", value: "None found" }
+        ];
+      }
+
+      // 3. Fetch Usage graph data (Weekly & Monthly)
+      const weeklyUsage = [
+        { label: 'Mon', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Tue', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Wed', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Thu', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Fri', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Sat', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Sun', time: '0h 00m', value: 0, pct: 0 }
+      ];
+
+      const monthlyUsage = [
+        { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0 },
+        { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0 }
+      ];
+
+      if (customerName && customerName !== 'Guest') {
+        try {
+          const weekRows = db.prepare(`
+            SELECT strftime('%w', start_time) as day_idx, SUM(strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as sec
+            FROM sessions
+            WHERE customer_name = ? AND start_time >= datetime('now', '-7 days')
+            GROUP BY day_idx
+          `).all(customerName) as any[];
+
+          const dayMap = [6, 0, 1, 2, 3, 4, 5];
+          let maxSec = 1;
+          weekRows.forEach(row => {
+            const idx = dayMap[Number(row.day_idx)];
+            if (idx >= 0 && idx < 7) {
+              const sec = Number(row.sec);
+              if (sec > maxSec) maxSec = sec;
+              const mins = Math.round(sec / 60);
+              const hrs = Math.floor(mins / 60);
+              const rem = mins % 60;
+              weeklyUsage[idx].value = mins;
+              weeklyUsage[idx].time = hrs > 0 ? `${hrs}h ${rem}m` : `${rem}m`;
+            }
+          });
+
+          weeklyUsage.forEach(d => {
+            const secVal = d.value * 60;
+            d.pct = Math.min(100, Math.round((secVal / maxSec) * 100));
+          });
+
+          const monthRows = db.prepare(`
+            SELECT strftime('%d', start_time) as day_of_month, SUM(strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as sec
+            FROM sessions
+            WHERE customer_name = ? AND start_time >= datetime('now', '-30 days')
+            GROUP BY day_of_month
+          `).all(customerName) as any[];
+
+          let maxMins = 1;
+          monthRows.forEach(row => {
+            const dom = Number(row.day_of_month);
+            let wkIdx = 3;
+            if (dom <= 7) wkIdx = 0;
+            else if (dom <= 14) wkIdx = 1;
+            else if (dom <= 21) wkIdx = 2;
+            
+            const mins = Math.round(Number(row.sec) / 60);
+            monthlyUsage[wkIdx].value += mins;
+          });
+
+          monthlyUsage.forEach(d => {
+            if (d.value > maxMins) maxMins = d.value;
+            const hrs = Math.floor(d.value / 60);
+            const rem = d.value % 60;
+            d.time = hrs > 0 ? `${hrs}h ${rem}m` : `${rem}m`;
+          });
+
+          monthlyUsage.forEach(d => {
+            d.pct = Math.min(100, Math.round((d.value / maxMins) * 100));
+          });
+        } catch (e) {
+          console.error("Failed to construct usage data:", e);
+        }
+      }
+
+      socket.write(JSON.stringify({
+        command: 'profile-data-response',
+        payload: {
+          customerName,
+          activity,
+          sessions,
+          usage: {
+            weekly: weeklyUsage,
+            monthly: monthlyUsage
+          }
+        }
+      }) + '\n');
+    }
+  }
   else if (data.type === 'metrics') {
     const machineId = clients.get(socket)
     if (machineId) {
@@ -1222,6 +1389,12 @@ function startWebServer() {
         SET open_time = ?, close_time = ?, warn_minutes = ?, repeat_days = ?
         WHERE id = 1
       `).run(open_time, close_time, Number(warn_minutes), repeat_days);
+
+      // Reset warning check and dismiss alert on all connected clients
+      lastClosingWarningSentDate = '';
+      dispatchBroadcastToTarget('all', { type: 'compact' });
+      logToUI(`Broadcast closing-alert schedule updated via API. Active alerts dismissed.`);
+
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1584,6 +1757,7 @@ function startScheduledBroadcastMonitor() {
         };
         dispatchBroadcastToTarget(b.target, payload);
         db.prepare("UPDATE broadcasts SET sent = 1 WHERE id = ?").run(b.id);
+        logToUI(`Sent scheduled broadcast to ${b.target}: type=${b.type}, id=${b.id}`);
       }
     } catch (err) {
       console.error("Scheduled broadcast runner error:", err);
@@ -2133,6 +2307,12 @@ ipcMain.handle('update-broadcast-schedule', (_, { open_time, close_time, warn_mi
     SET open_time = ?, close_time = ?, warn_minutes = ?, repeat_days = ?
     WHERE id = 1
   `).run(open_time, close_time, Number(warn_minutes), repeat_days)
+
+  // Reset warning check and dismiss alert on all connected clients
+  lastClosingWarningSentDate = ''
+  dispatchBroadcastToTarget('all', { type: 'compact' })
+  logToUI(`Broadcast closing-alert schedule updated. Active alerts dismissed.`)
+
   return { success: true }
 })
 
