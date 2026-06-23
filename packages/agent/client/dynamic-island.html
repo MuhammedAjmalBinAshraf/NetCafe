@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Dynamic Island</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
   <style>
     /* Reset and Core Styling */
     *, *::before, *::after {
@@ -19,11 +20,10 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       color: #ffffff;
       user-select: none;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
+      display: block;
       height: 100vh;
       width: 100vw;
+      position: relative;
     }
 
     /* Scrollbar Style */
@@ -38,56 +38,121 @@
       border-radius: 999px;
     }
 
+    #island-container {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Glassmorphic snap targets */
+    .snap-target {
+      position: absolute;
+      top: 0;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px dashed rgba(255, 255, 255, 0.2);
+      backdrop-filter: blur(8px);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease, width 400ms cubic-bezier(0.32, 0.72, 0, 1), height 400ms cubic-bezier(0.32, 0.72, 0, 1), border-radius 400ms cubic-bezier(0.32, 0.72, 0, 1);
+      z-index: 9998;
+    }
+    .snap-target.visible {
+      opacity: 1;
+    }
+    #target-left {
+      left: 12px;
+    }
+    #target-right {
+      right: 12px;
+    }
+
     /* Container: The Island */
     #island {
       background: #000000;
       border: 1px solid rgba(255, 255, 255, 0.09);
       box-shadow: 0 8px 32px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
-      transition: width 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
-                  height 400ms cubic-bezier(0.34, 1.56, 0.64, 1),
-                  border-radius 400ms cubic-bezier(0.34, 1.56, 0.64, 1);
-      position: relative;
+      transition: width 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  height 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  border-radius 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  left 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  transform 400ms cubic-bezier(0.32, 0.72, 0, 1);
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
       overflow: hidden;
       box-sizing: border-box;
       display: flex;
       flex-direction: column;
+      z-index: 9999;
+    }
+
+    /* Position alignment classes */
+    body.pos-left #island {
+      left: 12px;
+      transform: none;
+    }
+    body.pos-centre #island {
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    body.pos-right #island {
+      left: calc(100% - 12px);
+      transform: translateX(-100%);
+    }
+
+    /* Dragging pulse animation */
+    @keyframes hold-pulse {
+      0% { transform: scale(1); box-shadow: 0 8px 32px rgba(0,0,0,0.7); }
+      50% { transform: scale(1.04); box-shadow: 0 0 20px rgba(124, 58, 237, 0.6), 0 8px 32px rgba(0,0,0,0.7); }
+      100% { transform: scale(1.02); box-shadow: 0 0 15px rgba(124, 58, 237, 0.4), 0 8px 32px rgba(0,0,0,0.7); }
+    }
+    #island.dragging {
+      animation: hold-pulse 1s infinite ease-in-out;
+      cursor: grabbing !important;
+      transition: width 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  height 400ms cubic-bezier(0.32, 0.72, 0, 1),
+                  border-radius 400ms cubic-bezier(0.32, 0.72, 0, 1) !important;
     }
 
     /* State Sizes & Border Radius */
     #island.state-compact {
       width: 122px;
       height: 36px;
-      border-radius: 20px;
+      border-radius: 22px;
     }
 
     #island.state-split {
       width: 232px;
       height: 36px;
-      border-radius: 20px;
+      border-radius: 22px;
     }
 
     #island.state-check {
-      width: 172px;
+      width: 188px;
       height: 36px;
-      border-radius: 20px;
+      border-radius: 22px;
     }
 
     #island.state-card {
       width: 342px;
       height: 185px;
-      border-radius: 22px;
+      border-radius: 18px;
     }
 
     #island.state-profile {
       width: 342px;
       height: 320px;
-      border-radius: 22px;
+      border-radius: 18px;
     }
 
     #island.state-banner {
       width: 372px;
-      height: 78px;
-      border-radius: 20px;
+      height: auto;
+      min-height: 78px;
+      border-radius: 16px;
+      border-color: rgba(239, 68, 68, 0.34);
     }
 
     /* Panels Setup */
@@ -181,32 +246,19 @@
 
     /* 3. Check Panel styling */
     #panel-check {
-      padding: 0 12px;
-      justify-content: flex-start;
-      gap: 8px;
+      width: 100%;
+      height: 100%;
     }
-
-    .spinner {
-      width: 12px;
-      height: 12px;
-      border: 2px solid rgba(255, 255, 255, 0.2);
-      border-top: 2px solid #ffffff;
+    .spin {
+      width: 13px; height: 13px;
+      border: 1.5px solid rgba(255,255,255,.15);
+      border-top-color: #fff;
       border-radius: 50%;
-      animation: spin 800ms linear infinite;
+      animation: spin .65s linear infinite;
       flex-shrink: 0;
     }
-
-    @keyframes spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
-    .check-text {
-      font-size: 12px;
-      font-weight: 500;
-      color: rgba(255, 255, 255, 0.85);
-      letter-spacing: -0.1px;
-    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .di-check { font-size: 12px; color: rgba(255,255,255,.72); letter-spacing:.01em; }
 
     /* 4. Card Panel styling */
     #panel-card {
@@ -523,64 +575,37 @@
 
     /* 6. Banner Panel styling */
     #panel-banner {
-      padding: 0 16px;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: center;
+      width: 100%;
+      height: 100%;
     }
-
-    .banner-left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      overflow: hidden;
-    }
-
-    .banner-icon {
-      font-size: 20px;
+    .banner-body { padding: 13px 15px; width: 100%; display: flex; flex-direction: column; gap: 9px; }
+    .banner-head { display: flex; align-items: center; gap: 10px; }
+    .banner-icon-box {
+      width: 30px; height: 30px; border-radius: 8px;
+      background: rgba(239,68,68,.16);
+      border: 0.5px solid rgba(239,68,68,.25);
+      display: flex; align-items: center; justify-content: center;
       flex-shrink: 0;
     }
-
-    .banner-text-block {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      overflow: hidden;
+    .banner-title { font-size: 13px; font-weight: 500; color: #f87171; }
+    .banner-sub   { font-size: 11px; color: rgba(255,255,255,.38); margin-top: 1px; }
+    .banner-msg {
+      font-size: 11px; color: rgba(255,255,255,.58); line-height: 1.55;
+      background: rgba(239,68,68,.07);
+      border: 0.5px solid rgba(239,68,68,.16);
+      border-radius: 8px; padding: 8px 10px;
+      width: 100%;
+      text-align: left;
     }
-
-    .banner-title {
-      font-size: 10px;
-      font-weight: 800;
-      color: #ef4444;
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
+    .banner-dismiss {
+      height: 28px; background: rgba(239,68,68,.16);
+      border: 0.5px solid rgba(239,68,68,.28);
+      border-radius: 8px; color: #f87171;
+      font-size: 12px; font-weight: 500;
+      cursor: pointer; width: 100%;
+      transition: background .15s; font-family: inherit;
     }
-
-    .banner-message {
-      font-size: 12px;
-      font-weight: 600;
-      color: #ffffff;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .banner-dismiss-btn {
-      background: rgba(255, 255, 255, 0.12);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      color: #ffffff;
-      padding: 6px 12px;
-      font-size: 10px;
-      font-weight: 700;
-      border-radius: 999px;
-      cursor: pointer;
-      transition: background 150ms ease;
-      white-space: nowrap;
-    }
-
-    .banner-dismiss-btn:hover {
-      background: rgba(255, 255, 255, 0.22);
-    }
+    .banner-dismiss:hover { background: rgba(239,68,68,.26); }
 
     /* Change Password form styling */
     .pw-section-title {
@@ -648,144 +673,157 @@
   </style>
 </head>
 <body>
+  <div id="island-container">
+    <div id="target-left" class="snap-target"></div>
+    <div id="target-right" class="snap-target"></div>
 
-  <!-- The Pill Container -->
-  <div id="island" class="state-compact">
-    
-    <!-- 1. COMPACT STATE -->
-    <div id="panel-compact" class="panel active">
-      <div class="live-dot"></div>
-      <div class="time-text" id="compact-timer">00:00:00</div>
-    </div>
-
-    <!-- 2. SPLIT STATE -->
-    <div id="panel-split" class="panel">
-      <div style="display: flex; align-items: center; gap: 6px;">
-        <div class="split-warning-dot"></div>
-        <div class="split-text">Prepaid Time Alert</div>
-      </div>
-      <div class="split-time" id="split-timer">04:59</div>
-    </div>
-
-    <!-- 3. CHECK STATE -->
-    <div id="panel-check" class="panel">
-      <div class="spinner"></div>
-      <div class="check-text">Safety check in progress</div>
-    </div>
-
-    <!-- 4. CARD STATE -->
-    <div id="panel-card" class="panel">
-      <div class="card-row-top">
-        <div class="card-username" id="card-name">John Doe</div>
-        <div class="card-badge" id="card-badge">Prepaid</div>
-      </div>
+    <!-- The Pill Container -->
+    <div id="island" class="state-compact">
       
-      <div class="card-row-middle">
-        <div class="card-time-block">
-          <div class="card-label" id="card-time-label">Remaining Time</div>
-          <div class="card-value" id="card-timer">01:45:12</div>
+      <!-- 1. COMPACT STATE -->
+      <div id="panel-compact" class="panel active">
+        <div class="live-dot"></div>
+        <div class="time-text" id="compact-timer">00:00:00</div>
+      </div>
+
+      <!-- 2. SPLIT STATE -->
+      <div id="panel-split" class="panel">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <div class="split-warning-dot"></div>
+          <div class="split-text">Prepaid Time Alert</div>
         </div>
-        <div class="card-financial-block">
-          <div class="card-label" id="card-financial-label">Balance</div>
-          <div class="financial-value" id="card-financial-value">$24.50</div>
+        <div class="split-time" id="split-timer">04:59</div>
+      </div>
+
+      <!-- 3. CHECK STATE -->
+      <div id="panel-check" class="panel">
+        <div class="pill-row">
+          <div class="spin"></div>
+          <div class="di-check">Checking safety...</div>
         </div>
       </div>
 
-      <div class="card-row-bottom">
-        <button class="exit-btn" id="btn-exit">Exit Session</button>
-        <button class="profile-btn" id="btn-profile">Your Profile</button>
-      </div>
-    </div>
-
-    <!-- 5. PROFILE STATE -->
-    <div id="panel-profile" class="panel">
-      <div class="profile-header">
-        <div class="profile-title">Your Profile</div>
-        <button class="back-btn" id="btn-profile-back">Back</button>
-      </div>
-
-      <div class="profile-tabs">
-        <button class="tab-btn active" data-tab="tab-activity">Activity</button>
-        <button class="tab-btn" data-tab="tab-sessions">Sessions</button>
-        <button class="tab-btn" data-tab="tab-usage">Usage</button>
-        <button class="tab-btn" data-tab="tab-settings">Settings</button>
-      </div>
-
-      <div class="tab-contents">
-        <!-- Activity Panel -->
-        <div class="tab-panel active" id="tab-activity">
-          <div class="list-item">
-            <span class="item-label">Web Interception</span>
-            <span class="item-value">0 flagged queries</span>
+      <!-- 4. CARD STATE -->
+      <div id="panel-card" class="panel">
+        <div class="card-row-top">
+          <div class="card-username" id="card-name">John Doe</div>
+          <div class="card-badge" id="card-badge">Prepaid</div>
+        </div>
+        
+        <div class="card-row-middle">
+          <div class="card-time-block">
+            <div class="card-label" id="card-time-label">Remaining Time</div>
+            <div class="card-value" id="card-timer">01:45:12</div>
           </div>
-          <div class="list-item">
-            <span class="item-label">App Launch</span>
-            <span class="item-value">VS Code started</span>
-          </div>
-          <div class="list-item">
-            <span class="item-label">Last check</span>
-            <span class="item-value">Just now (OK)</span>
+          <div class="card-financial-block">
+            <div class="card-label" id="card-financial-label">Balance</div>
+            <div class="financial-value" id="card-financial-value">$24.50</div>
           </div>
         </div>
 
-        <!-- Sessions Panel -->
-        <div class="tab-panel" id="tab-sessions">
-          <div class="list-item">
-            <span class="item-label">Current Session</span>
-            <span class="item-value" id="session-current-time">Active</span>
-          </div>
-          <div class="list-item">
-            <span class="item-label">Previous (Yesterday)</span>
-            <span class="item-value">2h 15m</span>
-          </div>
-          <div class="list-item">
-            <span class="item-label">Total Sessions</span>
-            <span class="item-value">14 sessions</span>
-          </div>
+        <div class="card-row-bottom">
+          <button class="exit-btn" id="btn-exit">Exit Session</button>
+          <button class="profile-btn" id="btn-profile">Your Profile</button>
+        </div>
+      </div>
+
+      <!-- 5. PROFILE STATE -->
+      <div id="panel-profile" class="panel">
+        <div class="profile-header">
+          <div class="profile-title">Your Profile</div>
+          <button class="back-btn" id="btn-profile-back">Back</button>
         </div>
 
-        <!-- Usage Panel (Graph) -->
-        <div class="tab-panel" id="tab-usage">
-          <div class="usage-toggle-container">
-            <div class="usage-toggle">
-              <button class="toggle-opt active" id="btn-toggle-weekly">Weekly</button>
-              <button class="toggle-opt" id="btn-toggle-monthly">Monthly</button>
+        <div class="profile-tabs">
+          <button class="tab-btn active" data-tab="tab-activity">Activity</button>
+          <button class="tab-btn" data-tab="tab-sessions">Sessions</button>
+          <button class="tab-btn" data-tab="tab-usage">Usage</button>
+          <button class="tab-btn" data-tab="tab-settings">Settings</button>
+        </div>
+
+        <div class="tab-contents">
+          <!-- Activity Panel -->
+          <div class="tab-panel active" id="tab-activity">
+            <div class="list-item">
+              <span class="item-label">Web Interception</span>
+              <span class="item-value">0 flagged queries</span>
+            </div>
+            <div class="list-item">
+              <span class="item-label">App Launch</span>
+              <span class="item-value">VS Code started</span>
+            </div>
+            <div class="list-item">
+              <span class="item-label">Last check</span>
+              <span class="item-value">Just now (OK)</span>
             </div>
           </div>
-          <div class="usage-graph" id="graph-container">
-            <!-- Populated via Javascript -->
+
+          <!-- Sessions Panel -->
+          <div class="tab-panel" id="tab-sessions">
+            <div class="list-item">
+              <span class="item-label">Current Session</span>
+              <span class="item-value" id="session-current-time">Active</span>
+            </div>
+            <div class="list-item">
+              <span class="item-label">Previous (Yesterday)</span>
+              <span class="item-value">2h 15m</span>
+            </div>
+            <div class="list-item">
+              <span class="item-label">Total Sessions</span>
+              <span class="item-value">14 sessions</span>
+            </div>
+          </div>
+
+          <!-- Usage Panel (Graph) -->
+          <div class="tab-panel" id="tab-usage">
+            <div class="usage-toggle-container">
+              <div class="usage-toggle">
+                <button class="toggle-opt active" id="btn-toggle-weekly">Weekly</button>
+                <button class="toggle-opt" id="btn-toggle-monthly">Monthly</button>
+              </div>
+            </div>
+            <div class="usage-graph" id="graph-container">
+              <!-- Populated via Javascript -->
+            </div>
+          </div>
+
+          <!-- Settings Panel -->
+          <div class="tab-panel" id="tab-settings" style="gap: 4px; overflow-y: auto;">
+            <div class="list-item" style="padding: 4px 8px;">
+              <span class="item-label">Kiosk Hotkey</span>
+              <span class="item-value">Alt + L</span>
+            </div>
+            
+            <div class="pw-section-title">Change Password</div>
+            <input type="password" id="pw-old" class="pw-input" placeholder="Old Password" style="margin-bottom: 2px;" />
+            <input type="password" id="pw-new" class="pw-input" placeholder="New Password" style="margin-bottom: 2px;" />
+            <input type="password" id="pw-confirm" class="pw-input" placeholder="Confirm Password" style="margin-bottom: 4px;" />
+            <button id="pw-btn" class="pw-submit-btn">Update Password</button>
+            <div id="pw-status" class="pw-status-msg"></div>
           </div>
         </div>
+      </div>
 
-        <!-- Settings Panel -->
-        <div class="tab-panel" id="tab-settings" style="gap: 4px; overflow-y: auto;">
-          <div class="list-item" style="padding: 4px 8px;">
-            <span class="item-label">Kiosk Hotkey</span>
-            <span class="item-value">Alt + L</span>
+      <!-- 6. BANNER STATE -->
+      <div id="panel-banner" class="panel">
+        <div class="banner-body">
+          <div class="banner-head">
+            <div class="banner-icon-box">
+              <i class="ti ti-shield-exclamation" style="font-size:16px;color:#f87171" aria-hidden="true"></i>
+            </div>
+            <div style="display: flex; flex-direction: column; align-items: flex-start;">
+              <div class="banner-title" id="banner-type">Search blocked</div>
+              <div class="banner-sub">Safety policy violation</div>
+            </div>
           </div>
-          
-          <div class="pw-section-title">Change Password</div>
-          <input type="password" id="pw-old" class="pw-input" placeholder="Old Password" style="margin-bottom: 2px;" />
-          <input type="password" id="pw-new" class="pw-input" placeholder="New Password" style="margin-bottom: 2px;" />
-          <input type="password" id="pw-confirm" class="pw-input" placeholder="Confirm Password" style="margin-bottom: 4px;" />
-          <button id="pw-btn" class="pw-submit-btn">Update Password</button>
-          <div id="pw-status" class="pw-status-msg"></div>
+          <div class="banner-msg" id="banner-message">
+            The query "how to hack wifi" was blocked. Repeated violations will end your session. Contact the operator if this is an error.
+          </div>
+          <button class="banner-dismiss" id="btn-banner-dismiss">Dismiss</button>
         </div>
       </div>
-    </div>
 
-    <!-- 6. BANNER STATE -->
-    <div id="panel-banner" class="panel">
-      <div class="banner-left">
-        <span class="banner-icon">⚠️</span>
-        <div class="banner-text-block">
-          <div class="banner-title" id="banner-type">Warning</div>
-          <div class="banner-message" id="banner-message">Violation detected! Please close illegal tabs.</div>
-        </div>
-      </div>
-      <button class="banner-dismiss-btn" id="btn-banner-dismiss">Dismiss</button>
     </div>
-
   </div>
 
   <script>
@@ -819,6 +857,20 @@
         return `${String(hrs).padStart(2, '0')}:${paddedMins}:${paddedSecs}`;
       }
       return `${paddedMins}:${paddedSecs}`;
+    }
+
+    // Position alignment helper
+    let currentXPosition = 'centre';
+
+    function setIslandPositionClass(pos) {
+      document.body.className = '';
+      if (pos === 'left') {
+        document.body.classList.add('pos-left');
+      } else if (pos === 'right') {
+        document.body.classList.add('pos-right');
+      } else {
+        document.body.classList.add('pos-centre');
+      }
     }
 
     // Set state function
@@ -856,9 +908,11 @@
 
     // Initial state
     setIslandState('compact');
+    setIslandPositionClass(currentXPosition);
 
     // Hover interactions (transitions to card on hover/click)
     island.addEventListener('mouseenter', () => {
+      if (isDragging) return;
       if (currentState === 'compact' || currentState === 'split' || currentState === 'check') {
         collapsedState = currentState;
         setIslandState('card');
@@ -866,49 +920,117 @@
     });
 
     island.addEventListener('mouseleave', () => {
+      if (isDragging) return;
       if (currentState === 'card' || currentState === 'profile') {
         // Return to the active collapsed state
         setIslandState(collapsedState);
       }
     });
 
-    // Position cycling state variables
-    let currentXPosition = 'centre';
-    let nextDirection = 'left';
+    // Drag-and-Hold & Snapping Position feature
+    let isMouseDown = false;
+    let holdTimeout = null;
+    let isDragging = false;
+    let startX = 0;
+    let startLeft = 0;
+    let islandWidth = 122;
 
-    // Click handler for position transition
-    island.addEventListener('click', (e) => {
-      // Ignore click if it's on interactive elements (buttons, inputs, tabs, etc.)
-      if (e.target.closest('button, input, a, .tab-btn, .pw-input, .toggle-opt')) {
+    const targetLeft = document.getElementById('target-left');
+    const targetRight = document.getElementById('target-right');
+
+    island.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.target.closest('button, input, a, .tab-btn, .pw-input, .toggle-opt')) {
         return;
       }
-
-      if (currentXPosition === 'centre') {
-        if (nextDirection === 'left') {
-          currentXPosition = 'left';
-          ipcRenderer.send('move-island', 'left');
-        } else if (nextDirection === 'right') {
-          currentXPosition = 'right';
-          ipcRenderer.send('move-island', 'right');
+      
+      isMouseDown = true;
+      startX = e.clientX;
+      
+      const rect = island.getBoundingClientRect();
+      startLeft = rect.left;
+      islandWidth = rect.width;
+      
+      holdTimeout = setTimeout(() => {
+        if (isMouseDown) {
+          isDragging = true;
+          island.classList.add('dragging');
+          
+          // Match snap targets to the active size & border radius
+          const borderRadius = window.getComputedStyle(island).borderRadius;
+          
+          targetLeft.style.width = islandWidth + 'px';
+          targetLeft.style.height = rect.height + 'px';
+          targetLeft.style.borderRadius = borderRadius;
+          
+          targetRight.style.width = islandWidth + 'px';
+          targetRight.style.height = rect.height + 'px';
+          targetRight.style.borderRadius = borderRadius;
+          
+          targetLeft.classList.add('visible');
+          targetRight.classList.add('visible');
+          
+          ipcRenderer.send('island-mouse', false);
         }
-      } else if (currentXPosition === 'right') {
-        currentXPosition = 'centre';
-        nextDirection = 'left';
-        ipcRenderer.send('move-island', 'centre');
+      }, 400);
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (isDragging) {
+        const deltaX = e.clientX - startX;
+        let newLeft = startLeft + deltaX;
+        
+        const maxLeft = window.innerWidth - islandWidth - 12;
+        if (newLeft < 12) newLeft = 12;
+        if (newLeft > maxLeft) newLeft = maxLeft;
+        
+        island.style.left = newLeft + 'px';
+        island.style.transform = 'none';
+      } else {
+        const ri = island.getBoundingClientRect(), rd = dot.getBoundingClientRect();
+        const inside = (x,y,r) => x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
+        ipcRenderer.send('island-mouse', !inside(e.clientX,e.clientY,ri) && !inside(e.clientX,e.clientY,rd));
       }
     });
 
-    // Double click handler for position transition
-    island.addEventListener('dblclick', (e) => {
-      if (e.target.closest('button, input, a, .tab-btn, .pw-input, .toggle-opt')) {
-        return;
+    document.addEventListener('mouseup', (e) => {
+      if (holdTimeout) clearTimeout(holdTimeout);
+      
+      if (isDragging) {
+        isDragging = false;
+        island.classList.remove('dragging');
+        targetLeft.classList.remove('visible');
+        targetRight.classList.remove('visible');
+        
+        const rect = island.getBoundingClientRect();
+        const islandCenter = rect.left + rect.width / 2;
+        const screenWidth = window.innerWidth;
+        
+        const leftDist = Math.abs(islandCenter - (12 + rect.width / 2));
+        const centerDist = Math.abs(islandCenter - (screenWidth / 2));
+        const rightDist = Math.abs(islandCenter - (screenWidth - 12 - rect.width / 2));
+        
+        island.style.left = '';
+        island.style.transform = '';
+        
+        if (leftDist < centerDist && leftDist < rightDist) {
+          currentXPosition = 'left';
+          setIslandPositionClass('left');
+          ipcRenderer.send('move-island', 'left');
+        } else if (rightDist < centerDist && rightDist < leftDist) {
+          currentXPosition = 'right';
+          setIslandPositionClass('right');
+          ipcRenderer.send('move-island', 'right');
+        } else {
+          currentXPosition = 'centre';
+          setIslandPositionClass('centre');
+          ipcRenderer.send('move-island', 'centre');
+        }
+        
+        const ignoreMouse = (currentState === 'compact' || currentState === 'split' || currentState === 'check');
+        ipcRenderer.send('island-mouse', ignoreMouse);
       }
-
-      if (currentXPosition === 'left') {
-        currentXPosition = 'centre';
-        nextDirection = 'right';
-        ipcRenderer.send('move-island', 'centre');
-      }
+      
+      isMouseDown = false;
     });
 
     // Button interactions

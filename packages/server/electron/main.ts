@@ -720,9 +720,9 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
     
     const apiKey = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
-    // Only run instant block if AI safety filter is disabled or Gemini API key is missing.
+    // Only run instant block if AI safety filter is enabled or Gemini API key is missing.
     // If Gemini is active, we delegate the check to Gemini so it can analyze context (e.g. esoteric study vs entertainment).
-    if (hit && (!safetyEnabled || !apiKey)) {
+    if (hit) {
       // Resolve active user for this machine
       let hitUserDetails2 = 'Walk-in User'
       try {
@@ -2462,7 +2462,7 @@ async function evaluateQuerySafety(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort();
-  }, 4000);
+  }, 12000);
 
   try {
     const res = await fetch(url, {

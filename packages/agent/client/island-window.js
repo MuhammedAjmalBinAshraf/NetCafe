@@ -1,4 +1,4 @@
-const { BrowserWindow, screen, ipcMain } = require('electron');
+const { BrowserWindow, screen, ipcMain, powerMonitor } = require('electron');
 const path = require('path');
 
 let islandWindow = null;
@@ -7,21 +7,14 @@ let currentXPosition = 'centre';
 function repositionIsland() {
   if (islandWindow && !islandWindow.isDestroyed()) {
     try {
-      const [actualWidth, actualHeight] = islandWindow.getSize();
       const primary = screen.getPrimaryDisplay();
       const displayBounds = primary.bounds;
-      
-      let x;
-      if (currentXPosition === 'left') {
-        x = displayBounds.x + 12;
-      } else if (currentXPosition === 'right') {
-        x = displayBounds.x + displayBounds.width - actualWidth - 12;
-      } else {
-        x = Math.round(displayBounds.x + (displayBounds.width - actualWidth) / 2);
-      }
-      
-      const y = displayBounds.y + 12;
-      islandWindow.setPosition(x, y);
+      islandWindow.setBounds({
+        x: displayBounds.x,
+        y: displayBounds.y + 12,
+        width: displayBounds.width,
+        height: 350
+      });
     } catch (e) {
       console.error('Failed to position island:', e);
     }
@@ -34,12 +27,13 @@ function createIslandWindow(sessionData) {
   }
 
   const primary = screen.getPrimaryDisplay();
-  const workArea = primary.workAreaSize;
   const displayBounds = primary.bounds;
 
   islandWindow = new BrowserWindow({
-    width: 400,
-    height: 400,
+    width: displayBounds.width,
+    height: 350,
+    x: displayBounds.x,
+    y: displayBounds.y + 12,
     transparent: true,
     frame: false,
     alwaysOnTop: true,
@@ -47,6 +41,7 @@ function createIslandWindow(sessionData) {
     hasShadow: false,
     resizable: false,
     minimizable: false,
+    movable: false,
     type: 'toolbar',
     webPreferences: {
       nodeIntegration: true,
@@ -79,6 +74,37 @@ function createIslandWindow(sessionData) {
   return islandWindow;
 }
 
+// Keep it permanent and visible, auto-restoring if minimized or hidden, resetting always-on-top.
+setInterval(() => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    try {
+      if (islandWindow.isMinimized()) {
+        islandWindow.restore();
+      }
+      if (!islandWindow.isVisible()) {
+        islandWindow.showInactive();
+      }
+      islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+    } catch (e) {
+      console.error('Failed to keep island on top:', e);
+    }
+  }
+}, 2000);
+
+// Watch for system wakeup/unlock events to show/restore the window
+powerMonitor.on('resume', () => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    islandWindow.showInactive();
+    islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+  }
+});
+powerMonitor.on('unlock-screen', () => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    islandWindow.showInactive();
+    islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+  }
+});
+
 function destroyIslandWindow() {
   if (islandWindow) {
     try {
@@ -90,22 +116,14 @@ function destroyIslandWindow() {
   }
 }
 
-// IPC resize listener to resize content and position it based on current alignment
+// IPC resize listener (no longer resizes BrowserWindow since it's full-width)
 ipcMain.on('resize', (event, { width, height }) => {
-  if (islandWindow && !islandWindow.isDestroyed()) {
-    try {
-      islandWindow.setSize(width, height);
-      repositionIsland();
-    } catch (e) {
-      console.error('Failed to resize island:', e);
-    }
-  }
+  // Keeping window full-width, no resize needed
 });
 
-// IPC listener for moving dynamic island horizontally
+// IPC listener for moving dynamic island horizontally (HTML positioning handles the alignment)
 ipcMain.on('move-island', (event, position) => {
   currentXPosition = position;
-  repositionIsland();
 });
 
 // IPC ignore mouse events listener
