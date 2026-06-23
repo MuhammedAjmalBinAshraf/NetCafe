@@ -1450,6 +1450,10 @@ async function handleServerMessage(msg: any) {
           message: msg.payload || ''
         });
       }
+    } else if (msg.command === 'broadcast-receive') {
+      if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('broadcast-receive', msg.payload);
+      }
     } else if (msg.command === 'sync-session') {
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('sync-session-data', msg.session);
@@ -2731,13 +2735,26 @@ app.whenReady().then(async () => {
     }
   }
 
+  let downloadedUpdatePath: string | undefined;
   let updateInstallTimeout: NodeJS.Timeout | null = null;
-  const triggerInstallUpdate = () => {
+  const triggerInstallUpdate = (installerPath?: string) => {
     isAppQuitting = true;
     if (updateInstallTimeout) {
       clearTimeout(updateInstallTimeout);
       updateInstallTimeout = null;
     }
+
+    if (installerPath && fs.existsSync(installerPath)) {
+      try {
+        fs.writeFileSync("C:\\NetCafe\\install-update.flag", installerPath, "utf8");
+        logToUI("Delegating silent update installation to Watchdog service...");
+        return; // Watchdog handles the silent installation and reboot
+      } catch (e) {
+        logToUI("Failed to write update flag: " + e);
+      }
+    }
+
+    // Fallback: If no installer path or flag write failed, attempt direct update
     try {
       fs.writeFileSync("C:\\NetCafe\\stop-watchdog.flag", "stop", "utf8");
     } catch {}
@@ -2754,7 +2771,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('trigger-update-restart', () => {
     logToUI('Operator/System requested immediate update restart.');
-    triggerInstallUpdate();
+    triggerInstallUpdate(downloadedUpdatePath);
     return { success: true };
   });
 
@@ -2790,6 +2807,7 @@ app.whenReady().then(async () => {
   autoUpdater.on('download-progress', (progress: any) => sendUpdateStatus({ status: 'downloading', progress }));
   autoUpdater.on('update-downloaded', (info: any) => {
     updateReady = true;
+    downloadedUpdatePath = info?.downloadedFile;
     sendUpdateStatus({ status: 'downloaded', info });
     
     // Log the download event in the setup/install log
@@ -2833,7 +2851,7 @@ app.whenReady().then(async () => {
 
     // Stop watchdog and install update after 15 seconds automatically
     updateInstallTimeout = setTimeout(() => {
-      triggerInstallUpdate();
+      triggerInstallUpdate(downloadedUpdatePath);
     }, 15000);
 
     /* setTimeout(() => {
@@ -3142,6 +3160,15 @@ function destroyIslandWindow() {
 
 ipcMain.on('exit-session-request', () => {
   sendToServer({ type: 'client-request-close' });
+});
+
+ipcMain.on('student-reply', (event, text) => {
+  sendToServer({
+    type: 'student-reply',
+    payload: {
+      text: text
+    }
+  });
 });
 
 ipcMain.on('save-client-log', () => {

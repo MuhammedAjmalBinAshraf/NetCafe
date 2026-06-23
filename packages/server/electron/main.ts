@@ -115,6 +115,31 @@ function setupDatabase() {
   // Always ensure admin account exists (INSERT OR IGNORE — never overwrites a changed password)
   db.exec(`INSERT OR IGNORE INTO staff (username, password_hash, role) VALUES ('admin', 'admin', 'admin');`)
 
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS broadcasts (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      type         TEXT NOT NULL,        -- 'message' | 'alert' | 'announcement'
+      title        TEXT,                 -- used by alert state
+      body         TEXT NOT NULL,
+      from_label   TEXT DEFAULT 'Lab Admin',
+      target       TEXT DEFAULT 'all',   -- 'all' | machine_id
+      send_at      INTEGER,              -- unix timestamp, NULL = send immediately
+      sent         INTEGER DEFAULT 0,    -- 0 = pending, 1 = sent
+      created_at   INTEGER DEFAULT (strftime('%s','now'))
+    );
+  `)
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS scheduled_times (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      open_time    TEXT DEFAULT '08:00',   -- HH:MM
+      close_time   TEXT DEFAULT '21:00',   -- HH:MM
+      warn_minutes INTEGER DEFAULT 5,      -- minutes before close to send alert
+      repeat_days  TEXT DEFAULT '1,2,3,4,5' -- comma-separated 1=Mon..7=Sun
+    );
+  `)
+  db.exec(`INSERT OR IGNORE INTO scheduled_times (id) VALUES (1);`)
+
   db.exec("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('lab_name', 'NetCafe Manager');")
   // Users (customer accounts) table
@@ -255,6 +280,9 @@ const pendingScreenshots = new Map<number, { resolve: (val: string) => void, rej
 const latestScreenFrames = new Map<number, string>()
 let activeMirrorMachineId: number | null = null;
 let activeFullscreenMachineId: number | null = null;
+
+const studentReplies: { machine_id: number, machine_name: string, text: string, timestamp: string }[] = [];
+let lastClosingWarningSentDate = '';
 
 function isLocalIp(ip?: string): boolean {
   if (!ip) return false
@@ -426,6 +454,31 @@ function handleClientMessage(socket: net.Socket, data: any) {
     }) + '\n')
 
     broadcastMachines()
+  }
+  else if (data.type === 'student-reply') {
+    const machineId = clients.get(socket);
+    if (machineId) {
+      const machine = db.prepare("SELECT name FROM machines WHERE id = ?").get(machineId) as any;
+      const machineName = machine ? machine.name : `PC-${machineId}`;
+      const text = data.payload?.text || '';
+      
+      const replyObj = {
+        machine_id: machineId,
+        machine_name: machineName,
+        text: text,
+        timestamp: new Date().toLocaleTimeString()
+      };
+      
+      studentReplies.push(replyObj);
+      if (studentReplies.length > 50) studentReplies.shift();
+      
+      // Forward to admin UI if running in Electron
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('student-reply', replyObj);
+      }
+      
+      logToUI(`[Student Reply] ${machineName}: ${text}`);
+    }
   }
   else if (data.type === 'metrics') {
     const machineId = clients.get(socket)
@@ -1070,6 +1123,26 @@ function sendCommandToMachine(machineId: number | string, cmd: any) {
   }
 }
 
+function dispatchBroadcastToTarget(target: string, payload: any) {
+  const cmd = {
+    command: 'broadcast-receive',
+    payload
+  };
+  if (target === 'all') {
+    for (const [socket] of clients.entries()) {
+      if (socket.writable && !socket.destroyed) {
+        try {
+          socket.write(JSON.stringify(cmd) + '\n');
+        } catch {}
+      }
+    }
+    logToUI(`Broadcast sent to all connected PCs: type=${payload.type}`);
+  } else {
+    const targetMachineId = Number(target);
+    sendCommandToMachine(targetMachineId, cmd);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
@@ -1129,6 +1202,89 @@ function startWebServer() {
     } else {
       res.status(404).json({ error: `IPC channel ${channel} not found` });
     }
+  });
+
+  // Broadcast endpoints (REST)
+  webApp.get('/api/broadcast/schedule', (req, res) => {
+    try {
+      const row = db.prepare("SELECT * FROM scheduled_times WHERE id = 1").get();
+      res.json(row || null);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  webApp.put('/api/broadcast/schedule', (req, res) => {
+    try {
+      const { open_time, close_time, warn_minutes, repeat_days } = req.body;
+      db.prepare(`
+        UPDATE scheduled_times
+        SET open_time = ?, close_time = ?, warn_minutes = ?, repeat_days = ?
+        WHERE id = 1
+      `).run(open_time, close_time, Number(warn_minutes), repeat_days);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  webApp.post('/api/broadcast/send', (req, res) => {
+    try {
+      const { type, title, body, from_label, target, send_at } = req.body;
+      const now = Math.floor(Date.now() / 1000);
+      const isImmediate = !send_at || Number(send_at) <= now;
+      const sentVal = isImmediate ? 1 : 0;
+
+      const stmt = db.prepare(`
+        INSERT INTO broadcasts (type, title, body, from_label, target, send_at, sent)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const info = stmt.run(type, title || null, body, from_label || 'Lab Admin', target || 'all', send_at || null, sentVal);
+      const broadcastId = info.lastInsertRowid;
+
+      if (isImmediate) {
+        const payload = {
+          type,
+          title: title || undefined,
+          body,
+          text: body,
+          from_label: from_label || 'Lab Admin',
+          seconds: type === 'alert' ? 300 : undefined
+        };
+        dispatchBroadcastToTarget(target || 'all', payload);
+      }
+
+      res.json({ success: true, id: broadcastId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  webApp.delete('/api/broadcast/:id', (req, res) => {
+    try {
+      const id = Number(req.params.id);
+      const result = db.prepare("DELETE FROM broadcasts WHERE id = ? AND sent = 0").run(id);
+      if (result.changes > 0) {
+        res.json({ success: true });
+      } else {
+        res.status(404).json({ error: "Pending broadcast not found or already sent" });
+      }
+    } catch (err: any) {
+      res.status(550).json({ error: err.message });
+    }
+  });
+
+  webApp.get('/api/broadcast/queue', (req, res) => {
+    try {
+      const rows = db.prepare("SELECT * FROM broadcasts WHERE sent = 0 ORDER BY send_at ASC").all();
+      res.json(rows);
+    } catch (err: any) {
+      res.status(550).json({ error: err.message });
+    }
+  });
+
+  webApp.get('/api/broadcast/replies', (req, res) => {
+    res.json(studentReplies);
   });
 
   // Client Web Installation Pages
@@ -1411,6 +1567,69 @@ function startPrepaidSessionMonitor() {
   }, 2000)
 }
 
+function startScheduledBroadcastMonitor() {
+  setInterval(() => {
+    if (!db) return;
+    try {
+      const now = Math.floor(Date.now() / 1000);
+      const pending = db.prepare("SELECT * FROM broadcasts WHERE sent = 0 AND send_at <= ?").all() as any[];
+      for (const b of pending) {
+        const payload = {
+          type: b.type,
+          title: b.title || undefined,
+          body: b.body,
+          text: b.body, // message state
+          from_label: b.from_label || 'Lab Admin',
+          seconds: b.type === 'alert' ? 300 : undefined
+        };
+        dispatchBroadcastToTarget(b.target, payload);
+        db.prepare("UPDATE broadcasts SET sent = 1 WHERE id = ?").run(b.id);
+      }
+    } catch (err) {
+      console.error("Scheduled broadcast runner error:", err);
+    }
+    
+    // Check closing warning schedule
+    try {
+      const today = new Date();
+      const dateStr = today.toISOString().split('T')[0];
+      if (lastClosingWarningSentDate === dateStr) return; // already sent today
+      
+      const sched = db.prepare("SELECT * FROM scheduled_times WHERE id = 1").get() as any;
+      if (!sched) return;
+      
+      const currentDay = today.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
+      const dayNumber = currentDay === 0 ? 7 : currentDay;
+      const days = (sched.repeat_days || '').split(',').map(Number);
+      if (!days.includes(dayNumber)) return;
+      
+      const [closeH, closeM] = (sched.close_time || '21:00').split(':').map(Number);
+      const closeTimeMs = new Date(today).setHours(closeH, closeM, 0, 0);
+      const warnMs = (sched.warn_minutes || 5) * 60 * 1000;
+      const targetWarnTimeMs = closeTimeMs - warnMs;
+      
+      const nowMs = today.getTime();
+      
+      // Check if current time has passed the warning time but is before close time
+      if (nowMs >= targetWarnTimeMs && nowMs < closeTimeMs) {
+        const payload = {
+          type: 'alert',
+          title: 'Lab closing soon',
+          body: `Please save your work. The lab will close at ${sched.close_time}.`,
+          text: `Please save your work. The lab will close at ${sched.close_time}.`,
+          from_label: 'System',
+          seconds: (sched.warn_minutes || 5) * 60
+        };
+        dispatchBroadcastToTarget('all', payload);
+        lastClosingWarningSentDate = dateStr;
+        logToUI(`Auto closing-warning alert sent to all PCs.`);
+      }
+    } catch (err) {
+      console.error("Closing warning check error:", err);
+    }
+  }, 30000);
+}
+
 app.whenReady().then(async () => {
   setupDatabase()
   
@@ -1439,6 +1658,7 @@ app.whenReady().then(async () => {
   startWebServer()
   startPublicTunnel()
   startPrepaidSessionMonitor()
+  startScheduledBroadcastMonitor()
 
   // Auto Updater logic for Server
   autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
@@ -1898,6 +2118,76 @@ ipcMain.handle('get-safety-alerts', () => {
 ipcMain.handle('clear-safety-alerts', () => {
   if (!db) return { success: false }
   db.prepare("DELETE FROM safety_alerts").run()
+  return { success: true }
+})
+
+ipcMain.handle('get-broadcast-schedule', () => {
+  if (!db) return null
+  return db.prepare("SELECT * FROM scheduled_times WHERE id = 1").get()
+})
+
+ipcMain.handle('update-broadcast-schedule', (_, { open_time, close_time, warn_minutes, repeat_days }) => {
+  if (!db) return { success: false }
+  db.prepare(`
+    UPDATE scheduled_times
+    SET open_time = ?, close_time = ?, warn_minutes = ?, repeat_days = ?
+    WHERE id = 1
+  `).run(open_time, close_time, Number(warn_minutes), repeat_days)
+  return { success: true }
+})
+
+ipcMain.handle('send-broadcast', (_, { type, title, body, from_label, target, send_at }) => {
+  if (!db) return { success: false }
+  const now = Math.floor(Date.now() / 1000)
+  const isImmediate = !send_at || Number(send_at) <= now
+  const sentVal = isImmediate ? 1 : 0
+
+  const stmt = db.prepare(`
+    INSERT INTO broadcasts (type, title, body, from_label, target, send_at, sent)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `)
+  const info = stmt.run(type, title || null, body, from_label || 'Lab Admin', target || 'all', send_at || null, sentVal)
+  const broadcastId = info.lastInsertRowid
+
+  if (isImmediate) {
+    const payload = {
+      type,
+      title: title || undefined,
+      body,
+      text: body,
+      from_label: from_label || 'Lab Admin',
+      seconds: type === 'alert' ? 300 : undefined
+    }
+    dispatchBroadcastToTarget(target || 'all', payload)
+  }
+
+  return { success: true, id: broadcastId }
+})
+
+ipcMain.handle('delete-broadcast', (_, id) => {
+  if (!db) return { success: false }
+  db.prepare("DELETE FROM broadcasts WHERE id = ? AND sent = 0").run(Number(id))
+  return { success: true }
+})
+
+ipcMain.handle('get-broadcast-queue', () => {
+  if (!db) return []
+  return db.prepare("SELECT * FROM broadcasts WHERE sent = 0 ORDER BY send_at ASC").all()
+})
+
+ipcMain.handle('get-student-replies', () => {
+  return studentReplies
+})
+
+ipcMain.handle('operator-message', (_, machineId, text) => {
+  sendCommandToMachine(machineId, {
+    command: 'broadcast-receive',
+    payload: {
+      type: 'message',
+      text: text,
+      from_label: 'Operator'
+    }
+  })
   return { success: true }
 })
 

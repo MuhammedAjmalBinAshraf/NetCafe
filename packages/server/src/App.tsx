@@ -5,7 +5,7 @@ import {
   BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
-  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles
+  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles, Megaphone
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -57,7 +57,7 @@ export default function App() {
   })
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
@@ -71,6 +71,21 @@ export default function App() {
     sessionsHistory: []
   })
   const [settings, setSettings] = useState<any>({ lab_name: 'NetCafe Manager' })
+
+  // Broadcast State variables
+  const [subTab, setSubTab] = useState<'schedule' | 'compose' | 'queue'>('compose')
+  const [openTime, setOpenTime] = useState('08:00')
+  const [closeTime, setCloseTime] = useState('21:00')
+  const [warnMinutes, setWarnMinutes] = useState(5)
+  const [repeatDays, setRepeatDays] = useState<number[]>([1, 2, 3, 4, 5]) // 1=Mon..7=Sun
+  const [composeType, setComposeType] = useState<'announcement' | 'alert' | 'message'>('announcement')
+  const [composeMessage, setComposeMessage] = useState('')
+  const [composeTitle, setComposeTitle] = useState('')
+  const [composeTarget, setComposeTarget] = useState('all')
+  const [composeSendAt, setComposeSendAt] = useState('')
+  const [broadcastQueue, setBroadcastQueue] = useState<any[]>([])
+  const [studentReplies, setStudentReplies] = useState<any[]>([])
+
 
   // AI Safety local state inputs (prevents keystroke DB lag)
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -379,6 +394,14 @@ export default function App() {
       }
       window.ipcRenderer.on('public-url-updated', publicUrlListener)
 
+      const studentReplyListener = (_: any, reply: any) => {
+        setStudentReplies(prev => {
+          const next = [...prev, reply]
+          return next.length > 50 ? next.slice(-50) : next
+        })
+      }
+      window.ipcRenderer.on('student-reply', studentReplyListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
@@ -388,6 +411,7 @@ export default function App() {
         window.ipcRenderer?.off('safety-alert-triggered', safetyAlertTriggeredListener)
         window.ipcRenderer?.off('filter-log', filterLogListener)
         window.ipcRenderer?.off('public-url-updated', publicUrlListener)
+        window.ipcRenderer?.off('student-reply', studentReplyListener)
         ipcBound.current = false
       }
     }
@@ -413,6 +437,92 @@ export default function App() {
       return () => clearInterval(interval)
     }
   }, [])
+
+  // Broadcast Logic
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (activeTab === 'broadcast') {
+      const fetchStats = () => {
+        if (window.ipcRenderer) {
+          window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {});
+          window.ipcRenderer.invoke('get-student-replies').then(setStudentReplies).catch(() => {});
+        }
+      };
+      fetchStats();
+      interval = setInterval(fetchStats, 3000); // refresh queue/replies every 3 seconds
+    }
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  const handleSaveSchedule = () => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('update-broadcast-schedule', {
+        open_time: openTime,
+        close_time: closeTime,
+        warn_minutes: warnMinutes,
+        repeat_days: repeatDays.join(',')
+      }).then(() => {
+        alert('Closing alert schedule saved successfully!')
+      }).catch((err: any) => {
+        alert('Failed to save schedule: ' + err.message)
+      })
+    }
+  }
+
+  const handleSendBroadcast = (isScheduled: boolean) => {
+    if (!composeMessage.trim()) {
+      alert('Message content is required!')
+      return
+    }
+
+    let sendAtUnix: number | null = null
+    if (isScheduled && composeSendAt) {
+      const [h, m] = composeSendAt.split(':').map(Number)
+      const targetDate = new Date()
+      targetDate.setHours(h, m, 0, 0)
+      if (targetDate.getTime() <= Date.now()) {
+        targetDate.setDate(targetDate.getDate() + 1)
+      }
+      sendAtUnix = Math.floor(targetDate.getTime() / 1000)
+    }
+
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('send-broadcast', {
+        type: composeType,
+        title: composeType === 'alert' ? (composeTitle || 'System Alert') : null,
+        body: composeMessage,
+        from_label: 'Lab Admin',
+        target: composeTarget,
+        send_at: sendAtUnix
+      }).then(() => {
+        alert(isScheduled ? 'Broadcast scheduled successfully!' : 'Broadcast sent immediately!')
+        setComposeMessage('')
+        setComposeTitle('')
+        setComposeSendAt('')
+        // Refresh queue
+        window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {})
+      }).catch((err: any) => {
+        alert('Failed to send broadcast: ' + err.message)
+      })
+    }
+  }
+
+  const handleDeleteBroadcast = (id: number) => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('delete-broadcast', id).then(() => {
+        window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {})
+      }).catch((err: any) => {
+        alert('Failed to delete broadcast: ' + err.message)
+      })
+    }
+  }
+
+  const repliesEndRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (repliesEndRef.current) {
+      repliesEndRef.current.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [studentReplies])
 
   // Scroll developer console logs to bottom
   useEffect(() => {
@@ -1496,6 +1606,14 @@ export default function App() {
               }`}
             >
               <UserCircle2 size={18} /> Users
+            </button>
+            <button
+              onClick={() => { setActiveTab('broadcast'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'broadcast' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <Megaphone size={18} /> Broadcast
             </button>
             <button
               onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null) }}
@@ -3204,6 +3322,304 @@ Respond strictly in JSON format:
             </div>
           )}
 
+          {/* TAB: Broadcast */}
+          {activeTab === 'broadcast' && (
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 pb-4 border-b border-slate-900">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Broadcast Console</h2>
+                  <p className="text-slate-400 text-sm mt-1">Send immediate notifications or schedule announcements to terminal PCs.</p>
+                </div>
+              </div>
+
+              {/* Sub-tabs */}
+              <div className="flex gap-2 border-b border-slate-900 pb-3">
+                <button
+                  onClick={() => setSubTab('schedule')}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                    subTab === 'schedule' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Schedule
+                </button>
+                <button
+                  onClick={() => setSubTab('compose')}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                    subTab === 'compose' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Compose & Send
+                </button>
+                <button
+                  onClick={() => setSubTab('queue')}
+                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
+                    subTab === 'queue' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Queue
+                </button>
+              </div>
+
+              {/* Sub-tab Content */}
+              <div className="bg-slate-950/40 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
+                {subTab === 'schedule' && (
+                  <div className="space-y-6 max-w-xl">
+                    <h3 className="text-lg font-semibold text-white">Lab closing alert schedule</h3>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Open Time</label>
+                        <input
+                          type="time"
+                          value={openTime}
+                          onChange={(e) => setOpenTime(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Close Time</label>
+                        <input
+                          type="time"
+                          value={closeTime}
+                          onChange={(e) => setCloseTime(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Repeat Days</label>
+                      <div className="flex flex-wrap gap-2">
+                        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, idx) => {
+                          const dayNum = idx + 1;
+                          const active = repeatDays.includes(dayNum);
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => {
+                                if (active) {
+                                  setRepeatDays(repeatDays.filter(d => d !== dayNum));
+                                } else {
+                                  setRepeatDays([...repeatDays, dayNum].sort());
+                                }
+                              }}
+                              className={`w-10 h-10 rounded-lg font-semibold text-sm flex items-center justify-center border transition-all ${
+                                active
+                                  ? 'bg-blue-600 border-blue-500 text-white'
+                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              {day}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Warn before close</label>
+                      <select
+                        value={warnMinutes}
+                        onChange={(e) => setWarnMinutes(Number(e.target.value))}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                      >
+                        <option value={5}>5 min before close</option>
+                        <option value={10}>10 min before close</option>
+                        <option value={15}>15 min before close</option>
+                        <option value={30}>30 min before close</option>
+                      </select>
+                    </div>
+
+                    <button
+                      onClick={handleSaveSchedule}
+                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors font-bold"
+                    >
+                      Save Schedule
+                    </button>
+
+                    <div className="text-xs text-slate-450 mt-2 font-medium">
+                      Note: Alert auto-sent to all PCs {warnMinutes} minutes before close
+                    </div>
+                  </div>
+                )}
+
+                {subTab === 'compose' && (
+                  <div className="space-y-6 max-w-2xl">
+                    <h3 className="text-lg font-semibold text-white">Compose Broadcast</h3>
+                    
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Broadcast Type</label>
+                      <div className="flex gap-2">
+                        {['announcement', 'alert', 'message'].map((t) => (
+                          <button
+                            key={t}
+                            onClick={() => setComposeType(t as any)}
+                            className={`px-4 py-2 text-sm font-semibold rounded-lg capitalize border transition-all ${
+                              composeType === t
+                                ? 'bg-blue-600 border-blue-500 text-white font-bold'
+                                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {composeType === 'alert' && (
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Alert Title</label>
+                        <input
+                          type="text"
+                          placeholder="e.g. Lab Closing Soon"
+                          value={composeTitle}
+                          onChange={(e) => setComposeTitle(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Message Content</label>
+                      <textarea
+                        rows={4}
+                        placeholder="Type your message here..."
+                        value={composeMessage}
+                        onChange={(e) => setComposeMessage(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors resize-none"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">To</label>
+                        <select
+                          value={composeTarget}
+                          onChange={(e) => setComposeTarget(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                        >
+                          <option value="all">All PCs</option>
+                          {machines.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name || `PC-${m.id}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Send at (Optional)</label>
+                        <input
+                          type="time"
+                          value={composeSendAt}
+                          onChange={(e) => setComposeSendAt(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-3">
+                      <button
+                        onClick={() => handleSendBroadcast(false)}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition-colors"
+                      >
+                        Send Now
+                      </button>
+                      <button
+                        onClick={() => handleSendBroadcast(true)}
+                        disabled={!composeSendAt}
+                        className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition-colors"
+                      >
+                        Schedule
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {subTab === 'queue' && (
+                  <div className="space-y-4">
+                    <h3 className="text-lg font-semibold text-white">Scheduled Broadcasts</h3>
+                    {broadcastQueue.length === 0 ? (
+                      <div className="text-slate-550 text-center py-8">No scheduled broadcasts</div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm text-slate-300">
+                          <thead>
+                            <tr className="border-b border-slate-900 text-slate-400">
+                              <th className="py-2.5">Time</th>
+                              <th className="py-2.5">Type</th>
+                              <th className="py-2.5">Message</th>
+                              <th className="py-2.5">Target</th>
+                              <th className="py-2.5 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {broadcastQueue.map((item) => {
+                              const timeStr = new Date(item.send_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                              return (
+                                <tr key={item.id} className="border-b border-slate-900/50 hover:bg-slate-900/20">
+                                  <td className="py-3 font-semibold">{timeStr}</td>
+                                  <td className="py-3">
+                                    <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-500/20 text-blue-400 capitalize">
+                                      {item.type}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 truncate max-w-xs">{item.body}</td>
+                                  <td className="py-3">
+                                    {item.target === 'all' ? 'All PCs' : machines.find(m => m.id.toString() === item.target.toString())?.name || `PC-${item.target}`}
+                                  </td>
+                                  <td className="py-3 text-right">
+                                    <button
+                                      onClick={() => handleDeleteBroadcast(item.id)}
+                                      className="text-red-400 hover:text-red-300 font-semibold text-xs transition-colors"
+                                    >
+                                      Delete
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Student Replies Section */}
+              <div className="bg-slate-950/40 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
+                <h3 className="text-lg font-semibold text-white mb-4">Student replies section</h3>
+                <div className="bg-slate-950 border border-slate-900 rounded-xl h-64 overflow-y-auto p-4 space-y-3">
+                  {studentReplies.length === 0 ? (
+                    <div className="text-slate-550 text-center py-20 text-sm">No replies from students yet</div>
+                  ) : (
+                    studentReplies.map((reply, idx) => (
+                      <div
+                        key={idx}
+                        onClick={() => {
+                          setSubTab('compose');
+                          setComposeType('message');
+                          setComposeTarget(reply.machine_id.toString());
+                        }}
+                        className="p-3 bg-slate-900/40 hover:bg-slate-900 border border-slate-900/40 hover:border-slate-800 rounded-xl cursor-pointer transition-all flex justify-between items-start gap-4 group"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold text-blue-400">{reply.machine_name}</span>
+                            <span className="text-[10px] text-slate-500">{reply.timestamp}</span>
+                          </div>
+                          <p className="text-sm text-slate-200">{reply.text}</p>
+                        </div>
+                        <span className="text-[10px] text-slate-500 font-semibold group-hover:text-slate-300 transition-colors">Reply →</span>
+                      </div>
+                    ))
+                  )}
+                  <div ref={repliesEndRef} />
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* TAB: Activity Log */}
           {activeTab === 'activity_log' && (() => {
             const filteredLogs = allActivityLogs.filter((log: any) => {
@@ -4398,6 +4814,14 @@ Respond strictly in JSON format:
                 }`}
               >
                 <UserCircle2 size={18} /> Users
+              </button>
+              <button
+                onClick={() => { setActiveTab('broadcast'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'broadcast' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <Megaphone size={18} /> Broadcast
               </button>
               <button
                 onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}

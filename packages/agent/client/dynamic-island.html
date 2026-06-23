@@ -155,6 +155,67 @@
       border-color: rgba(239, 68, 68, 0.34);
     }
 
+    #island.state-message {
+      width: 342px;
+      height: 130px;
+      border-radius: 18px;
+      border-color: rgba(127, 119, 221, 0.3);
+    }
+
+    #island.state-alert {
+      width: 342px;
+      height: 52px;
+      border-radius: 22px;
+      border-color: rgba(245, 158, 11, 0.32);
+    }
+
+    #island.state-announcement {
+      width: 372px;
+      height: auto;
+      min-height: 78px;
+      border-radius: 16px;
+      border-color: rgba(127, 119, 221, 0.32);
+    }
+
+    /* ── STATE: message ── */
+    .msg-shell { display: flex; width: 100%; height: 100%; }
+    .msg-left { width: 52px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; border-right: 0.5px solid rgba(255, 255, 255, 0.09); }
+    .msg-avatar { width: 28px; height: 28px; border-radius: 50%; background: rgba(127, 119, 221, 0.22); border: 0.5px solid rgba(127, 119, 221, 0.38); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 500; color: #b8b3f0; }
+    .msg-from { font-size: 9px; color: rgba(255, 255, 255, 0.45); letter-spacing: 0.03em; }
+    .msg-right { flex: 1; display: flex; flex-direction: column; justify-content: space-between; padding: 10px 12px; }
+    .msg-bubbles { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow-y: auto; scrollbar-width: none; }
+    .msg-bubbles::-webkit-scrollbar { display: none; }
+    .msg-bubble-in { align-self: flex-start; background: rgba(255, 255, 255, 0.1); border-radius: 0 8px 8px 8px; padding: 6px 10px; font-size: 11px; color: #fff; line-height: 1.4; max-width: 200px; text-align: left; word-break: break-word; }
+    .msg-bubble-out { align-self: flex-end; background: rgba(127, 119, 221, 0.28); border-radius: 8px 0 8px 8px; padding: 6px 10px; font-size: 11px; color: #d4d1f7; line-height: 1.4; max-width: 200px; text-align: left; word-break: break-word; }
+    .msg-input-row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+    .msg-inp { flex: 1; height: 24px; background: rgba(255, 255, 255, 0.08); border: 0.5px solid rgba(255, 255, 255, 0.15); border-radius: 20px; padding: 0 10px; font-size: 11px; color: #fff; outline: none; font-family: inherit; }
+    .msg-inp::placeholder { color: rgba(255, 255, 255, 0.3); }
+    .msg-send { width: 24px; height: 24px; border-radius: 50%; background: #7F77DD; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; transition: opacity 0.15s; color: #fff; }
+    .msg-send:hover { opacity: 0.8; }
+
+    /* ── STATE: alert ── */
+    .alert-shell { display: flex; width: 100%; align-items: center; height: 100%; }
+    .alert-left { width: 44px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-right: 0.5px solid rgba(245, 158, 11, 0.18); height: 100%; }
+    .alert-icon { width: 26px; height: 26px; border-radius: 7px; background: rgba(245, 158, 11, 0.14); display: flex; align-items: center; justify-content: center; color: #fbbf24; }
+    .alert-center { flex: 1; padding: 0 12px; display: flex; flex-direction: column; gap: 1px; text-align: left; }
+    .alert-title { font-size: 12px; font-weight: 500; color: #fbbf24; }
+    .alert-body { font-size: 11px; color: rgba(255, 255, 255, 0.6); }
+    .alert-right { width: 50px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; border-left: 0.5px solid rgba(245, 158, 11, 0.18); height: 100%; }
+    .alert-countdown { font-size: 13px; font-weight: 500; color: #fbbf24; font-variant-numeric: tabular-nums; }
+
+    /* ── STATE: announcement ── */
+    .ann-shell { display: flex; flex-direction: column; width: 100%; padding: 12px 15px; gap: 9px; text-align: left; }
+    .ann-head { display: flex; align-items: center; justify-content: space-between; }
+    .ann-left { display: flex; align-items: center; gap: 8px; }
+    .ann-icon { width: 28px; height: 28px; border-radius: 8px; background: rgba(127, 119, 221, 0.14); border: 0.5px solid rgba(127, 119, 221, 0.28); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #b8b3f0; }
+    .ann-label { font-size: 11px; font-weight: 500; color: #b8b3f0; letter-spacing: 0.06em; text-transform: uppercase; }
+    .ann-time { font-size: 10px; color: rgba(255, 255, 255, 0.4); }
+    .ann-body { font-size: 12px; color: rgba(255, 255, 255, 0.7); line-height: 1.55; word-break: break-word; }
+    .ann-footer { display: flex; align-items: center; justify-content: space-between; }
+    .ann-from { font-size: 10px; color: rgba(255, 255, 255, 0.38); }
+    .ann-dismiss { height: 22px; padding: 0 10px; border-radius: 6px; background: rgba(127, 119, 221, 0.16); border: 0.5px solid rgba(127, 119, 221, 0.28); color: #b8b3f0; font-size: 10px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
+    .ann-dismiss:hover { background: rgba(127, 119, 221, 0.26); }
+
     /* Panels Setup */
     .panel {
       position: absolute;
@@ -820,6 +881,65 @@
             The query "how to hack wifi" was blocked. Repeated violations will end your session. Contact the operator if this is an error.
           </div>
           <button class="banner-dismiss" id="btn-banner-dismiss">Dismiss</button>
+        </div>
+      </div>
+
+      <!-- 7. MESSAGE STATE -->
+      <div id="panel-message" class="panel">
+        <div class="msg-shell">
+          <div class="msg-left">
+            <div class="msg-avatar" id="msg-avatar">OP</div>
+            <div class="msg-from" id="msg-from">Operator</div>
+          </div>
+          <div class="msg-right">
+            <div id="msg-bubbles" class="msg-bubbles">
+              <!-- operator bubble injected here dynamically -->
+            </div>
+            <div class="msg-input-row">
+              <input class="msg-inp" id="msg-inp" type="text" placeholder="Reply...">
+              <button class="msg-send" onclick="sendStudentReply()" aria-label="Send">
+                <i class="ti ti-send" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 8. ALERT STATE -->
+      <div id="panel-alert" class="panel">
+        <div class="alert-shell">
+          <div class="alert-left">
+            <div class="alert-icon">
+              <i class="ti ti-clock-exclamation" aria-hidden="true"></i>
+            </div>
+          </div>
+          <div class="alert-center">
+            <div class="alert-title" id="alert-title">Lab closing soon</div>
+            <div class="alert-body" id="alert-body">Please save your work and log out.</div>
+          </div>
+          <div class="alert-right">
+            <div class="alert-countdown" id="alert-countdown">05:00</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 9. ANNOUNCEMENT STATE -->
+      <div id="panel-announcement" class="panel">
+        <div class="ann-shell">
+          <div class="ann-head">
+            <div class="ann-left">
+              <div class="ann-icon">
+                <i class="ti ti-speakerphone" aria-hidden="true"></i>
+              </div>
+              <div class="ann-label">Announcement</div>
+            </div>
+            <div class="ann-time" id="ann-time">Now</div>
+          </div>
+          <div class="ann-body" id="ann-body"></div>
+          <div class="ann-footer">
+            <div class="ann-from" id="ann-from">— Lab Admin</div>
+            <button class="ann-dismiss" onclick="dismissBroadcast()">Got it</button>
+          </div>
         </div>
       </div>
 
