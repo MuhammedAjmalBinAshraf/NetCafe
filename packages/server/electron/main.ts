@@ -1774,7 +1774,8 @@ function startScheduledBroadcastMonitor() {
       
       const currentDay = today.getDay(); // 0 = Sun, 1 = Mon, ..., 6 = Sat
       const dayNumber = currentDay === 0 ? 7 : currentDay;
-      const days = (sched.repeat_days || '').split(',').map(Number);
+      if (!sched.repeat_days) return; // No repeat days selected, closing alert is disabled
+      const days = sched.repeat_days.split(',').map(Number);
       if (!days.includes(dayNumber)) return;
       
       const [closeH, closeM] = (sched.close_time || '21:00').split(':').map(Number);

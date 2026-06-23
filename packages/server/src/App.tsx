@@ -455,11 +455,11 @@ export default function App() {
       if (window.ipcRenderer) {
         window.ipcRenderer.invoke('get-broadcast-schedule').then((sched) => {
           if (sched) {
-            if (sched.open_time) setOpenTime(sched.open_time);
-            if (sched.close_time) setCloseTime(sched.close_time);
+            if (sched.open_time !== undefined && sched.open_time !== null) setOpenTime(sched.open_time);
+            if (sched.close_time !== undefined && sched.close_time !== null) setCloseTime(sched.close_time);
             if (sched.warn_minutes !== undefined && sched.warn_minutes !== null) setWarnMinutes(Number(sched.warn_minutes));
-            if (sched.repeat_days) {
-              setRepeatDays(sched.repeat_days.split(',').map(Number));
+            if (sched.repeat_days !== undefined && sched.repeat_days !== null) {
+              setRepeatDays(sched.repeat_days ? sched.repeat_days.split(',').map(Number) : []);
             }
           }
         }).catch((err) => console.error("Failed to load broadcast schedule:", err));

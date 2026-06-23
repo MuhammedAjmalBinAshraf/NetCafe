@@ -140,6 +140,9 @@
       height: 185px;
       border-radius: 18px;
     }
+    #island.state-card.has-alert {
+      height: 235px;
+    }
 
     #island.state-profile {
       width: 342px;
@@ -390,17 +393,40 @@
       font-variant-numeric: tabular-nums;
     }
 
-    .card-financial-block {
+    .card-started-block {
       text-align: right;
       display: flex;
       flex-direction: column;
       gap: 2px;
     }
 
-    .financial-value {
-      font-size: 16px;
+    .card-recent-alert {
+      margin-top: 4px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 8px;
+      border: 0.5px solid rgba(255, 255, 255, 0.08);
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.7);
+      text-align: left;
+    }
+    .recent-alert-label {
       font-weight: 700;
-      color: #22c55e;
+      color: #a78bfa;
+      margin-bottom: 2px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      text-transform: uppercase;
+      font-size: 8px;
+      letter-spacing: 0.05em;
+    }
+    .recent-alert-text {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      font-size: 10px;
+      color: #fff;
     }
 
     .card-row-bottom {
@@ -744,6 +770,7 @@
   </style>
 </head>
 <body>
+  <div id="blocker-backdrop" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); backdrop-filter: blur(4px); z-index: 9990;"></div>
   <div id="island-container">
     <div id="target-left" class="snap-target"></div>
     <div id="target-right" class="snap-target"></div>
@@ -786,15 +813,24 @@
             <div class="card-label" id="card-time-label">Remaining Time</div>
             <div class="card-value" id="card-timer">01:45:12</div>
           </div>
-          <div class="card-financial-block">
-            <div class="card-label" id="card-financial-label">Balance</div>
-            <div class="financial-value" id="card-financial-value">$24.50</div>
+          <div class="card-started-block">
+            <div class="card-label" id="card-started-label">Started</div>
+            <div class="card-value" id="card-started-value">--:--</div>
           </div>
         </div>
 
+        <!-- Recent Alert / Announcement -->
+        <div class="card-recent-alert" id="card-recent-alert" style="display: none;">
+          <div class="recent-alert-label">
+            <i class="ti ti-speakerphone" style="font-size:10px;" aria-hidden="true"></i> Recent Announcement
+          </div>
+          <div class="recent-alert-text" id="recent-alert-text">No announcements yet.</div>
+        </div>
+
         <div class="card-row-bottom">
-          <button class="exit-btn" id="btn-exit">Exit Session</button>
+          <button class="profile-btn" id="btn-message">Message</button>
           <button class="profile-btn" id="btn-profile">Your Profile</button>
+          <button class="exit-btn" id="btn-exit">Exit Session</button>
         </div>
       </div>
 
@@ -880,6 +916,9 @@
       <div id="panel-message" class="panel">
         <div class="msg-shell">
           <div class="msg-left">
+            <button class="msg-back-btn" onclick="setIslandState('card')" style="background:none; border:none; color:rgba(255,255,255,0.4); cursor:pointer; font-size:12px; margin-bottom:8px; display:flex; align-items:center; justify-content:center; padding:4px;" aria-label="Back">
+              <i class="ti ti-arrow-left"></i>
+            </button>
             <div class="msg-avatar" id="msg-avatar">OP</div>
             <div class="msg-from" id="msg-from">Operator</div>
           </div>
@@ -930,7 +969,7 @@
           <div class="ann-body" id="ann-body"></div>
           <div class="ann-footer">
             <div class="ann-from" id="ann-from">— Lab Admin</div>
-            <button class="ann-dismiss" onclick="dismissBroadcast()">Got it</button>
+            <button class="ann-dismiss" onclick="dismissAnnouncement()">Got it</button>
           </div>
         </div>
       </div>
@@ -944,6 +983,8 @@
     const island = document.getElementById('island');
     let currentState = 'compact';
     let collapsedState = 'compact'; // remembers collapsed state before hover
+    let isAnnouncementBlocking = false;
+    let lastAnnouncement = '';
 
     // Session states data cache
     let sessionData = {
@@ -958,20 +999,12 @@
       startTime: null
     };
 
-    // Helper: format duration in seconds to hh:mm:ss or mm:ss
+    // Helper: format duration in seconds to mm:ss (e.g. 60:00, 90:00)
     function formatTime(totalSeconds) {
       if (totalSeconds < 0 || totalSeconds === null || totalSeconds === undefined) return '00:00';
-      const hrs = Math.floor(totalSeconds / 3600);
-      const mins = Math.floor((totalSeconds % 3600) / 60);
+      const mins = Math.floor(totalSeconds / 60);
       const secs = Math.floor(totalSeconds % 60);
-
-      const paddedMins = String(mins).padStart(2, '0');
-      const paddedSecs = String(secs).padStart(2, '0');
-
-      if (hrs > 0) {
-        return `${String(hrs).padStart(2, '0')}:${paddedMins}:${paddedSecs}`;
-      }
-      return `${paddedMins}:${paddedSecs}`;
+      return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
     }
 
     // Position alignment helper
@@ -990,6 +1023,9 @@
 
     // Set state function
     function setIslandState(state) {
+      // Don't allow leaving the announcement state unless dismissing
+      if (isAnnouncementBlocking && state !== 'announcement') return;
+
       // Remove all state classes
       island.className = '';
       island.classList.add(`state-${state}`);
@@ -1011,6 +1047,59 @@
       // but in expanded states (card, profile, banner), we need full interaction.
       const ignoreMouse = (state === 'compact' || state === 'split' || state === 'check');
       ipcRenderer.send('island-mouse', ignoreMouse);
+    }
+
+    // Show full-screen announcement blocker
+    function showAnnouncementBlocker(data) {
+      if (data.title) document.getElementById('ann-body').textContent = data.title + ': ' + (data.body || data.text || '');
+      else document.getElementById('ann-body').textContent = data.body || data.text || '';
+      document.getElementById('ann-from').textContent = '— ' + (data.from_label || data.from || 'Lab Admin');
+      document.getElementById('ann-time').textContent = 'Now';
+
+      // Store for card recent alert
+      lastAnnouncement = data.body || data.text || '';
+      updateRecentAlert();
+
+      // Show blocker backdrop
+      const backdrop = document.getElementById('blocker-backdrop');
+      if (backdrop) backdrop.style.display = 'block';
+      isAnnouncementBlocking = true;
+
+      // Notify main process to block input at OS level
+      ipcRenderer.send('set-announcement-blocking', true);
+
+      // Force announcement state (bypass block guard)
+      island.className = '';
+      island.classList.add('state-announcement');
+      currentState = 'announcement';
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const ann = document.getElementById('panel-announcement');
+      if (ann) ann.classList.add('active');
+      ipcRenderer.send('island-mouse', false);
+    }
+
+    // Dismiss announcement blockout
+    function dismissAnnouncement() {
+      const backdrop = document.getElementById('blocker-backdrop');
+      if (backdrop) backdrop.style.display = 'none';
+      isAnnouncementBlocking = false;
+
+      // Notify main process to unblock input
+      ipcRenderer.send('set-announcement-blocking', false);
+
+      const nextState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+      setIslandState(nextState);
+    }
+
+    // Update the "Recent Announcement" in card panel
+    function updateRecentAlert() {
+      const box = document.getElementById('card-recent-alert');
+      const txt = document.getElementById('recent-alert-text');
+      if (lastAnnouncement && box && txt) {
+        txt.textContent = lastAnnouncement;
+        box.style.display = 'block';
+        island.classList.add('has-alert');
+      }
     }
 
     // Centered Resize sync
@@ -1159,6 +1248,10 @@
 
     document.getElementById('btn-profile').addEventListener('click', () => {
       setIslandState('profile');
+    });
+
+    document.getElementById('btn-message').addEventListener('click', () => {
+      setIslandState('message');
     });
 
     document.getElementById('btn-profile-back').addEventListener('click', () => {
@@ -1357,42 +1450,6 @@
       document.getElementById('compact-timer').textContent = displayTime;
       document.getElementById('split-timer').textContent = displayTime;
       document.getElementById('card-timer').textContent = displayTime;
-
-      // Update financial values dynamically in the interval
-      const finValue = document.getElementById('card-financial-value');
-      if (finValue) {
-        if (sessionData.type === 'prepaid') {
-          // Calculate remaining balance
-          let balance = 0;
-          if (sessionData.remainingSeconds !== null) {
-            const planPrice = parseFloat(sessionData.planPrice || 0);
-            const durationMin = parseFloat(sessionData.durationMinutes || 60);
-            if (planPrice > 0 && durationMin > 0) {
-              balance = (sessionData.remainingSeconds / 60) * (planPrice / durationMin);
-            } else {
-              // Default to $5.00/hour prepaid rate if not specified
-              balance = (sessionData.remainingSeconds / 3600) * 5.00;
-            }
-          }
-          finValue.textContent = `$${Math.max(0, balance).toFixed(2)}`;
-        } else {
-          // Calculate accrued cost for postpaid
-          let cost = 0;
-          const planPrice = parseFloat(sessionData.planPrice || 0);
-          if (planPrice > 0) {
-            const durationMin = parseFloat(sessionData.durationMinutes || 60);
-            if (durationMin > 0) {
-              cost = (sessionData.elapsedSeconds / 60) * (planPrice / durationMin);
-            } else {
-              cost = (sessionData.elapsedSeconds / 3600) * planPrice;
-            }
-          } else {
-            // Default to $5.00/hour postpaid rate if not specified
-            cost = (sessionData.elapsedSeconds / 3600) * 5.00;
-          }
-          finValue.textContent = `$${cost.toFixed(2)}`;
-        }
-      }
     }, 1000);
 
     // Change Password Form logic
@@ -1497,20 +1554,28 @@
 
       // Update Card texts
       document.getElementById('card-name').textContent = sessionData.name;
-      
-      const badge = document.getElementById('card-badge');
-      badge.textContent = sessionData.type;
-      
-      const timeLabel = document.getElementById('card-time-label');
-      const finLabel = document.getElementById('card-financial-label');
-      const finValue = document.getElementById('card-financial-value');
 
+      const badge = document.getElementById('card-badge');
+      badge.textContent = sessionData.type === 'prepaid' ? 'Prepaid' : 'Postpaid';
+
+      const timeLabel = document.getElementById('card-time-label');
       if (sessionData.type === 'prepaid') {
-        timeLabel.textContent = 'Remaining Time';
-        finLabel.textContent = 'Balance';
+        timeLabel.textContent = 'Remaining';
       } else {
-        timeLabel.textContent = 'Elapsed Time';
-        finLabel.textContent = 'Session Cost';
+        timeLabel.textContent = 'Elapsed';
+      }
+
+      // Update started time
+      const startedEl = document.getElementById('card-started-value');
+      if (startedEl && startTime) {
+        let t = String(startTime).trim().replace(' ', 'T');
+        if (!/[Zz]|[+\-]\d{2}:?\d{2}$/.test(t)) t += 'Z';
+        const startMs = new Date(t).getTime();
+        if (!isNaN(startMs)) {
+          startedEl.textContent = new Date(startMs).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
+        } else {
+          startedEl.textContent = '--:--';
+        }
       }
 
       // Immediately tick the timers
@@ -1647,10 +1712,9 @@
         return;
       }
       if (state === 'announcement' && data) {
-        var annBodyText = data.body || data.text || '';
-        document.getElementById('ann-body').textContent = annBodyText;
-        document.getElementById('ann-from').textContent = '— ' + (data.from_label || data.from || 'Lab Admin');
-        document.getElementById('ann-time').textContent = data.time || 'Now';
+        // Route through full-screen blocker — user MUST dismiss before continuing
+        showAnnouncementBlocker(data);
+        return;
       }
       setIslandState(state);
     }

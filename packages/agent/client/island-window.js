@@ -137,6 +137,28 @@ ipcMain.on('island-mouse', (event, ignore) => {
   }
 });
 
+// IPC listener for announcement blocking — expand window to full screen to swallow all clicks
+ipcMain.on('set-announcement-blocking', (event, blocking) => {
+  if (islandWindow && !islandWindow.isDestroyed()) {
+    try {
+      if (blocking) {
+        const primary = screen.getPrimaryDisplay();
+        const { width, height } = primary.bounds;
+        islandWindow.setBounds({ x: 0, y: 0, width, height });
+        islandWindow.setIgnoreMouseEvents(false);
+        islandWindow.setAlwaysOnTop(true, 'screen-saver', 3);
+      } else {
+        // Restore normal position
+        repositionIsland();
+        islandWindow.setIgnoreMouseEvents(true, { forward: true });
+        islandWindow.setAlwaysOnTop(true, 'screen-saver', 2);
+      }
+    } catch (e) {
+      console.error('Failed to toggle announcement blocking:', e);
+    }
+  }
+});
+
 module.exports = {
   createIslandWindow,
   destroyIslandWindow,

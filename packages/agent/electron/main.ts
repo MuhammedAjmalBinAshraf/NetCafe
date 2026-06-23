@@ -3239,11 +3239,15 @@ function getIslandHtml(sessionData?: any): string {
     #island.s-check   { width:232px; height:36px;  border-radius:999px;
       border:1.5px solid rgba(56,189,248,0.35);
       box-shadow:0 0 22px rgba(56,189,248,0.2), 0 12px 30px rgba(0,0,0,0.65); }
-    #island.s-card    { width:342px; height:185px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:8px; }
+    #island.s-card    { width:342px; height:200px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:8px; }
+    #island.s-card.has-alert { height:250px; }
     #island.s-profile { width:342px; height:320px; border-radius:28px; padding:14px 16px; align-items:stretch; justify-content:flex-start; flex-direction:column; gap:0; }
     #island.s-banner  { width:372px; height:78px;  border-radius:22px; padding:0 16px;
       border:1.5px solid rgba(239,68,68,0.3);
       box-shadow:0 0 24px rgba(239,68,68,0.15), 0 12px 30px rgba(0,0,0,0.65); }
+    #island.s-announcement { width:372px; height:140px; border-radius:22px; padding:0 16px;
+      border:1.5px solid rgba(167,139,250,0.35);
+      box-shadow:0 0 24px rgba(167,139,250,0.2), 0 12px 30px rgba(0,0,0,0.65); }
 
     .panel {
       position:absolute; inset:0;
@@ -3292,6 +3296,9 @@ function getIslandHtml(sessionData?: any): string {
     .cost-val    { font-size:18px; font-weight:800; color:#34d399; text-shadow:0 0 14px rgba(52,211,153,0.35); }
     
     .card-actions { display:flex; gap:8px; width:100%; margin-top:4px; }
+    .card-recent-alert { margin-top:4px; padding:6px 10px; background:rgba(255,255,255,0.05); border-radius:8px; border:0.5px solid rgba(255,255,255,0.08); font-size:10px; color:rgba(255,255,255,0.7); text-align:left; }
+    .recent-alert-label { font-weight:700; color:#a78bfa; margin-bottom:2px; font-size:8px; letter-spacing:0.05em; text-transform:uppercase; }
+    .recent-alert-text { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:10px; color:#fff; }
     .exit-btn {
       flex:1; background:linear-gradient(135deg,#ef4444,#dc2626);
       color:#ffffff; border:none; border-radius:999px; padding:9px 0;
@@ -3357,9 +3364,21 @@ function getIslandHtml(sessionData?: any): string {
       border-radius:999px; padding:6px 14px; font-size:11px; font-weight:700; cursor:pointer;
       font-family:inherit; flex-shrink:0; transition:background 0.15s ease; }
     .dismiss-btn:hover { background:rgba(255,255,255,0.22); }
+    /* Announcement state */
+    #panel-announcement { flex-direction:column; gap:8px; padding:14px 16px; align-items:stretch; justify-content:flex-start; }
+    .ann-head { display:flex; align-items:center; justify-content:space-between; }
+    .ann-icon-box { width:30px; height:30px; border-radius:50%; background:rgba(167,139,250,0.18); display:flex; align-items:center; justify-content:center; font-size:15px; color:#a78bfa; }
+    .ann-title { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:0.8px; color:#a78bfa; }
+    .ann-body { font-size:12px; color:rgba(255,255,255,0.9); line-height:1.5; }
+    .ann-from { font-size:10px; color:rgba(255,255,255,0.45); }
+    .ann-dismiss { background:linear-gradient(135deg,#7c3aed,#6d28d9); color:#fff; border:none; border-radius:999px; padding:7px 18px; font-size:11px; font-weight:700; cursor:pointer; font-family:inherit; }
+    .ann-dismiss:hover { background:linear-gradient(135deg,#8b5cf6,#7c3aed); }
+    /* Blocker backdrop */
+    #blocker-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); z-index:9990; }
   </style>
 </head>
 <body>
+  <div id="blocker-backdrop"></div>
   <div class="island-row" id="row">
     <div id="island" class="s-compact">
       <div class="panel show" id="panel-compact">
@@ -3387,16 +3406,23 @@ function getIslandHtml(sessionData?: any): string {
         <div class="card-body">
           <div class="card-info">
             <span class="card-label" id="card-tlabel">Remaining</span>
-            <span class="card-val"   id="card-time">00:00:00</span>
-            <span class="card-label" style="margin-top:4px;">Started</span>
-            <span class="card-val"   id="card-start">--:--</span>
+            <span class="card-val"   id="card-time">00:00</span>
           </div>
+          <div class="card-info" style="text-align:right;">
+            <span class="card-label">Started</span>
+            <span class="card-val" id="card-start">--:--</span>
+          </div>
+        </div>
+        <div class="card-recent-alert" id="card-recent-alert" style="display:none;">
+          <div class="recent-alert-label">&#128266; Recent Announcement</div>
+          <div class="recent-alert-text" id="recent-alert-text"></div>
         </div>
         <div id="dev-log-wrap" style="display:none;">
           <div class="dev-log" id="dev-log"></div>
         </div>
         <div class="card-actions">
-          <button class="profile-btn" onclick="openProfile()">Your Profile</button>
+          <button class="profile-btn" style="font-size:11px;" onclick="openMessage()">Message</button>
+          <button class="profile-btn" onclick="openProfile()">Profile</button>
           <button class="exit-btn" onclick="onExit()">Exit Session</button>
         </div>
       </div>
@@ -3454,6 +3480,17 @@ function getIslandHtml(sessionData?: any): string {
         </div>
         <button class="dismiss-btn" onclick="onDismiss()">OK</button>
       </div>
+      <div class="panel" id="panel-announcement">
+        <div class="ann-head">
+          <div class="ann-icon-box">📢</div>
+          <span class="ann-title">Announcement</span>
+        </div>
+        <div class="ann-body" id="ann-body"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:4px;">
+          <span class="ann-from" id="ann-from">— Lab Admin</span>
+          <button class="ann-dismiss" onclick="dismissAnnouncement()">Got it</button>
+        </div>
+      </div>
     </div>
     <div id="dot" class="hidden">
       <div class="warn-pulse"></div>
@@ -3478,14 +3515,17 @@ function getIslandHtml(sessionData?: any): string {
 
     let state = 'compact', isHovered = false, isChecking = false, isProfileOpen = false;
     let alertMsg = '', bannerTimer = null;
+    let isAnnouncementBlocking = false, lastAnnouncement = '';
 
     const island = document.getElementById('island');
     const dot    = document.getElementById('dot');
     const row    = document.getElementById('row');
 
-    const ALL_STATES = ['compact','split','check','card','banner','profile'];
+    const ALL_STATES = ['compact','split','check','card','banner','profile','announcement'];
     function applyState(ns) {
       if (ns === state) return;
+      // Don't allow leaving announcement state unless explicitly dismissing
+      if (isAnnouncementBlocking && ns !== 'announcement') return;
       state = ns;
       document.querySelectorAll('.panel').forEach(p => p.classList.remove('show'));
       ALL_STATES.forEach(s => island.classList.remove('s-' + s));
@@ -3519,8 +3559,8 @@ function getIslandHtml(sessionData?: any): string {
       return Math.max(0, ((session.durationMinutes || 0) * 60) - getElapsedSec());
     }
     function fmt(sec) {
-      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
-      return [h,m,s].map(v => String(v).padStart(2,'0')).join(':');
+      const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+      return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
     }
 
     function updateUI() {
@@ -3551,8 +3591,8 @@ function getIslandHtml(sessionData?: any): string {
       tick();
     }
 
-    island.addEventListener('mouseenter', () => { if (alertMsg || isChecking || isProfileOpen) return; isHovered = true;  tick(); });
-    island.addEventListener('mouseleave', () => { if (isProfileOpen) return; isHovered = false; tick(); });
+    island.addEventListener('mouseenter', () => { if (alertMsg || isChecking || isProfileOpen || isAnnouncementBlocking) return; isHovered = true;  tick(); });
+    island.addEventListener('mouseleave', () => { if (isProfileOpen || isAnnouncementBlocking) return; isHovered = false; tick(); });
     document.addEventListener('mousemove', e => {
       const ri = island.getBoundingClientRect(), rd = dot.getBoundingClientRect();
       const inside = (x,y,r) => x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
@@ -3586,6 +3626,72 @@ function getIslandHtml(sessionData?: any): string {
     function onExit()    { ipcRenderer.send('exit-session-request'); }
     function onDismiss() { alertMsg=''; if(bannerTimer){clearTimeout(bannerTimer);bannerTimer=null;} tick(); }
     function saveLog()   { ipcRenderer.send('save-client-log'); }
+    function openMessage() { isHovered = false; applyState('message'); }
+
+    function showAnnouncementBlocker(payload) {
+      const body = payload.body || payload.text || '';
+      const from = payload.from_label || payload.from || 'Lab Admin';
+      const ab = document.getElementById('ann-body'); if (ab) ab.textContent = body;
+      const af = document.getElementById('ann-from'); if (af) af.textContent = '\u2014 ' + from;
+      lastAnnouncement = body;
+      updateRecentAlert();
+      const backdrop = document.getElementById('blocker-backdrop');
+      if (backdrop) backdrop.style.display = 'block';
+      isAnnouncementBlocking = true;
+      ipcRenderer.send('set-announcement-blocking', true);
+      state = 'announcement';
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('show'));
+      ALL_STATES.forEach(s => island.classList.remove('s-' + s));
+      island.classList.add('s-announcement');
+      dot.className = 'hidden';
+      setTimeout(() => { const p = document.getElementById('panel-announcement'); if (p) p.classList.add('show'); }, 420);
+      ipcRenderer.send('island-mouse', false);
+    }
+
+    function dismissAnnouncement() {
+      const backdrop = document.getElementById('blocker-backdrop');
+      if (backdrop) backdrop.style.display = 'none';
+      isAnnouncementBlocking = false;
+      ipcRenderer.send('set-announcement-blocking', false);
+      alertMsg = '';
+      tick();
+    }
+
+    function updateRecentAlert() {
+      const box = document.getElementById('card-recent-alert');
+      const txt = document.getElementById('recent-alert-text');
+      if (lastAnnouncement && box && txt) {
+        txt.textContent = lastAnnouncement;
+        box.style.display = 'block';
+        island.classList.add('has-alert');
+      }
+    }
+
+    ipcRenderer.on('broadcast-receive', (_, payload) => {
+      if (!payload) return;
+      if (payload.type === 'announcement') {
+        showAnnouncementBlocker(payload);
+      } else if (payload.type === 'message') {
+        // Show message in banner
+        alertMsg = payload.text || payload.body || '';
+        const ttl = document.getElementById('banner-ttl');
+        const bm  = document.getElementById('banner-msg');
+        if (ttl) { ttl.textContent = 'Message'; ttl.style.color = '#60a5fa'; }
+        if (bm)  bm.textContent = alertMsg;
+        tick();
+        if (bannerTimer) clearTimeout(bannerTimer);
+        bannerTimer = setTimeout(() => { alertMsg = ''; tick(); }, 5000);
+      } else if (payload.type === 'alert') {
+        alertMsg = payload.body || payload.text || '';
+        const ttl = document.getElementById('banner-ttl');
+        const bm  = document.getElementById('banner-msg');
+        if (ttl) { ttl.textContent = payload.title || 'Alert'; ttl.style.color = '#fbbf24'; }
+        if (bm)  bm.textContent = alertMsg;
+        tick();
+        if (bannerTimer) clearTimeout(bannerTimer);
+        bannerTimer = setTimeout(() => { alertMsg = ''; tick(); }, 5000);
+      }
+    });
 
     let activeTab = 'password';
     function openProfile() {
