@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
-  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X,
+  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Check,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
   ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles, Megaphone
@@ -57,7 +57,7 @@ export default function App() {
   })
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast' | 'messaging'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
@@ -73,18 +73,17 @@ export default function App() {
   const [settings, setSettings] = useState<any>({ lab_name: 'NetCafe Manager' })
 
   // Broadcast State variables
-  const [subTab, setSubTab] = useState<'schedule' | 'compose' | 'queue'>('compose')
   const [openTime, setOpenTime] = useState('08:00')
   const [closeTime, setCloseTime] = useState('21:00')
   const [warnMinutes, setWarnMinutes] = useState(5)
   const [repeatDays, setRepeatDays] = useState<number[]>([1, 2, 3, 4, 5]) // 1=Mon..7=Sun
-  const [composeType, setComposeType] = useState<'announcement' | 'alert' | 'message'>('announcement')
-  const [composeMessage, setComposeMessage] = useState('')
-  const [composeTitle, setComposeTitle] = useState('')
-  const [composeTarget, setComposeTarget] = useState('all')
-  const [composeSendAt, setComposeSendAt] = useState('')
-  const [broadcastQueue, setBroadcastQueue] = useState<any[]>([])
-  const [studentReplies, setStudentReplies] = useState<any[]>([])
+
+  // Messaging state
+  const [conversations, setConversations] = useState<Record<string, {role:'operator'|'client', text:string, ts:string}[]>>({'all': []})
+  const [selectedConvKey, setSelectedConvKey] = useState<string>('all')
+  const [msgInput, setMsgInput] = useState('')
+  const [unreadCounts, setUnreadCounts] = useState<Record<string,number>>({})
+  const [broadcastTypeMsg, setBroadcastTypeMsg] = useState<'announcement'|'alert'|'message'>('message')
 
 
   // AI Safety local state inputs (prevents keystroke DB lag)
@@ -95,6 +94,9 @@ export default function App() {
   const [filterIllegal, setFilterIllegal] = useState(true)
   const [customFilterTerms, setCustomFilterTerms] = useState<string[]>([])
   const [newCustomTerm, setNewCustomTerm] = useState('')
+  const [violationPenaltyMinutes, setViolationPenaltyMinutes] = useState('5')
+  const [safeQueries, setSafeQueries] = useState<Array<{id: number, query: string}>>([])
+  const [newSafeQuery, setNewSafeQuery] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [saveStatus, setSaveStatus] = useState('')
   const [aiCustomContext, setAiCustomContext] = useState('')
@@ -326,10 +328,12 @@ export default function App() {
         setFilterViolence(fresh.filter_violence !== 'false')
         setFilterSelfHarm(fresh.filter_self_harm !== 'false')
         setFilterIllegal(fresh.filter_illegal !== 'false')
+        setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
         try {
           setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
         } catch { setCustomFilterTerms([]) }
       })
+      window.ipcRenderer.invoke('get-safe-queries').then(setSafeQueries).catch(() => {})
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
@@ -393,13 +397,18 @@ export default function App() {
         if (url) setQrMode('public')
       }
       window.ipcRenderer.on('public-url-updated', publicUrlListener)
-
-      const studentReplyListener = (_: any, reply: any) => {
-        setStudentReplies(prev => {
-          const next = [...prev, reply]
-          return next.length > 50 ? next.slice(-50) : next
-        })
-      }
+  const studentReplyListener = (_: any, reply: any) => {
+    const key = reply.machine_id?.toString() || 'all'
+    const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false})
+    setConversations(prev => ({
+      ...prev,
+      [key]: [...(prev[key] || []), { role: 'client', text: reply.text || '', ts: now }]
+    }))
+    setUnreadCounts(prev => {
+      if (activeTab === 'messaging' && (selectedConvKey === key)) return prev
+      return { ...prev, [key]: (prev[key] || 0) + 1 }
+    })
+  }
       window.ipcRenderer.on('student-reply', studentReplyListener)
 
       return () => {
@@ -440,17 +449,7 @@ export default function App() {
 
   // Broadcast Logic
   useEffect(() => {
-    let interval: any;
     if (activeTab === 'broadcast') {
-      const fetchStats = () => {
-        if (window.ipcRenderer) {
-          window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {});
-          window.ipcRenderer.invoke('get-student-replies').then(setStudentReplies).catch(() => {});
-        }
-      };
-      fetchStats();
-      interval = setInterval(fetchStats, 3000); // refresh queue/replies every 3 seconds
-
       // Load schedule once when tab becomes active
       if (window.ipcRenderer) {
         window.ipcRenderer.invoke('get-broadcast-schedule').then((sched) => {
@@ -465,7 +464,6 @@ export default function App() {
         }).catch((err) => console.error("Failed to load broadcast schedule:", err));
       }
     }
-    return () => clearInterval(interval);
   }, [activeTab]);
 
   const handleSaveSchedule = () => {
@@ -483,64 +481,14 @@ export default function App() {
     }
   }
 
-  const handleSendBroadcast = (isScheduled: boolean) => {
-    if (!composeMessage.trim()) {
-      alert('Message content is required!')
-      return
-    }
 
-    let sendAtUnix: number | null = null
-    if (isScheduled && composeSendAt) {
-      const [h, m] = composeSendAt.split(':').map(Number)
-      const targetDate = new Date()
-      targetDate.setHours(h, m, 0, 0)
-      if (targetDate.getTime() <= Date.now()) {
-        targetDate.setDate(targetDate.getDate() + 1)
-      }
-      sendAtUnix = Math.floor(targetDate.getTime() / 1000)
-    }
 
-    if (window.ipcRenderer) {
-      window.ipcRenderer.invoke('send-broadcast', {
-        type: composeType,
-        title: composeType === 'alert' ? (composeTitle || 'System Alert') : null,
-        body: composeMessage,
-        from_label: 'Lab Admin',
-        target: composeTarget,
-        send_at: sendAtUnix
-      }).then(() => {
-        alert(isScheduled ? 'Broadcast scheduled successfully!' : 'Broadcast sent immediately!')
-        setComposeMessage('')
-        setComposeTitle('')
-        setComposeSendAt('')
-        // Refresh queue
-        window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {})
-      }).catch((err: any) => {
-        alert('Failed to send broadcast: ' + err.message)
-      })
-    }
-  }
-
-  const handleDeleteBroadcast = (id: number) => {
-    if (window.ipcRenderer) {
-      window.ipcRenderer.invoke('delete-broadcast', id).then(() => {
-        window.ipcRenderer.invoke('get-broadcast-queue').then(setBroadcastQueue).catch(() => {})
-      }).catch((err: any) => {
-        alert('Failed to delete broadcast: ' + err.message)
-      })
-    }
-  }
-
-  const repliesEndRef = useRef<HTMLDivElement>(null)
-  const lastRepliesLengthRef = useRef(0)
+  const chatEndRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
-    if (studentReplies && studentReplies.length > lastRepliesLengthRef.current) {
-      if (repliesEndRef.current) {
-        repliesEndRef.current.scrollIntoView({ behavior: 'smooth' })
-      }
+    if (activeTab === 'messaging' && chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' })
     }
-    lastRepliesLengthRef.current = studentReplies ? studentReplies.length : 0
-  }, [studentReplies])
+  }, [conversations, selectedConvKey, activeTab])
 
   // Scroll developer console logs to bottom
   useEffect(() => {
@@ -859,10 +807,39 @@ export default function App() {
 
 
   const handleMsgClick = (machineId: number) => {
-    const msg = prompt('Enter message to send client:')
-    if (window.ipcRenderer && msg) {
-      window.ipcRenderer.invoke('message-machine', machineId, msg)
+    const key = machineId.toString()
+    setConversations(prev => ({ ...prev, [key]: prev[key] || [] }))
+    setSelectedConvKey(key)
+    setUnreadCounts(prev => ({ ...prev, [key]: 0 }))
+    setActiveTab('messaging')
+    setSelectedDrawerMachine(null)
+  }
+
+  const handleSendMessage = async () => {
+    if (!msgInput.trim()) return
+    const text = msgInput.trim()
+    const now = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false})
+    if (selectedConvKey === 'all') {
+      if (window.ipcRenderer) {
+        await window.ipcRenderer.invoke('send-broadcast', {
+          type: broadcastTypeMsg,
+          body: text,
+          from_label: 'Lab Admin',
+          target: 'all',
+          send_at: null
+        })
+      }
+      setConversations(prev => ({ ...prev, all: [...(prev['all'] || []), { role: 'operator', text, ts: now }] }))
+    } else {
+      if (window.ipcRenderer) {
+        await window.ipcRenderer.invoke('operator-message', Number(selectedConvKey), text)
+      }
+      setConversations(prev => ({
+        ...prev,
+        [selectedConvKey]: [...(prev[selectedConvKey] || []), { role: 'operator', text, ts: now }]
+      }))
     }
+    setMsgInput('')
   }
 
   const handlePower = async (machineId: number) => {
@@ -1233,6 +1210,7 @@ export default function App() {
       setFilterViolence(fresh.filter_violence !== 'false')
       setFilterSelfHarm(fresh.filter_self_harm !== 'false')
       setFilterIllegal(fresh.filter_illegal !== 'false')
+      setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
       try {
         setCustomFilterTerms(JSON.parse(fresh.custom_filter_terms || '[]'))
       } catch { setCustomFilterTerms([]) }
@@ -1250,6 +1228,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
         await window.ipcRenderer.invoke('update-settings', 'custom_filter_terms', JSON.stringify(customFilterTerms))
         await window.ipcRenderer.invoke('update-settings', 'ai_custom_context', aiCustomContext)
+        await window.ipcRenderer.invoke('update-settings', 'violation_penalty_minutes', violationPenaltyMinutes)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
         initSettingsState(fresh)
@@ -1321,15 +1300,47 @@ export default function App() {
   }
 
   const handleAddCustomTerm = () => {
-    const term = newCustomTerm.trim()
-    if (term && !customFilterTerms.includes(term)) {
-      setCustomFilterTerms(prev => [...prev, term])
-      setNewCustomTerm('')
-    }
+    const raw = newCustomTerm.trim()
+    if (!raw) return
+    const termsToAdd = raw.split(',').map(t => t.trim()).filter(t => t.length > 0)
+    setCustomFilterTerms(prev => {
+      let updated = [...prev]
+      for (const t of termsToAdd) {
+        if (!updated.includes(t)) {
+          updated.push(t)
+        }
+      }
+      return updated
+    })
+    setNewCustomTerm('')
   }
 
   const handleRemoveCustomTerm = (term: string) => {
     setCustomFilterTerms(prev => prev.filter(t => t !== term))
+  }
+
+  const handleAddSafeQuery = async () => {
+    const query = newSafeQuery.trim()
+    if (query && window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('add-safe-query', query)
+      if (res.success) {
+        setNewSafeQuery('')
+        const fresh = await window.ipcRenderer.invoke('get-safe-queries')
+        setSafeQueries(fresh)
+      } else {
+        alert(res.error || 'Failed to add safe query')
+      }
+    }
+  }
+
+  const handleDeleteSafeQuery = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('delete-safe-query', id)
+      if (res.success) {
+        const fresh = await window.ipcRenderer.invoke('get-safe-queries')
+        setSafeQueries(fresh)
+      }
+    }
   }
 
   const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
@@ -1632,6 +1643,19 @@ export default function App() {
               }`}
             >
               <Megaphone size={18} /> Broadcast
+            </button>
+            <button
+              onClick={() => { setActiveTab('messaging'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'messaging' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <MessageSquare size={18} /> Messaging
+              {Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0) > 0 && (
+                <span className="ml-auto bg-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                  {Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0) > 99 ? '99+' : Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0)}
+                </span>
+              )}
             </button>
             <button
               onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null) }}
@@ -2443,6 +2467,73 @@ export default function App() {
                       <div ref={filterLogEndRef} />
                     </div>
                   </div>
+
+                  {/* Safe Queries (Non-Violation List) */}
+                  <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden shadow-lg space-y-4 p-5">
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <Check size={16} className="text-emerald-400" /> Safe Queries (Non-Violation List)
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Queries matching these terms bypass Gemini AI checks completely for a faster client experience.
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Enter safe query (e.g. time, translate)..."
+                        value={newSafeQuery}
+                        onChange={(e) => setNewSafeQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddSafeQuery();
+                          }
+                        }}
+                        className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
+                      />
+                      <button
+                        onClick={handleAddSafeQuery}
+                        className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg transition-colors flex items-center gap-1 shrink-0 text-xs font-bold"
+                      >
+                        <Plus size={14} /> Add
+                      </button>
+                    </div>
+
+                    {safeQueries.length === 0 ? (
+                      <div className="text-slate-600 text-xs py-4 text-center">
+                        No safe queries added yet.
+                      </div>
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto border border-slate-900 rounded-lg bg-slate-950/20">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-semibold">
+                              <th className="p-2.5">Safe Query / Phrase</th>
+                              <th className="p-2.5 text-right w-16">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            {safeQueries.map((q) => (
+                              <tr key={q.id} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-2.5 font-mono text-slate-300">{q.query}</td>
+                                <td className="p-2.5 text-right">
+                                  <button
+                                    onClick={() => handleDeleteSafeQuery(q.id)}
+                                    className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                    title="Delete"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Right Side: Configuration Cards */}
@@ -2539,6 +2630,20 @@ export default function App() {
                           ))}
                         </div>
                       )}
+                    </div>
+
+                    {/* Violation Penalty Minutes */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold uppercase text-slate-400 block">Violation Penalty Fine (Minutes)</label>
+                      <input
+                        type="number"
+                        min="1"
+                        max="120"
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
+                        value={violationPenaltyMinutes}
+                        onChange={(e) => setViolationPenaltyMinutes(e.target.value)}
+                      />
+                      <p className="text-[10px] text-slate-500">Deducted from registered users' prepaid sessions on their 2nd and subsequent violations.</p>
                     </div>
 
                     {/* Custom AI Context / Rules */}
@@ -3347,299 +3452,256 @@ Respond strictly in JSON format:
               <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 pb-4 border-b border-slate-900">
                 <div>
                   <h2 className="text-xl font-bold text-white">Broadcast Console</h2>
-                  <p className="text-slate-400 text-sm mt-1">Send immediate notifications or schedule announcements to terminal PCs.</p>
+                  <p className="text-slate-400 text-sm mt-1">Configure automated notifications and alert schedules for terminal PCs.</p>
                 </div>
               </div>
 
-              {/* Sub-tabs */}
-              <div className="flex gap-2 border-b border-slate-900 pb-3">
-                <button
-                  onClick={() => setSubTab('schedule')}
-                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-                    subTab === 'schedule' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Schedule
-                </button>
-                <button
-                  onClick={() => setSubTab('compose')}
-                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-                    subTab === 'compose' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Compose & Send
-                </button>
-                <button
-                  onClick={() => setSubTab('queue')}
-                  className={`px-4 py-2 text-sm font-semibold rounded-lg transition-all ${
-                    subTab === 'queue' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Queue
-                </button>
-              </div>
-
-              {/* Sub-tab Content */}
+              {/* Content */}
               <div className="bg-slate-950/40 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
-                {subTab === 'schedule' && (
-                  <div className="space-y-6 max-w-xl">
-                    <h3 className="text-lg font-semibold text-white">Lab closing alert schedule</h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Open Time</label>
-                        <input
-                          type="time"
-                          value={openTime}
-                          onChange={(e) => setOpenTime(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Close Time</label>
-                        <input
-                          type="time"
-                          value={closeTime}
-                          onChange={(e) => setCloseTime(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                        />
-                      </div>
-                    </div>
-
+                <div className="space-y-6 max-w-xl">
+                  <h3 className="text-lg font-semibold text-white">Lab closing alert schedule</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Repeat Days</label>
-                      <div className="flex flex-wrap gap-2">
-                        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, idx) => {
-                          const dayNum = idx + 1;
-                          const active = repeatDays.includes(dayNum);
-                          return (
-                            <button
-                              key={idx}
-                              onClick={() => {
-                                if (active) {
-                                  setRepeatDays(repeatDays.filter(d => d !== dayNum));
-                                } else {
-                                  setRepeatDays([...repeatDays, dayNum].sort());
-                                }
-                              }}
-                              className={`w-10 h-10 rounded-lg font-semibold text-sm flex items-center justify-center border transition-all ${
-                                active
-                                  ? 'bg-blue-600 border-blue-500 text-white'
-                                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
-                              }`}
-                            >
-                              {day}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Warn before close</label>
-                      <select
-                        value={warnMinutes}
-                        onChange={(e) => setWarnMinutes(Number(e.target.value))}
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Open Time</label>
+                      <input
+                        type="time"
+                        value={openTime}
+                        onChange={(e) => setOpenTime(e.target.value)}
                         className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                      >
-                        <option value={5}>5 min before close</option>
-                        <option value={10}>10 min before close</option>
-                        <option value={15}>15 min before close</option>
-                        <option value={30}>30 min before close</option>
-                      </select>
+                      />
                     </div>
-
-                    <button
-                      onClick={handleSaveSchedule}
-                      className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors font-bold"
-                    >
-                      Save Schedule
-                    </button>
-
-                    <div className="text-xs text-slate-450 mt-2 font-medium">
-                      Note: Alert auto-sent to all PCs {warnMinutes} minutes before close
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Close Time</label>
+                      <input
+                        type="time"
+                        value={closeTime}
+                        onChange={(e) => setCloseTime(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                      />
                     </div>
                   </div>
-                )}
 
-                {subTab === 'compose' && (
-                  <div className="space-y-6 max-w-2xl">
-                    <h3 className="text-lg font-semibold text-white">Compose Broadcast</h3>
-                    
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Broadcast Type</label>
-                      <div className="flex gap-2">
-                        {['announcement', 'alert', 'message'].map((t) => (
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Repeat Days</label>
+                    <div className="flex flex-wrap gap-2">
+                      {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, idx) => {
+                        const dayNum = idx + 1;
+                        const active = repeatDays.includes(dayNum);
+                        return (
                           <button
-                            key={t}
-                            onClick={() => setComposeType(t as any)}
-                            className={`px-4 py-2 text-sm font-semibold rounded-lg capitalize border transition-all ${
-                              composeType === t
-                                ? 'bg-blue-600 border-blue-500 text-white font-bold'
+                            key={idx}
+                            onClick={() => {
+                              if (active) {
+                                setRepeatDays(repeatDays.filter(d => d !== dayNum));
+                              } else {
+                                setRepeatDays([...repeatDays, dayNum].sort());
+                              }
+                            }}
+                            className={`w-10 h-10 rounded-lg font-semibold text-sm flex items-center justify-center border transition-all ${
+                              active
+                                ? 'bg-blue-600 border-blue-500 text-white'
                                 : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
                             }`}
                           >
-                            {t}
+                            {day}
                           </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {composeType === 'alert' && (
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Alert Title</label>
-                        <input
-                          type="text"
-                          placeholder="e.g. Lab Closing Soon"
-                          value={composeTitle}
-                          onChange={(e) => setComposeTitle(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                        />
-                      </div>
-                    )}
-
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Message Content</label>
-                      <textarea
-                        rows={4}
-                        placeholder="Type your message here..."
-                        value={composeMessage}
-                        onChange={(e) => setComposeMessage(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors resize-none"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">To</label>
-                        <select
-                          value={composeTarget}
-                          onChange={(e) => setComposeTarget(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                        >
-                          <option value="all">All PCs</option>
-                          {machines.map((m) => (
-                            <option key={m.id} value={m.id}>
-                              {m.name || `PC-${m.id}`}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Send at (Optional)</label>
-                        <input
-                          type="time"
-                          value={composeSendAt}
-                          onChange={(e) => setComposeSendAt(e.target.value)}
-                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => handleSendBroadcast(false)}
-                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg transition-colors"
-                      >
-                        Send Now
-                      </button>
-                      <button
-                        onClick={() => handleSendBroadcast(true)}
-                        disabled={!composeSendAt}
-                        className="px-6 py-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-lg transition-colors"
-                      >
-                        Schedule
-                      </button>
+                        );
+                      })}
                     </div>
                   </div>
-                )}
 
-                {subTab === 'queue' && (
-                  <div className="space-y-4">
-                    <h3 className="text-lg font-semibold text-white">Scheduled Broadcasts</h3>
-                    {broadcastQueue.length === 0 ? (
-                      <div className="text-slate-550 text-center py-8">No scheduled broadcasts</div>
-                    ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-sm text-slate-300">
-                          <thead>
-                            <tr className="border-b border-slate-900 text-slate-400">
-                              <th className="py-2.5">Time</th>
-                              <th className="py-2.5">Type</th>
-                              <th className="py-2.5">Message</th>
-                              <th className="py-2.5">Target</th>
-                              <th className="py-2.5 text-right">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {broadcastQueue.map((item) => {
-                              const timeStr = new Date(item.send_at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                              return (
-                                <tr key={item.id} className="border-b border-slate-900/50 hover:bg-slate-900/20">
-                                  <td className="py-3 font-semibold">{timeStr}</td>
-                                  <td className="py-3">
-                                    <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-500/20 text-blue-400 capitalize">
-                                      {item.type}
-                                    </span>
-                                  </td>
-                                  <td className="py-3 truncate max-w-xs">{item.body}</td>
-                                  <td className="py-3">
-                                    {item.target === 'all' ? 'All PCs' : machines.find(m => m.id.toString() === item.target.toString())?.name || `PC-${item.target}`}
-                                  </td>
-                                  <td className="py-3 text-right">
-                                    <button
-                                      onClick={() => handleDeleteBroadcast(item.id)}
-                                      className="text-red-400 hover:text-red-300 font-semibold text-xs transition-colors"
-                                    >
-                                      Delete
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Warn before close</label>
+                    <select
+                      value={warnMinutes}
+                      onChange={(e) => setWarnMinutes(Number(e.target.value))}
+                      className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2.5 text-white outline-none focus:border-blue-500 transition-colors"
+                    >
+                      <option value={5}>5 min before close</option>
+                      <option value={10}>10 min before close</option>
+                      <option value={15}>15 min before close</option>
+                      <option value={30}>30 min before close</option>
+                    </select>
                   </div>
-                )}
-              </div>
 
-              {/* Student Replies Section */}
-              <div className="bg-slate-950/40 backdrop-blur-md border border-slate-900 rounded-2xl p-6">
-                <h3 className="text-lg font-semibold text-white mb-4">Student replies section</h3>
-                <div className="bg-slate-950 border border-slate-900 rounded-xl h-64 overflow-y-auto p-4 space-y-3">
-                  {studentReplies.length === 0 ? (
-                    <div className="text-slate-550 text-center py-20 text-sm">No replies from students yet</div>
-                  ) : (
-                    studentReplies.map((reply, idx) => (
-                      <div
-                        key={idx}
-                        onClick={() => {
-                          setSubTab('compose');
-                          setComposeType('message');
-                          setComposeTarget(reply.machine_id.toString());
-                        }}
-                        className="p-3 bg-slate-900/40 hover:bg-slate-900 border border-slate-900/40 hover:border-slate-800 rounded-xl cursor-pointer transition-all flex justify-between items-start gap-4 group"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-blue-400">{reply.machine_name}</span>
-                            <span className="text-[10px] text-slate-500">{reply.timestamp}</span>
-                          </div>
-                          <p className="text-sm text-slate-200">{reply.text}</p>
-                        </div>
-                        <span className="text-[10px] text-slate-500 font-semibold group-hover:text-slate-300 transition-colors">Reply →</span>
-                      </div>
-                    ))
-                  )}
-                  <div ref={repliesEndRef} />
+                  <button
+                    onClick={handleSaveSchedule}
+                    className="px-6 py-2.5 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg transition-colors font-bold"
+                  >
+                    Save Schedule
+                  </button>
+
+                  <div className="text-xs text-slate-450 mt-2 font-medium">
+                    Note: Alert auto-sent to all PCs {warnMinutes} minutes before close
+                  </div>
                 </div>
               </div>
             </div>
           )}
 
+          {/* TAB: Messaging */}
+          {activeTab === 'messaging' && (() => {
+            const convMachines = [
+              { id: 'all', name: 'All PCs', status: 'online', label: 'Broadcast to everyone' },
+              ...machines.map((m: any) => ({ id: m.id.toString(), name: m.name, status: m.status, label: m.status === 'online' ? 'Online' : 'Offline' }))
+            ]
+            const msgs = conversations[selectedConvKey] || []
+            const selectedMachine = selectedConvKey === 'all'
+              ? { name: 'All PCs', status: 'online' }
+              : machines.find((m: any) => m.id.toString() === selectedConvKey) || { name: `PC-${selectedConvKey}`, status: 'offline' }
+
+            return (
+              <div className="flex h-[calc(100vh-120px)] gap-0 bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
+
+                {/* Left — Conversation List */}
+                <div className="w-64 flex-shrink-0 border-r border-slate-800 flex flex-col">
+                  <div className="p-4 border-b border-slate-800">
+                    <h2 className="text-sm font-bold text-white">Conversations</h2>
+                    <p className="text-[10px] text-slate-500 mt-0.5">Two-way messaging &amp; broadcasts</p>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    {convMachines.map(m => {
+                      const convMsgs = conversations[m.id] || []
+                      const lastMsg = convMsgs[convMsgs.length - 1]
+                      const unread = unreadCounts[m.id] || 0
+                      const isSelected = selectedConvKey === m.id
+                      return (
+                        <button
+                          key={m.id}
+                          onClick={() => {
+                            setSelectedConvKey(m.id)
+                            setUnreadCounts(prev => ({ ...prev, [m.id]: 0 }))
+                            if (!conversations[m.id]) setConversations(prev => ({ ...prev, [m.id]: [] }))
+                          }}
+                          className={`w-full text-left px-4 py-3 border-b border-slate-800/60 transition-all flex items-start gap-3 ${
+                            isSelected ? 'bg-blue-600/20 border-l-2 border-l-blue-500' : 'hover:bg-slate-900/50'
+                          }`}
+                        >
+                          {/* Avatar */}
+                          <div className={`mt-0.5 w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-xs font-bold ${
+                            m.id === 'all' ? 'bg-purple-600/30 text-purple-300' :
+                            m.status === 'online' ? 'bg-emerald-600/20 text-emerald-300' : 'bg-slate-700/40 text-slate-500'
+                          }`}>
+                            {m.id === 'all' ? '📣' : m.name.slice(0,2).toUpperCase()}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className={`text-xs font-semibold truncate ${isSelected ? 'text-white' : 'text-slate-300'}`}>{m.name}</span>
+                              {unread > 0 && (
+                                <span className="ml-1 bg-blue-500 text-white text-[9px] font-bold px-1.5 py-0.5 rounded-full min-w-[16px] text-center flex-shrink-0">
+                                  {unread > 9 ? '9+' : unread}
+                                </span>
+                              )}
+                            </div>
+                            {lastMsg ? (
+                              <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                                {lastMsg.role === 'operator' ? '↗ You: ' : '↙ '}{lastMsg.text}
+                              </p>
+                            ) : (
+                              <p className="text-[10px] text-slate-600 truncate mt-0.5">{m.label}</p>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Right — Chat Panel */}
+                <div className="flex-1 flex flex-col min-w-0">
+
+                  {/* Chat header */}
+                  <div className="px-5 py-3.5 border-b border-slate-800 flex items-center gap-3 bg-slate-950/30">
+                    <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
+                      selectedConvKey === 'all' ? 'bg-purple-400' :
+                      (machines.find((m:any) => m.id.toString() === selectedConvKey)?.status === 'online' ? 'bg-emerald-400' : 'bg-slate-600')
+                    }`} />
+                    <div>
+                      <span className="text-sm font-bold text-white">{selectedMachine.name}</span>
+                      {selectedConvKey === 'all' && (
+                        <span className="ml-2 text-[10px] text-purple-300 font-semibold">Broadcast to all connected PCs</span>
+                      )}
+                    </div>
+                    {/* Broadcast type picker — only for All PCs */}
+                    {selectedConvKey === 'all' && (
+                      <div className="ml-auto flex items-center gap-2">
+                        <span className="text-[10px] text-slate-500 font-semibold">Type:</span>
+                        {(['message','alert','announcement'] as const).map(t => (
+                          <button
+                            key={t}
+                            onClick={() => setBroadcastTypeMsg(t)}
+                            className={`text-[10px] font-bold px-2 py-1 rounded-full capitalize transition-all ${
+                              broadcastTypeMsg === t
+                                ? t === 'announcement' ? 'bg-purple-600 text-white'
+                                  : t === 'alert' ? 'bg-amber-600 text-white'
+                                  : 'bg-blue-600 text-white'
+                                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                            }`}
+                          >{t}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Messages area */}
+                  <div className="flex-1 overflow-y-auto p-5 space-y-3" id="msg-chat-area">
+                    {msgs.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center h-full text-slate-600 gap-3">
+                        <MessageSquare size={36} className="opacity-30" />
+                        <p className="text-sm">No messages yet</p>
+                        {selectedConvKey === 'all'
+                          ? <p className="text-xs text-slate-700">Send a broadcast to all connected PCs</p>
+                          : <p className="text-xs text-slate-700">Send a message to start a conversation</p>
+                        }
+                      </div>
+                    ) : (
+                      msgs.map((msg, i) => (
+                        <div key={i} className={`flex ${msg.role === 'operator' ? 'justify-end' : 'justify-start'}`}>
+                          <div className={`max-w-[72%] px-4 py-2.5 rounded-2xl shadow-sm ${
+                            msg.role === 'operator'
+                              ? 'bg-blue-600 text-white rounded-br-md'
+                              : 'bg-slate-800 text-slate-100 rounded-bl-md'
+                          }`}>
+                            <p className="text-sm leading-relaxed">{msg.text}</p>
+                            <span className={`text-[9px] mt-1 block ${msg.role === 'operator' ? 'text-blue-200' : 'text-slate-500'}`}>{msg.ts}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                    <div ref={chatEndRef} />
+                  </div>
+
+                  {/* Compose bar */}
+                  <div className="px-4 py-3 border-t border-slate-800 bg-slate-950/30 flex items-end gap-3">
+                    <textarea
+                      value={msgInput}
+                      onChange={e => setMsgInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); handleSendMessage() } }}
+                      placeholder={
+                        selectedConvKey === 'all'
+                          ? `Broadcast ${broadcastTypeMsg} to all PCs… (Ctrl+Enter to send)`
+                          : `Message ${selectedMachine.name}… (Ctrl+Enter to send)`
+                      }
+                      rows={2}
+                      className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-600 resize-none focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!msgInput.trim()}
+                      className="flex-shrink-0 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white font-semibold px-5 py-2.5 rounded-xl text-sm transition-all flex items-center gap-2"
+                    >
+                      Send
+                    </button>
+                  </div>
+                </div>
+
+              </div>
+            )
+          })()}
+
           {/* TAB: Activity Log */}
           {activeTab === 'activity_log' && (() => {
+
             const filteredLogs = allActivityLogs.filter((log: any) => {
               if (aiSearchResultIds && !aiSearchResultIds.has(log.id)) {
                 return false

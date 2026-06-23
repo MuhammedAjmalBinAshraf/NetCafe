@@ -259,6 +259,18 @@ function setupDatabase() {
   // Operator (client-side) PIN password
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('operator_password', 'admin');")
 
+  // Create safe queries table (Non-Violation List)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS safe_queries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      query TEXT UNIQUE NOT NULL
+    );
+  `)
+
+  // Default violation penalty in minutes
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_minutes', '5');")
+
+
   // Refund and complete any active sessions at startup, set machines to available so they lock
   try {
     const activeSessions = db.prepare("SELECT id FROM sessions WHERE end_time IS NULL").all() as any[]
@@ -742,42 +754,47 @@ function handleClientMessage(socket: net.Socket, data: any) {
               // Emit live filter log: new query received
               if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'info', message: `NEW QUERY from machine ${Number(machineId)}: "${query}"`, machineId: Number(machineId), query })
 
-              // Synchronous custom-term check (Layer 1 — no API call needed)
-              let customTermsRaw = db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get()?.value || '[]'
-              let customTerms: string[] = []
-              try { customTerms = JSON.parse(customTermsRaw) } catch {}
-              const lowerQuery = query.toLowerCase()
-              const matchedTerm = customTerms.find((t: string) => t && lowerQuery.includes(t.toLowerCase()))
-              if (matchedTerm) {
-                logToUI(`Safety Guard CUSTOM TERM MATCH on machine ID ${Number(machineId)}: "${query}" matched term "${matchedTerm}"`)
-                
-                let windowHitUserDetails = 'Walk-in User'
-                try {
-                  const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
-                  if (activeSess?.customer_name) windowHitUserDetails = activeSess.customer_name
-                } catch {}
-
-                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — User: "${windowHitUserDetails}" — Locking machine ${Number(machineId)}`, machineId: Number(machineId), query })
-                db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom blocked term: "${matchedTerm}"`, windowHitUserDetails)
-                sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
-                sendCommandToMachine(Number(machineId), { command: 'message', payload: `Your terminal has been locked: blocked search term detected ("${matchedTerm}").` })
-                if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${matchedTerm}"`, userDetails: windowHitUserDetails })
-                broadcastMachines()
+              // Safe Queries (Non-Violation List) check first
+              const safeQueryRow = db.prepare("SELECT 1 FROM safe_queries WHERE lower(query) = ?").get(query.trim().toLowerCase())
+              if (safeQueryRow) {
+                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 SAFE LIST PASSED — Safe query "${query}" matched`, machineId: Number(machineId), query })
+                // Skip further safety checks for safe queries
               } else {
-                if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 PASSED — No custom term match for "${query}"`, machineId: Number(machineId), query })
-              }
+                // Synchronous custom-term check (Layer 1 — no API call needed)
+                let customTermsRaw = db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get()?.value || '[]'
+                let customTerms: string[] = []
+                try { customTerms = JSON.parse(customTermsRaw) } catch {}
+                const lowerQuery = query.toLowerCase()
+                const matchedTerm = customTerms.find((t: string) => t && lowerQuery.includes(t.toLowerCase()))
+                if (matchedTerm) {
+                  logToUI(`Safety Guard CUSTOM TERM MATCH on machine ID ${Number(machineId)}: "${query}" matched term "${matchedTerm}"`)
+                  
+                  let windowHitUserDetails = 'Walk-in User'
+                  try {
+                    const activeSess = db.prepare("SELECT customer_name FROM sessions WHERE machine_id = ? AND status = 'active' ORDER BY start_time DESC LIMIT 1").get(Number(machineId)) as any
+                    if (activeSess?.customer_name) windowHitUserDetails = activeSess.customer_name
+                  } catch {}
 
-              const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
-              const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false'
-              const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false'
-              const filterIllegal = db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get()?.value !== 'false'
-              checkQuerySafety(Number(machineId), query, apiKey, {
-                porn: filterPorn,
-                violence: filterViolence,
-                selfHarm: filterSelfHarm,
-                illegal: filterIllegal,
-                customTerms
-              })
+                  if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'block', message: `LAYER 1 BLOCKED — Custom term "${matchedTerm}" matched — User: "${windowHitUserDetails}"`, machineId: Number(machineId), query })
+                  enforceViolation(Number(machineId), query, `Custom term: "${matchedTerm}"`, windowHitUserDetails, (lvl, msg) => {
+                    if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: lvl, message: msg, machineId: Number(machineId), query })
+                  })
+                } else {
+                  if (mainWindow) mainWindow.webContents.send('filter-log', { timestamp: ts, level: 'allow', message: `LAYER 1 PASSED — No custom term match for "${query}"`, machineId: Number(machineId), query })
+                  
+                  const filterPorn = db.prepare("SELECT value FROM settings WHERE key = 'filter_porn'").get()?.value !== 'false'
+                  const filterViolence = db.prepare("SELECT value FROM settings WHERE key = 'filter_violence'").get()?.value !== 'false'
+                  const filterSelfHarm = db.prepare("SELECT value FROM settings WHERE key = 'filter_self_harm'").get()?.value !== 'false'
+                  const filterIllegal = db.prepare("SELECT value FROM settings WHERE key = 'filter_illegal'").get()?.value !== 'false'
+                  checkQuerySafety(Number(machineId), query, apiKey, {
+                    porn: filterPorn,
+                    violence: filterViolence,
+                    selfHarm: filterSelfHarm,
+                    illegal: filterIllegal,
+                    customTerms
+                  })
+                }
+              }
             }
           }
         }
@@ -933,6 +950,17 @@ function handleClientMessage(socket: net.Socket, data: any) {
 
     emitLog('info', `[MITM] Check request — Machine ${machineId}: "${query}" (ID: ${requestId})`)
 
+    // Safe Queries (Non-Violation List) check first
+    const cleanQ = query.trim().toLowerCase()
+    const isSafe = db.prepare("SELECT 1 FROM safe_queries WHERE lower(query) = ?").get(cleanQ)
+    if (isSafe) {
+      emitLog('allow', `[MITM] SAFE LIST MATCHED — Query "${query}" is safe`)
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true, message: 'Query allowed by Safe List / AI' } }) + '\n')
+      }
+      return
+    }
+
     // Layer 1: custom blocked terms (instant)
     let customTerms: string[] = []
     try { customTerms = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'custom_filter_terms'").get() as any)?.value || '[]') } catch {}
@@ -940,8 +968,6 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const hit = customTerms.find((t: string) => t && lowerQ.includes(t.toLowerCase()))
     
     const apiKey = (db.prepare("SELECT value FROM settings WHERE key = 'gemini_api_key'").get() as any)?.value || ''
-    // Only run instant block if AI safety filter is enabled or Gemini API key is missing.
-    // If Gemini is active, we delegate the check to Gemini so it can analyze context (e.g. esoteric study vs entertainment).
     if (hit) {
       // Resolve active user for this machine
       let hitUserDetails2 = 'Walk-in User'
@@ -950,24 +976,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
         if (activeSess?.customer_name) hitUserDetails2 = activeSess.customer_name
       } catch {}
 
-      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — User: "${hitUserDetails2}" — locking Machine ${machineId}`)
-      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)").run(Number(machineId), query, `Custom term: "${hit}"`, hitUserDetails2)
-
-      // Progressive enforcement
-      const machineRow2 = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(Number(machineId)) as any
-      const violCount2 = (machineRow2?.violation_count || 0) + 1
-      db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(violCount2, Number(machineId))
-
-      if (violCount2 === 1) {
-        sendCommandToMachine(Number(machineId), { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${hit}" is not allowed. This is your first warning. Further violations will lock your terminal.` })
-        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2, warned: true })
-        broadcastMachines()
-      } else {
-        sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
-        sendCommandToMachine(Number(machineId), { command: 'message', payload: `Terminal locked: repeated blocked search detected ("${hit}"). Please visit the Lab In-Charge to continue.` })
-        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: `Custom term: "${hit}"`, userDetails: hitUserDetails2 })
-        broadcastMachines()
-      }
+      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — term: "${hit}" — User: "${hitUserDetails2}"`)
+      enforceViolation(Number(machineId), query, `Custom term: "${hit}"`, hitUserDetails2, emitLog)
 
       if (!socket.destroyed) {
         socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
@@ -1005,28 +1015,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
             if (activeSess?.customer_name) l2UserDetails = activeSess.customer_name
           } catch {}
 
-          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — User: "${l2UserDetails}" — Category: "${result.category}" — locking Machine ${machineId}`)
-          db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
-            .run(Number(machineId), query, result.category || 'Unsafe content', l2UserDetails)
-
-          // Progressive enforcement
-          const l2machineRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(Number(machineId)) as any
-          const l2violCount = (l2machineRow?.violation_count || 0) + 1
-          db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(l2violCount, Number(machineId))
-
-          if (l2violCount === 1) {
-            sendCommandToMachine(Number(machineId), { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${query}" may violate safety rules (${result.category || 'Inappropriate Content'}). This is your first warning. Further violations will lock your terminal.` })
-            if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails: l2UserDetails, warned: true })
-            broadcastMachines()
-          } else {
-            sendCommandToMachine(Number(machineId), { command: 'lock', payload: { isViolation: true, query: query } })
-            sendCommandToMachine(Number(machineId), { 
-              command: 'message', 
-              payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
-            })
-            if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId: Number(machineId), query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails: l2UserDetails })
-            broadcastMachines()
-          }
+          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — User: "${l2UserDetails}" — Category: "${result.category}"`)
+          enforceViolation(Number(machineId), query, result.category || 'Unsafe content', l2UserDetails, emitLog)
 
           if (!socket.destroyed) {
             socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
@@ -1034,7 +1024,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
         } else {
           emitLog('allow', `[MITM] LAYER 2 ALLOWED — Query "${query}" is safe (${result.reason || 'No issues'})`)
           if (!socket.destroyed) {
-            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true, message: 'Query allowed by AI safety check' } }) + '\n')
           }
         }
       } catch (err: any) {
@@ -1590,6 +1580,17 @@ Start-Sleep -Seconds 5
 Restart-Computer -Force
 `);
   });
+
+  // Serve local agent updates statically
+  const serverAgentUpdateDir = 'C:\\NetCafe\\updates\\agent';
+  try {
+    if (!fs.existsSync(serverAgentUpdateDir)) {
+      fs.mkdirSync(serverAgentUpdateDir, { recursive: true });
+    }
+  } catch (e: any) {
+    console.error('Failed to create updates directory:', e);
+  }
+  webApp.use('/updates/agent', express.static(serverAgentUpdateDir));
 
   // Serve static UI assets in production/packaged app
   const distPath = path.join(__dirname, '../dist');
@@ -2296,6 +2297,38 @@ ipcMain.handle('clear-safety-alerts', () => {
   return { success: true }
 })
 
+ipcMain.handle('get-safe-queries', () => {
+  if (!db) return []
+  return db.prepare("SELECT * FROM safe_queries ORDER BY query ASC").all()
+})
+
+ipcMain.handle('add-safe-query', (_, query) => {
+  if (!db) return { success: false }
+  try {
+    const info = db.prepare("INSERT INTO safe_queries (query) VALUES (?)").run(query.trim())
+    return { success: true, id: info.lastInsertRowid }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('delete-safe-query', (_, id) => {
+  if (!db) return { success: false }
+  db.prepare("DELETE FROM safe_queries WHERE id = ?").run(id)
+  return { success: true }
+})
+
+ipcMain.handle('update-safe-query', (_, id, query) => {
+  if (!db) return { success: false }
+  try {
+    db.prepare("UPDATE safe_queries SET query = ? WHERE id = ?").run(query.trim(), id)
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+
 ipcMain.handle('get-broadcast-schedule', () => {
   if (!db) return null
   return db.prepare("SELECT * FROM scheduled_times WHERE id = 1").get()
@@ -2766,8 +2799,125 @@ ipcMain.handle('execute-remote-command', (_, machineId, commandLine) => {
   sendCommandToMachine(machineId, { command: 'execute-command', payload: { commandLine } })
 })
 
+function enforceViolation(
+  machineId: number,
+  query: string,
+  reasonText: string,
+  userDetails: string,
+  emitLog: (level: 'info' | 'warn' | 'block' | 'allow', message: string) => void
+) {
+  // Insert alert into safety_alerts
+  db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
+    .run(machineId, query, reasonText, userDetails)
+
+  // Progressive enforcement
+  const machineRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(machineId) as any
+  const violCount = (machineRow?.violation_count || 0) + 1
+  db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(violCount, machineId)
+
+  // Check if registered user (not guest / walk-in)
+  let isRegisteredUser = false
+  if (userDetails && userDetails !== 'Walk-in' && userDetails !== 'Walk-in User' && userDetails !== 'Guest') {
+    const dbUser = db.prepare("SELECT id FROM users WHERE username = ? OR display_name = ?").get(userDetails, userDetails) as any
+    if (dbUser) {
+      isRegisteredUser = true
+    }
+  }
+
+  // Get penalty setting
+  const penaltyMinutesSetting = db.prepare("SELECT value FROM settings WHERE key = 'violation_penalty_minutes'").get() as any
+  const penaltyMinutes = Number(penaltyMinutesSetting?.value || '5')
+
+  if (violCount === 1) {
+    // 1st violation: warning
+    emitLog('block', `❌ 1st VIOLATION WARNING — User: "${userDetails}" — Query: "${query}" — warning Machine ${machineId}`)
+    sendCommandToMachine(machineId, { 
+      command: 'message', 
+      payload: `⚠️ Safety Violation Warning: Your search "${query}" is not allowed. This is your first warning. Further violations will incur penalty deductions.` 
+    })
+    if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
+      machineId, 
+      query, 
+      reason: reasonText, 
+      userDetails, 
+      warned: true 
+    })
+    broadcastMachines()
+  } else {
+    // 2nd or subsequent violation
+    if (isRegisteredUser) {
+      // Registered User: Fine penalty deduction (NO lock / NO pause)
+      emitLog('block', `❌ REPEATED VIOLATION (Penalty Fine) — User: "${userDetails}" — Deducting ${penaltyMinutes} mins — Machine ${machineId}`)
+      
+      const activeSess = db.prepare("SELECT id, custom_duration, start_time, paused_duration FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+      if (activeSess) {
+        const oldDuration = activeSess.custom_duration || 0
+        const newDuration = Math.max(0, oldDuration - penaltyMinutes)
+        db.prepare("UPDATE sessions SET custom_duration = ? WHERE id = ?").run(newDuration, activeSess.id)
+        
+        // Calculate remaining seconds to see if session expires immediately
+        const elapsed = activeSess.paused_duration 
+          ? (activeSess.paused_duration - Math.floor(new Date(activeSess.start_time).getTime() / 1000))
+          : (Math.floor(Date.now() / 1000) - Math.floor(new Date(activeSess.start_time).getTime() / 1000))
+        const remainingSeconds = Math.max(0, (newDuration * 60) - elapsed)
+        
+        if (remainingSeconds <= 0) {
+          // Expire session immediately
+          db.prepare("UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE id = ?").run(activeSess.id)
+          db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
+          sendCommandToMachine(machineId, { command: 'lock' })
+          sendCommandToMachine(machineId, { 
+            command: 'message', 
+            payload: `Terminal locked: your session has expired due to safety penalty deductions.` 
+          })
+        } else {
+          // Sync updated duration
+          sendCommandToMachine(machineId, {
+            command: 'sync-session',
+            session: {
+              startTime: activeSess.start_time,
+              mode: 'prepaid',
+              durationMinutes: newDuration,
+              customDuration: newDuration
+            }
+          })
+          sendCommandToMachine(machineId, { 
+            command: 'message', 
+            payload: `⚠️ Safety Violation Penalty: Search "${query}" is not allowed. A penalty of ${penaltyMinutes} minutes has been deducted from your session.` 
+          })
+        }
+      }
+      
+      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
+        machineId, 
+        query, 
+        reason: `${reasonText} (Penalty: ${penaltyMinutes} min deducted)`, 
+        userDetails, 
+        warned: true
+      })
+      broadcastMachines()
+    } else {
+      // Guest / Walk-in: lock the machine
+      emitLog('block', `❌ REPEATED VIOLATION (Lock) — User: "${userDetails}" — Locking Machine ${machineId}`)
+      sendCommandToMachine(machineId, { command: 'lock', payload: { isViolation: true, query: query } })
+      sendCommandToMachine(machineId, { 
+        command: 'message', 
+        payload: `Terminal locked: repeated blocked search detected ("${query}"). Please visit the Lab In-Charge to continue.` 
+      })
+      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
+        machineId, 
+        query, 
+        reason: reasonText, 
+        userDetails 
+      })
+      broadcastMachines()
+    }
+  }
+}
+
 const lastCheckedQueries = new Map<number, string>()
 const lastActiveAppMap = new Map<number, string>()
+
 
 async function checkQuerySafety(
   machineId: number,
@@ -2795,28 +2945,8 @@ async function checkQuerySafety(
         console.error('Failed to fetch user details for safety alert:', err)
       }
 
-      emitLog('block', `LAYER 2 UNSAFE — User: "${userDetails}" — Category: "${result.category}" — Reason: "${result.reason || 'Prohibited content'}" — Locking machine ${machineId}`)
-      db.prepare("INSERT INTO safety_alerts (machine_id, query, reason, user_details) VALUES (?, ?, ?, ?)")
-        .run(machineId, query, result.category || 'Unsafe content', userDetails)
-
-      // Progressive enforcement
-      const csViolRow = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(machineId) as any
-      const csViolCount = (csViolRow?.violation_count || 0) + 1
-      db.prepare("UPDATE machines SET violation_count = ? WHERE id = ?").run(csViolCount, machineId)
-
-      if (csViolCount === 1) {
-        sendCommandToMachine(machineId, { command: 'message', payload: `⚠️ Safety Violation Warning: Your search "${query}" may violate safety rules (${result.category || 'Inappropriate Content'}). This is your first warning. Further violations will lock your terminal.` })
-        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails, warned: true })
-        broadcastMachines()
-      } else {
-        sendCommandToMachine(machineId, { command: 'lock', payload: { isViolation: true, query: query } })
-        sendCommandToMachine(machineId, { 
-          command: 'message', 
-          payload: `Terminal locked: repeated safety violation. Search "${query}" (${result.category || 'Inappropriate Content'}). Please visit the Lab In-Charge to continue.`
-        })
-        if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { machineId, query, reason: result.category || 'Unsafe content', timestamp: new Date().toISOString(), userDetails })
-        broadcastMachines()
-      }
+      emitLog('block', `LAYER 2 UNSAFE — User: "${userDetails}" — Category: "${result.category}" — Reason: "${result.reason || 'Prohibited content'}"`)
+      enforceViolation(machineId, query, result.category || 'Unsafe content', userDetails, emitLog)
     } else {
       let userDetails = 'Walk-in User'
       try {
@@ -2833,20 +2963,18 @@ async function checkQuerySafety(
   }
 }
 
-let cachedBestModel: string | null = null;
-let cachedApiKeyForModel: string | null = null;
+let cachedBestModel = 'models/gemini-2.5-flash';
+let cachedApiKeyForModel = '';
 
-async function getBestModel(apiKey: string): Promise<string> {
-  if (cachedBestModel && cachedApiKeyForModel === apiKey) {
-    return cachedBestModel;
-  }
-
+async function refreshBestModel(apiKey: string) {
+  if (!apiKey) return;
   try {
     const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error(`Failed to list models: HTTP ${res.status}`);
-    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 seconds timeout for model lookup
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeoutId);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data: any = await res.json();
     if (data && Array.isArray(data.models)) {
       const candidates = data.models
@@ -2866,31 +2994,38 @@ async function getBestModel(apiKey: string): Promise<string> {
           'models/gemini-flash-lite-latest',
           'models/gemini-2.5-pro',
           'models/gemini-2.0-pro',
-          'models/gemini-pro-latest'
+          'models/gemini-pro-latest',
+          'models/gemini-1.5-flash',
+          'models/gemini-1.5-flash-latest'
         ];
         for (const priority of priorities) {
           if (candidates.includes(priority)) {
             cachedBestModel = priority;
             cachedApiKeyForModel = apiKey;
-            return priority;
+            return;
           }
         }
         const flashCandidate = candidates.find((name: string) => name.toLowerCase().includes('flash'));
         if (flashCandidate) {
           cachedBestModel = flashCandidate;
           cachedApiKeyForModel = apiKey;
-          return flashCandidate;
+          return;
         }
         cachedBestModel = candidates[0];
         cachedApiKeyForModel = apiKey;
-        return candidates[0];
       }
     }
   } catch (err) {
-    console.error('Error fetching models list, using fallback:', err);
+    console.error('Failed to auto-detect best model, using fallback:', err);
   }
+}
 
-  return 'models/gemini-2.5-flash';
+async function getBestModel(apiKey: string): Promise<string> {
+  if (cachedApiKeyForModel !== apiKey) {
+    // Trigger update in background, do not await it
+    refreshBestModel(apiKey);
+  }
+  return cachedBestModel;
 }
 
 async function evaluateQuerySafety(

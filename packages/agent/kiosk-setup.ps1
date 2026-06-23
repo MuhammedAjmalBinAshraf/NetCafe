@@ -55,6 +55,24 @@ if (Test-Path $ConfigIni) {
     }
 }
 
+# ─── Configure Directory Permissions ──────────────────────────────────────────
+Log "STEP:" "Configuring recursive permissions on C:\NetCafe..."
+try {
+    if (!(Test-Path "C:\NetCafe")) { New-Item -ItemType Directory -Path "C:\NetCafe" -Force -ErrorAction SilentlyContinue | Out-Null }
+    if (!(Test-Path "C:\NetCafe\logs")) { New-Item -ItemType Directory -Path "C:\NetCafe\logs" -Force -ErrorAction SilentlyContinue | Out-Null }
+    
+    $icaclsOut1 = icacls "C:\NetCafe" /grant "Users:(OI)(CI)M" /T /C 2>&1
+    Log "INFO:" "icacls C:\NetCafe output: $icaclsOut1"
+    
+    if ($KioskUser) {
+        $icaclsOut2 = icacls "C:\NetCafe" /grant "${KioskUser}:(OI)(CI)F" /T /C 2>&1
+        Log "INFO:" "icacls KioskUser output: $icaclsOut2"
+    }
+    Log "OK:" "Permissions on C:\NetCafe configured successfully"
+} catch {
+    Log "ERROR:" "Failed to set directory permissions: $_"
+}
+
 # ─── Determine agent exe path ─────────────────────────────────────────────────
 # Installer passes the full path as position 0 parameter. Fall back to known install location.
 if (-not $AgentExe -or !(Test-Path $AgentExe)) {

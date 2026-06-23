@@ -1,7 +1,7 @@
 {
   "name": "server",
   "private": true,
-  "version": "1.0.96",
+  "version": "1.0.97",
   "main": "dist-electron/main.js",
   "type": "module",
   "description": "NetCafe Server application",

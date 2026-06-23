@@ -2,7 +2,6 @@ import { exec, spawn } from 'child_process';
 import fs from 'fs';
 
 const agentExeName = 'NetCafe Agent.exe';
-const taskName = 'NetCafeAgent';
 
 function checkAndRestart() {
   if (fs.existsSync("C:\\NetCafe\\install-update.flag")) {
@@ -10,15 +9,25 @@ function checkAndRestart() {
     if (fs.existsSync(installerPath)) {
       console.log('Update flag found. Delegating update installation to Watchdog service...');
       
-      // Create a batch script to install silently and then reboot
-      const batPath = "C:\\NetCafe\\install-and-reboot.bat";
-      const batContent = `@echo off\r\n"${installerPath}" /S /forceRun=0\r\nshutdown /r /f /t 0\r\n`;
-      fs.writeFileSync(batPath, batContent, 'utf8');
+      const logFile = 'C:\\NetCafe\\logs\\watchdog-update.log';
+      const psCommand = `Start-Transcript -Path "${logFile}" -Append; Write-Host "Watchdog starting update installation..."; Start-Process -FilePath "${installerPath}" -ArgumentList "/S" -Wait; Write-Host "Update installed. Rebooting..."; Restart-Computer -Force`;
       
-      // Spawn the batch script completely detached
-      const out = fs.openSync('C:\\NetCafe\\logs\\watchdog-update.log', 'a');
-      const err = fs.openSync('C:\\NetCafe\\logs\\watchdog-update.log', 'a');
-      const child = spawn('cmd.exe', ['/c', batPath], {
+      // Ensure logs directory exists
+      try {
+        if (!fs.existsSync('C:\\NetCafe\\logs')) {
+          fs.mkdirSync('C:\\NetCafe\\logs', { recursive: true });
+        }
+      } catch {}
+
+      const out = fs.openSync(logFile, 'a');
+      const err = fs.openSync(logFile, 'a');
+      
+      // Spawn PowerShell detached
+      const child = spawn('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command', psCommand
+      ], {
         detached: true,
         stdio: ['ignore', out, err],
         windowsHide: true
@@ -26,7 +35,9 @@ function checkAndRestart() {
       child.unref();
       
       // Delete the flag so we don't run it again
-      fs.unlinkSync("C:\\NetCafe\\install-update.flag");
+      try {
+        fs.unlinkSync("C:\\NetCafe\\install-update.flag");
+      } catch {}
       
       // Exit watchdog to avoid file lock conflicts before the installer kills it
       process.exit(0);
@@ -37,16 +48,50 @@ function checkAndRestart() {
     console.log('Watchdog service is temporarily disabled (stop-watchdog.flag found). Skipping check.');
     return;
   }
+
   exec('tasklist /FI "IMAGENAME eq NetCafe Agent.exe"', (err, stdout) => {
     if (err) return;
     if (!stdout.includes(agentExeName)) {
       exec('query user', (err, queryStdout) => {
         const output = (queryStdout || '').toLowerCase();
-        if (output.includes('cafekiosk')) {
-          console.log('Kiosk user is active but NetCafe Agent is not running. Relaunching...');
-          exec(`schtasks /run /tn "${taskName}"`, (runErr, runStdout) => {
+        let kioskUserFound = false;
+        let activeUser = '';
+        
+        // Find active users from query user
+        const lines = output.split(/[\r\n]+/);
+        for (const line of lines) {
+          if (line.includes('active')) {
+            const parts = line.trim().split(/\s+/);
+            if (parts.length > 0) {
+              const username = parts[0].replace('>', '').trim();
+              if (username) {
+                activeUser = username;
+                kioskUserFound = true;
+                break;
+              }
+            }
+          }
+        }
+        
+        // As a fallback, if query user has output but no "active" label parsed, check for 'cafekiosk'
+        if (!kioskUserFound && output.includes('cafekiosk')) {
+          activeUser = 'cafekiosk';
+          kioskUserFound = true;
+        }
+
+        if (kioskUserFound && activeUser) {
+          console.log(`Kiosk user '${activeUser}' is active but NetCafe Agent is not running. Relaunching...`);
+          // Try user-specific task first, fallback to generic
+          exec(`schtasks /run /tn "NetCafeAgent_${activeUser}"`, (runErr, runStdout) => {
             if (runErr) {
-              console.error('Failed to run scheduled task:', runErr);
+              console.log(`Failed to run task NetCafeAgent_${activeUser}, falling back to generic NetCafeAgent task.`);
+              exec(`schtasks /run /tn "NetCafeAgent"`, (fallbackErr, fallbackStdout) => {
+                if (fallbackErr) {
+                  console.error('Failed to run scheduled task:', fallbackErr);
+                } else {
+                  console.log('Scheduled task triggered successfully:', fallbackStdout);
+                }
+              });
             } else {
               console.log('Scheduled task triggered successfully:', runStdout);
             }

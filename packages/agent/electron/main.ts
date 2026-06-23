@@ -36,7 +36,7 @@ let currentSessionData: any = null;
 let pendingPasswordResolve: ((result: { success: boolean; message: string }) => void) | null = null;
 let isFullscreenApp = false;
 let fullscreenCheckInterval: NodeJS.Timeout | null = null;
-const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
+const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
 let nextRequestId = 1;
 
 const agentLogsCache: { timestamp: string, message: string }[] = [];
@@ -267,9 +267,25 @@ function loadConfig() {
       fs.writeFileSync(configPath, JSON.stringify(data, null, 2), 'utf8');
     }
     logToUI(`Loaded config: serverUrl=tcp://${serverHost}:${serverPort}, machineId=${machineId}, clientUuid=${clientUuid}`);
+    updateUpdaterFeedURL();
   } catch (e: any) {
     console.error('Failed to load/write config:', e);
     logToUI(`Failed to load/write config: ${e.message}`);
+  }
+}
+
+function updateUpdaterFeedURL() {
+  if (serverHost) {
+    const localFeedURL = `http://${serverHost}:9001/updates/agent/`;
+    try {
+      autoUpdater.setFeedURL({
+        provider: 'generic',
+        url: localFeedURL
+      });
+      logToUI(`Updater feed URL configured to local LAN Server: ${localFeedURL}`);
+    } catch (e: any) {
+      logToUI(`Failed to set autoUpdater feed URL: ${e.message}`);
+    }
   }
 }
 
@@ -1291,11 +1307,11 @@ function unlockAndCloseWindow() {
 async function handleServerMessage(msg: any) {
   try {
     if (msg.type === 'query-check-response') {
-      const { requestId, allowed } = msg.payload || {};
+      const { requestId, allowed, message } = msg.payload || {};
       const pending = pendingQueryChecks.get(requestId);
       if (pending) {
         pendingQueryChecks.delete(requestId);
-        pending.resolve(allowed);
+        pending.resolve(allowed, message);
       }
       return;
     }
@@ -2157,6 +2173,7 @@ function startUdpDiscovery() {
           serverHost = host;
           serverPort = port;
           serverUrl = `${host}:${port}`;
+          updateUpdaterFeedURL();
           try {
             fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
 
@@ -2470,7 +2487,7 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
     }, 15000);
 
     pendingQueryChecks.set(requestId, {
-      resolve: (allowed: boolean) => {
+      resolve: (allowed: boolean, msgText?: string) => {
         clearTimeout(timeout);
         const elapsed = Date.now() - startTime;
         const remainingDelay = Math.max(0, 2500 - elapsed);
@@ -2478,6 +2495,9 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
         const finish = () => {
           if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
             islandWindow.webContents.send('set-evaluating-state', false);
+          }
+          if (allowed && msgText && islandWindow && !islandWindow.isDestroyed()) {
+            islandWindow.webContents.send('show-message', msgText);
           }
           resolve(allowed);
         };
@@ -2751,7 +2771,10 @@ app.whenReady().then(async () => {
     if (installerPath && fs.existsSync(installerPath)) {
       try {
         fs.writeFileSync("C:\\NetCafe\\install-update.flag", installerPath, "utf8");
-        logToUI("Delegating silent update installation to Watchdog service...");
+        logToUI("Delegating silent update installation to Watchdog service. Quitting agent in 1 second...");
+        setTimeout(() => {
+          app.quit();
+        }, 1000);
         return; // Watchdog handles the silent installation and reboot
       } catch (e) {
         logToUI("Failed to write update flag: " + e);
@@ -2815,7 +2838,7 @@ app.whenReady().then(async () => {
     sendUpdateStatus({ status: 'downloaded', info });
     
     // Log the download event in the setup/install log
-    const logPath = "C:\\NetCafeKiosk_Setup.log";
+    const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
     try {
       fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
     } catch {}
@@ -3857,7 +3880,8 @@ async function runKioskSetup(): Promise<void> {
   logToUI('Kiosk Setup: Starting custom shell configuration...');
   const exePath = process.execPath;
   const script = `
-    Start-Transcript -Path "C:\\NetCafeKiosk_Setup.log" -Force
+    if (!(Test-Path "C:\\NetCafe\\logs")) { New-Item -ItemType Directory -Path "C:\\NetCafe\\logs" -Force | Out-Null }
+    Start-Transcript -Path "C:\\NetCafe\\logs\\kiosk-setup.log" -Force
     
     Write-Host "Starting NetCafe Kiosk Setup at $(Get-Date)"
     Write-Host "Agent Executable Path: ${exePath}"
@@ -3937,6 +3961,16 @@ async function runKioskSetup(): Promise<void> {
     $principal = New-ScheduledTaskPrincipal -UserId "CafeKiosk" -RunLevel Highest;
     Register-ScheduledTask -TaskName "NetCafeAgent" -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force;
     
+    # Grant permissions to C:\NetCafe for standard users and CafeKiosk
+    Write-Host "Granting Users and CafeKiosk Modify permissions on C:\\NetCafe..."
+    try {
+        icacls "C:\\NetCafe" /grant "Users:(OI)(CI)M" /T /C
+        icacls "C:\\NetCafe" /grant "CafeKiosk:(OI)(CI)F" /T /C
+        Write-Host "Permissions on C:\\NetCafe granted successfully."
+    } catch {
+        Write-Host "Failed to grant permissions on C:\\NetCafe: $_"
+    }
+
     Write-Host "NetCafe Kiosk Setup completed successfully."
     Stop-Transcript
   `;
@@ -3981,7 +4015,8 @@ async function runKioskSetup(): Promise<void> {
 async function runKioskUninstall(): Promise<void> {
   logToUI('Kiosk Uninstall: Restoring standard shell...');
   const script = `
-    Start-Transcript -Path "C:\\NetCafeKiosk_Uninstall.log" -Force
+    if (!(Test-Path "C:\\NetCafe\\logs")) { New-Item -ItemType Directory -Path "C:\\NetCafe\\logs" -Force | Out-Null }
+    Start-Transcript -Path "C:\\NetCafe\\logs\\kiosk-uninstall.log" -Force
     
     Write-Host "Starting NetCafe Kiosk Uninstall at $(Get-Date)"
 
