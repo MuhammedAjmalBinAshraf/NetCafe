@@ -591,7 +591,6 @@ export class MitmProxy {
         return;
       }
 
-      isTunneling = true;
       const headersText = headerEndIdx !== -1 ? merged.toString('utf8', 0, headerEndIdx) : merged.toString('utf8');
       const lines = headersText.split('\r\n');
       const firstLine = lines[0];
@@ -613,6 +612,9 @@ export class MitmProxy {
         }
 
         const isGet = method === 'GET';
+        if (!isGet) {
+          isTunneling = true;
+        }
         const acceptHeader = headers['accept'] || '';
         const isHtml = acceptHeader.includes('text/html');
 
@@ -770,6 +772,8 @@ export class MitmProxy {
             return;
           }
         }
+      } else {
+        isTunneling = true;
       }
 
       if (!realSocket.destroyed) {
