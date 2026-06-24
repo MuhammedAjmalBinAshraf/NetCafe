@@ -146,6 +146,79 @@ function getBlockPageHtml(target: string, isSite = false): string {
 </html>`;
 }
 
+function getServerIssuePageHtml(target: string): string {
+  const escQ = escapeHtml(target);
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Server Issue - NetCafe Safety Guard</title>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+    }
+    .card {
+      background-color: #1e293b;
+      border: 1px solid #f59e0b;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 480px;
+      width: 100%;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      text-align: center;
+    }
+    .icon {
+      color: #f59e0b;
+      font-size: 48px;
+      margin-bottom: 16px;
+    }
+    h1 {
+      font-size: 24px;
+      margin: 0 0 12px 0;
+      color: #fbd38d;
+    }
+    p {
+      font-size: 15px;
+      line-height: 1.6;
+      color: #cbd5e1;
+      margin: 0 0 20px 0;
+    }
+    .query-box {
+      background-color: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      padding: 10px 16px;
+      font-family: monospace;
+      font-size: 14px;
+      color: #cbd5e1;
+      word-break: break-all;
+      margin-bottom: 24px;
+    }
+    .footer {
+      font-size: 12px;
+      color: #64748b;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⚠️</div>
+    <h1>Server Issue</h1>
+    <p>We are experiencing a temporary issue validating the security of your request. Please try again shortly or contact the operator.</p>
+    <div class="query-box">"${escQ}"</div>
+    <div class="footer">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+  </div>
+</body>
+</html>`;
+}
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
 }
@@ -277,7 +350,7 @@ export class MitmProxy {
 
   constructor(
     private readonly dataDir: string,
-    private readonly onQuery: (query: string, url: string, ip: string) => Promise<boolean>,
+    private readonly onQuery: (query: string, url: string, ip: string, isUserInitiated: boolean) => Promise<{ allowed: boolean; serverIssue?: boolean }>,
     private readonly log: (msg: string) => void,
     private readonly isDomainBlocked?: (domain: string) => boolean,
     private readonly onDomainViolation?: (domain: string) => void
@@ -464,9 +537,14 @@ export class MitmProxy {
     try {
       const parsed  = new URL(req.url || '', 'http://localhost');
       const hostname = parsed.hostname;
+      const query   = extractSearchQuery(parsed.hostname, parsed.pathname + parsed.search);
+      const secFetchDest = (req.headers['sec-fetch-dest'] as string) || '';
+      const secFetchMode = (req.headers['sec-fetch-mode'] as string) || '';
+      const isUserInitiated = !!query || (secFetchDest === 'document' && secFetchMode === 'navigate');
+
       if (this.isDomainBlocked && this.isDomainBlocked(hostname)) {
         this.log(`[Proxy] Blocked HTTP domain intercepted: "${hostname}". Instantly blocking.`);
-        if (this.onDomainViolation) {
+        if (this.onDomainViolation && isUserInitiated) {
           this.onDomainViolation(hostname);
         }
         const blockHtml = getBlockPageHtml(hostname, true);
@@ -478,7 +556,6 @@ export class MitmProxy {
         return;
       }
 
-      const query   = extractSearchQuery(parsed.hostname, parsed.pathname + parsed.search);
       if (query) {
         this.log(`[Proxy] HTTP query: "${query}"`);
         if (this.blockedQueries.has(query.toLowerCase())) {
@@ -494,10 +571,10 @@ export class MitmProxy {
         try {
           const fullUrl = `http://${hostname}${parsed.pathname}${parsed.search}`;
           const targetIp = req.socket.remoteAddress || '';
-          const allowed = await this.onQuery(query, fullUrl, targetIp);
-          if (!allowed) {
+          const result = await this.onQuery(query, fullUrl, targetIp, isUserInitiated);
+          if (!result.allowed) {
             this.blockedQueries.add(query.toLowerCase());
-            const blockHtml = getBlockPageHtml(query);
+            const blockHtml = result.serverIssue ? getServerIssuePageHtml(query) : getBlockPageHtml(query);
             res.writeHead(200, {
               'Content-Type': 'text/html; charset=utf-8',
               'Content-Length': Buffer.byteLength(blockHtml)
@@ -625,6 +702,10 @@ export class MitmProxy {
           const isSite = !query;
           const targetClean = target.trim().toLowerCase();
 
+          const secFetchDest = headers['sec-fetch-dest'] || '';
+          const secFetchMode = headers['sec-fetch-mode'] || '';
+          const isUserInitiated = !!query || (secFetchDest === 'document' && secFetchMode === 'navigate');
+
           const isBlocked = isSite 
             ? (this.isDomainBlocked && this.isDomainBlocked(hostname))
             : (this.blockedQueries.has(targetClean));
@@ -632,7 +713,7 @@ export class MitmProxy {
           if (isBlocked) {
             this.log(`[Proxy] Blocked ${isSite ? 'HTTPS domain' : 'HTTPS query'} intercepted: "${target}". Instantly blocking.`);
             clientTls.pause();
-            if (isSite && this.onDomainViolation) {
+            if (isSite && this.onDomainViolation && isUserInitiated) {
               this.onDomainViolation(hostname);
             }
             const blockHtml = getBlockPageHtml(target, isSite);
@@ -669,101 +750,166 @@ export class MitmProxy {
             reqLength = 0;
             return;
           } else {
-            this.log(`[Proxy] 🔍 Intercepted ${isSite ? 'direct domain' : 'search query'} (${hostname}): "${target}". Showing check screen...`);
+            this.log(`[Proxy] 🔍 Intercepted ${isSite ? 'direct domain' : 'search query'} (${hostname}): "${target}". isUserInitiated=${isUserInitiated}`);
+            
             clientTls.pause();
 
-            const checkHtml = getCheckingPageHtml(target);
-            const initialResponse = [
-              'HTTP/1.1 200 OK',
-              'Content-Type: text/html; charset=utf-8',
-              'Connection: close',
-              '',
-              checkHtml.replace(/<\/body>\s*<\/html>/gi, '')
-            ].join('\r\n');
+            if (isUserInitiated) {
+              const checkHtml = getCheckingPageHtml(target);
+              const initialResponse = [
+                'HTTP/1.1 200 OK',
+                'Content-Type: text/html; charset=utf-8',
+                'Connection: close',
+                '',
+                checkHtml.replace(/<\/body>\s*<\/html>/gi, '')
+              ].join('\r\n');
 
-            try {
-              if (!clientTls.destroyed) {
-                clientTls.write(initialResponse);
+              try {
+                if (!clientTls.destroyed) {
+                  clientTls.write(initialResponse);
+                }
+              } catch (e: any) {
+                this.log(`[Proxy] Error writing initial response: ${e.message}`);
+                realSocket.end();
+                clientTls.resume();
+                return;
               }
-            } catch (e: any) {
-              this.log(`[Proxy] Error writing initial response: ${e.message}`);
-              realSocket.end();
-              clientTls.resume();
-              return;
             }
 
             (async () => {
               try {
                 const fullUrl = `https://${hostname}${urlPath}`;
                 const targetIp = realSocket.remoteAddress || '';
-                const allowed = await this.onQuery(target, fullUrl, targetIp);
-                if (allowed) {
+                const result = await this.onQuery(target, fullUrl, targetIp, isUserInitiated);
+                if (result.allowed) {
                   this.addRecentlyAllowed(targetClean);
-                  const redirectUrl = `https://${hostname}${urlPath}`;
-                  const successScript = `
+                  if (isUserInitiated) {
+                    const redirectUrl = `https://${hostname}${urlPath}`;
+                    const successScript = `
+                      <script>
+                        window.location.replace(${JSON.stringify(redirectUrl)});
+                        window.location.reload();
+                      </script>
+                      </body>
+                      </html>
+                    `;
+                    try {
+                      if (!clientTls.destroyed) {
+                        clientTls.write(successScript);
+                        clientTls.end();
+                      }
+                    } catch {}
+                  } else {
+                    const modifiedMerged = forceConnectionClose(merged, headerEndIdx);
+                    if (!realSocket.destroyed) {
+                      realSocket.write(modifiedMerged);
+                    }
+                  }
+                } else {
+                  // Blocked or Server Issue
+                  if (!result.serverIssue) {
+                    if (isSite) {
+                      if (this.onDomainViolation && isUserInitiated) {
+                        this.onDomainViolation(hostname);
+                      }
+                    } else {
+                      this.blockedQueries.add(targetClean);
+                    }
+                  }
+
+                  if (isUserInitiated) {
+                    const cardHtml = result.serverIssue 
+                      ? `
+                        <div class="card" style="border-color: #f59e0b;">
+                          <div style="color: #f59e0b; font-size: 48px; margin-bottom: 16px;">⚠️</div>
+                          <h1 style="color: #fbd38d;">Server Issue</h1>
+                          <p>We are experiencing a temporary issue validating the security of your request. Please try again shortly or contact the operator.</p>
+                          <div class="query-tag" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.25); color: #fbd38d;">"${escapeHtml(target)}"</div>
+                          <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+                        </div>
+                      `
+                      : `
+                        <div class="card" style="border-color: #ef4444;">
+                          <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>
+                          <h1 style="color: #f87171;">${isSite ? 'Website Blocked' : 'Search Query Blocked'}</h1>
+                          <p>${isSite ? 'The website you attempted to access is blocked by the NetCafe Safety Guard rules.' : 'The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.'}</p>
+                          <div class="query-tag" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25); color: #f87171;">"${escapeHtml(target)}"</div>
+                          <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+                        </div>
+                      `;
+                    const failScript = `
+                      <script>
+                        document.body.innerHTML = ${JSON.stringify(cardHtml)};
+                      </script>
+                      </body>
+                      </html>
+                    `;
+                    try {
+                      if (!clientTls.destroyed) {
+                        clientTls.write(failScript);
+                        clientTls.end();
+                      }
+                    } catch {}
+                  } else {
+                    const issueHtml = result.serverIssue ? getServerIssuePageHtml(target) : getBlockPageHtml(target, isSite);
+                    const blockResponse = [
+                      'HTTP/1.1 200 OK',
+                      'Content-Type: text/html; charset=utf-8',
+                      'Connection: close',
+                      `Content-Length: ${Buffer.byteLength(issueHtml)}`,
+                      '',
+                      issueHtml
+                    ].join('\r\n');
+                    try {
+                      if (!clientTls.destroyed) {
+                        clientTls.write(blockResponse);
+                        clientTls.end();
+                      }
+                    } catch {}
+                  }
+                }
+              } catch (err: any) {
+                this.log(`[Proxy] Safety check error: ${err.message}. Showing Server Issue fallback.`);
+                if (isUserInitiated) {
+                  const cardHtml = `
+                    <div class="card" style="border-color: #f59e0b;">
+                      <div style="color: #f59e0b; font-size: 48px; margin-bottom: 16px;">⚠️</div>
+                      <h1 style="color: #fbd38d;">Server Issue</h1>
+                      <p>We are experiencing a temporary issue validating the security of your request. Please try again shortly or contact the operator.</p>
+                      <div class="query-tag" style="background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.25); color: #fbd38d;">"${escapeHtml(target)}"</div>
+                      <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
+                    </div>
+                  `;
+                  const fallbackScript = `
                     <script>
-                      window.location.replace(${JSON.stringify(redirectUrl)});
-                      window.location.reload();
+                      document.body.innerHTML = ${JSON.stringify(cardHtml)};
                     </script>
                     </body>
                     </html>
                   `;
                   try {
                     if (!clientTls.destroyed) {
-                      clientTls.write(successScript);
+                      clientTls.write(fallbackScript);
                       clientTls.end();
                     }
                   } catch {}
                 } else {
-                  if (isSite) {
-                    if (this.onDomainViolation) {
-                      this.onDomainViolation(hostname);
-                    }
-                  } else {
-                    this.blockedQueries.add(targetClean);
-                  }
-
-                  const blockHtmlInner = `
-                    <div class="card" style="border-color: #ef4444;">
-                      <div style="color: #ef4444; font-size: 48px; margin-bottom: 16px;">⚠️</div>
-                      <h1 style="color: #f87171;">${isSite ? 'Website Blocked' : 'Search Query Blocked'}</h1>
-                      <p>${isSite ? 'The website you attempted to access is blocked by the NetCafe Safety Guard rules.' : 'The search query you entered has been flagged by the NetCafe Safety Guard for violating the house safety rules.'}</p>
-                      <div class="query-tag" style="background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.25); color: #f87171;">"${escapeHtml(target)}"</div>
-                      <div style="font-size: 12px; color: #64748b; margin-top: 20px;">NetCafe Manager &bull; Real-time AI Safety Guard</div>
-                    </div>
-                  `;
-                  const failScript = `
-                    <script>
-                      document.body.innerHTML = ${JSON.stringify(blockHtmlInner)};
-                    </script>
-                    </body>
-                    </html>
-                  `;
+                  const issueHtml = getServerIssuePageHtml(target);
+                  const blockResponse = [
+                    'HTTP/1.1 200 OK',
+                    'Content-Type: text/html; charset=utf-8',
+                    'Connection: close',
+                    `Content-Length: ${Buffer.byteLength(issueHtml)}`,
+                    '',
+                    issueHtml
+                  ].join('\r\n');
                   try {
                     if (!clientTls.destroyed) {
-                      clientTls.write(failScript);
+                      clientTls.write(blockResponse);
                       clientTls.end();
                     }
                   } catch {}
                 }
-              } catch (err: any) {
-                this.log(`[Proxy] Safety check error: ${err.message}. Allowing for safety fallback.`);
-                this.addRecentlyAllowed(targetClean);
-                const redirectUrl = `https://${hostname}${urlPath}`;
-                const fallbackScript = `
-                  <script>
-                    window.location.replace(${JSON.stringify(redirectUrl)});
-                    window.location.reload();
-                  </script>
-                  </body>
-                  </html>
-                `;
-                try {
-                  if (!clientTls.destroyed) {
-                    clientTls.write(fallbackScript);
-                    clientTls.end();
-                  }
-                } catch {}
               } finally {
                 try { realSocket.end(); } catch {}
                 clientTls.resume();

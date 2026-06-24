@@ -2,7 +2,7 @@ import { useEffect, useState, useRef, type FormEvent } from 'react'
 import {
   Monitor, Play, Pause, Square, Lock, MessageSquare, Power, ServerOff,
   ShieldAlert, KeyRound, LayoutDashboard, History, Settings as SettingsIcon,
-  BarChart3, ShieldX, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Check,
+  BarChart3, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Check,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
   ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles, Megaphone
@@ -18,13 +18,6 @@ interface Plan {
   duration_minutes: number
 }
 
-interface BlockRule {
-  id: number
-  type: string
-  value: string
-  mode: string
-  is_active: boolean
-}
 
 interface User {
   id: number
@@ -57,11 +50,10 @@ export default function App() {
   })
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'blocking' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast' | 'messaging'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast' | 'messaging'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
-  const [blockRules, setBlockRules] = useState<BlockRule[]>([])
   const [reportsData, setReportsData] = useState<any>({
     totalSessions: 0,
     totalRevenue: 0,
@@ -98,7 +90,7 @@ export default function App() {
   const [filterIllegal, setFilterIllegal] = useState(true)
   const [blockedQueries, setBlockedQueries] = useState<Array<{id: number, query: string}>>([])
   const [newBlockedQuery, setNewBlockedQuery] = useState('')
-  const [violationPenaltyMinutes, setViolationPenaltyMinutes] = useState('5')
+  const [violationPenaltyFee, setViolationPenaltyFee] = useState('50')
   const [safeQueries, setSafeQueries] = useState<Array<{id: number, query: string}>>([])
   const [newSafeQuery, setNewSafeQuery] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
@@ -212,10 +204,7 @@ export default function App() {
   const [planPrice, setPlanPrice] = useState('')
   const [planDuration, setPlanDuration] = useState('')
 
-  // Blocking rules CRUD states
-  const [ruleType, setRuleType] = useState('domain')
-  const [ruleValue, setRuleValue] = useState('')
-  const [ruleMode, setRuleMode] = useState('block')
+
 
   // Global messages state
   const [globalMessage, setGlobalMessage] = useState('')
@@ -323,7 +312,6 @@ export default function App() {
       // Load initial data
       window.ipcRenderer.invoke('get-machines').then(setMachines)
       window.ipcRenderer.invoke('get-plans').then(setPlans)
-      window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
         setSettings(fresh)
         setApiKeyInput(fresh.gemini_api_key || '')
@@ -332,7 +320,7 @@ export default function App() {
         setFilterViolence(fresh.filter_violence !== 'false')
         setFilterSelfHarm(fresh.filter_self_harm !== 'false')
         setFilterIllegal(fresh.filter_illegal !== 'false')
-        setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
+        setViolationPenaltyFee(fresh.violation_penalty_fee || '50')
         setAiProvider(fresh.ai_provider || 'gemini')
         setOpenRouterApiKey(fresh.openrouter_api_key || '')
         setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
@@ -522,8 +510,6 @@ export default function App() {
     if (isAuthenticated && window.ipcRenderer) {
       if (activeTab === 'plans') {
         window.ipcRenderer.invoke('get-plans').then(setPlans)
-      } else if (activeTab === 'blocking') {
-        window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
       } else if (activeTab === 'safety') {
         window.ipcRenderer.invoke('get-safety-alerts').then(setSafetyAlerts)
         window.ipcRenderer.invoke('get-settings').then((fresh: any) => {
@@ -1167,29 +1153,7 @@ export default function App() {
     setIsPlanModalOpen(true)
   }
 
-  // Blocking Rules CRUD
-  const handleAddRule = async (e: FormEvent) => {
-    e.preventDefault()
-    if (window.ipcRenderer && ruleValue) {
-      await window.ipcRenderer.invoke('add-block-rule', ruleType, ruleValue, ruleMode)
-      setRuleValue('')
-      window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
-    }
-  }
 
-  const handleToggleRule = async (id: number, active: boolean) => {
-    if (window.ipcRenderer) {
-      await window.ipcRenderer.invoke('toggle-block-rule', id, active)
-      window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
-    }
-  }
-
-  const handleDeleteRule = async (id: number) => {
-    if (window.ipcRenderer) {
-      await window.ipcRenderer.invoke('delete-block-rule', id)
-      window.ipcRenderer.invoke('get-block-rules').then(setBlockRules)
-    }
-  }
 
   // Settings updates
   const handleUpdateBranding = async (name: string) => {
@@ -1216,7 +1180,7 @@ export default function App() {
       setFilterViolence(fresh.filter_violence !== 'false')
       setFilterSelfHarm(fresh.filter_self_harm !== 'false')
       setFilterIllegal(fresh.filter_illegal !== 'false')
-      setViolationPenaltyMinutes(fresh.violation_penalty_minutes || '5')
+      setViolationPenaltyFee(fresh.violation_penalty_fee || '50')
       setAiProvider(fresh.ai_provider || 'gemini')
       setOpenRouterApiKey(fresh.openrouter_api_key || '')
       setOpenRouterModel(fresh.openrouter_model || 'google/gemini-2.5-flash')
@@ -1236,7 +1200,7 @@ export default function App() {
         await window.ipcRenderer.invoke('update-settings', 'filter_illegal', filterIllegal ? 'true' : 'false')
         // Blocked queries are managed dynamically, no settings row needed
         await window.ipcRenderer.invoke('update-settings', 'ai_custom_context', aiCustomContext)
-        await window.ipcRenderer.invoke('update-settings', 'violation_penalty_minutes', violationPenaltyMinutes)
+        await window.ipcRenderer.invoke('update-settings', 'violation_penalty_fee', violationPenaltyFee)
         const fresh = await window.ipcRenderer.invoke('get-settings')
         setSettings(fresh)
         initSettingsState(fresh)
@@ -1614,14 +1578,7 @@ export default function App() {
             >
               <Plus size={18} /> Pricing Plans
             </button>
-            <button
-              onClick={() => { setActiveTab('blocking'); setSelectedDrawerMachine(null) }}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                activeTab === 'blocking' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-              }`}
-            >
-              <ShieldX size={18} /> Website & Apps
-            </button>
+
             <button
               id="nav-safety"
               onClick={() => { setActiveTab('safety'); setSelectedDrawerMachine(null) }}
@@ -2264,108 +2221,7 @@ export default function App() {
             </div>
           )}
 
-          {/* TAB: Blocking Rules */}
-          {activeTab === 'blocking' && (
-            <div className="space-y-6">
-              <div className="pb-4 border-b border-slate-900">
-                <h2 className="text-xl font-bold">LAN Site & Application Blocking</h2>
-                <p className="text-slate-400 text-sm mt-1">Restrict domains or app executables globally on client locking agents.</p>
-              </div>
 
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
-                {/* Form column */}
-                <form onSubmit={handleAddRule} className="bg-slate-900/60 border border-slate-900 rounded-xl p-6 space-y-4">
-                  <h3 className="text-md font-bold text-white mb-2">Add blocking rule</h3>
-                  
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Rule Type</label>
-                    <select
-                      value={ruleType}
-                      onChange={(e) => setRuleType(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-                    >
-                      <option value="domain">Website Domain (Hosts file)</option>
-                      <option value="executable">App Executable (Process killer)</option>
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Rule Value</label>
-                    <input
-                      type="text"
-                      required
-                      placeholder={ruleType === 'domain' ? 'facebook.com' : 'Steam.exe'}
-                      value={ruleValue}
-                      onChange={(e) => setRuleValue(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-                    />
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-bold uppercase tracking-wider text-slate-400">Enforcement Mode</label>
-                    <select
-                      value={ruleMode}
-                      onChange={(e) => setRuleMode(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded px-3 py-2 text-white outline-none transition-colors"
-                    >
-                      <option value="block">BLOCK / Terminate</option>
-                    </select>
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full flex items-center justify-center gap-2 py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded text-sm transition-colors"
-                  >
-                    <Plus size={16} /> Add Restrictive Rule
-                  </button>
-                </form>
-
-                {/* Table column */}
-                <div className="lg:col-span-2 bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden">
-                  <table className="w-full text-left border-collapse text-sm">
-                    <thead>
-                      <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
-                        <th className="p-4">Type</th>
-                        <th className="p-4">Value</th>
-                        <th className="p-4">Mode</th>
-                        <th className="p-4">Status</th>
-                        <th className="p-4 text-center">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-900 text-slate-250">
-                      {blockRules.map((rule) => (
-                        <tr key={rule.id} className="hover:bg-slate-900/30 transition-colors">
-                          <td className="p-4 capitalize font-semibold">{rule.type}</td>
-                          <td className="p-4 font-mono text-xs text-white">{rule.value}</td>
-                          <td className="p-4 text-xs font-semibold uppercase text-red-400">{rule.mode}</td>
-                          <td className="p-4">
-                            <button
-                              onClick={() => handleToggleRule(rule.id, !rule.is_active)}
-                              className={`text-xs px-2.5 py-0.5 rounded font-bold transition-all ${
-                                rule.is_active 
-                                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/50' 
-                                  : 'bg-slate-800 text-slate-400'
-                              }`}
-                            >
-                              {rule.is_active ? 'Active' : 'Disabled'}
-                            </button>
-                          </td>
-                          <td className="p-4 text-center">
-                            <button
-                              onClick={() => handleDeleteRule(rule.id)}
-                              className="p-1 hover:text-red-400 transition-colors text-slate-500"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* TAB: AI Safety */}
           {activeTab === 'safety' && (
@@ -2662,18 +2518,18 @@ export default function App() {
                       )}
                     </div>
 
-                    {/* Violation Penalty Minutes */}
+                    {/* Violation Penalty Fee */}
                     <div className="space-y-2">
-                      <label className="text-xs font-bold uppercase text-slate-400 block">Violation Penalty Fine (Minutes)</label>
+                      <label className="text-xs font-bold uppercase text-slate-400 block">Violation Penalty Fine (Rupees)</label>
                       <input
                         type="number"
-                        min="1"
-                        max="120"
+                        min="0"
+                        max="1000"
                         className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
-                        value={violationPenaltyMinutes}
-                        onChange={(e) => setViolationPenaltyMinutes(e.target.value)}
+                        value={violationPenaltyFee}
+                        onChange={(e) => setViolationPenaltyFee(e.target.value)}
                       />
-                      <p className="text-[10px] text-slate-500">Deducted from registered users' prepaid sessions on their 2nd and subsequent violations.</p>
+                      <p className="text-[10px] text-slate-500">Charged to active prepaid/postpaid sessions on their 2nd and subsequent violations.</p>
                     </div>
 
                     {/* Custom AI Context / Rules */}
@@ -4944,14 +4800,7 @@ Respond strictly in JSON format:
               >
                 <Plus size={18} /> Pricing Plans
               </button>
-              <button
-                onClick={() => { setActiveTab('blocking'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                  activeTab === 'blocking' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
-                }`}
-              >
-                <ShieldX size={18} /> Website & Apps
-              </button>
+
               <button
                 onClick={() => { setActiveTab('safety'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-semibold transition-all ${

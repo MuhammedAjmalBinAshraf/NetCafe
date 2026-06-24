@@ -169,6 +169,9 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE sessions ADD COLUMN discount REAL DEFAULT 0;")
   } catch {}
+  try {
+    db.exec("ALTER TABLE sessions ADD COLUMN penalty_amount REAL DEFAULT 0;")
+  } catch {}
 
   try {
     db.exec("ALTER TABLE machines ADD COLUMN hardware_locked INTEGER DEFAULT 0;")
@@ -281,6 +284,12 @@ function setupDatabase() {
 
   // Default violation penalty in minutes
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_minutes', '5');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_fee', '50');")
+
+  // Clear legacy block rules so they do not cause silent blocks without a configuration interface
+  try {
+    db.exec("DELETE FROM block_rules;");
+  } catch {}
 
 
   // Refund and complete any active sessions at startup, set machines to available so they lock
@@ -929,9 +938,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const url: string = data.payload?.url || ''
     const ip: string = data.payload?.ip || ''
     const requestId: string = data.payload?.requestId || ''
+    const isUserInitiated: boolean = data.payload?.isUserInitiated !== false
 
     const activeSession = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
-    if (activeSession && query) {
+    if (activeSession && query && isUserInitiated) {
       try {
         db.prepare("INSERT INTO member_search_logs (session_id, query, url, ip) VALUES (?, ?, ?, ?)").run(activeSession.id, query, url, ip)
       } catch (err: any) {
@@ -989,11 +999,15 @@ function handleClientMessage(socket: net.Socket, data: any) {
         if (activeSess?.customer_name) hitUserDetails2 = activeSess.customer_name
       } catch {}
 
-      emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — Blacklist term: "${hit}" — User: "${hitUserDetails2}"`)
-      enforceViolation(Number(machineId), query, `Blacklist term: "${hit}"`, hitUserDetails2, emitLog)
+      if (isUserInitiated) {
+        emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED — Blacklist term: "${hit}" — User: "${hitUserDetails2}"`)
+        enforceViolation(Number(machineId), query, `Blacklist term: "${hit}"`, hitUserDetails2, emitLog)
+      } else {
+        emitLog('block', `[MITM] ❌ LAYER 1 BLOCKED (BACKGROUND) — Blacklist term: "${hit}" — User: "${hitUserDetails2}" — Blocked silently`)
+      }
 
       if (!socket.destroyed) {
-        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false, serverIssue: false } }) + '\n')
       }
       return
     }
@@ -1039,11 +1053,15 @@ function handleClientMessage(socket: net.Socket, data: any) {
             if (activeSess?.customer_name) l2UserDetails = activeSess.customer_name
           } catch {}
 
-          emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — User: "${l2UserDetails}" — Category: "${result.category}"`)
-          enforceViolation(Number(machineId), query, result.category || 'Unsafe content', l2UserDetails, emitLog)
+          if (isUserInitiated) {
+            emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE — User: "${l2UserDetails}" — Category: "${result.category}"`)
+            enforceViolation(Number(machineId), query, result.category || 'Unsafe content', l2UserDetails, emitLog)
+          } else {
+            emitLog('block', `[MITM] ❌ LAYER 2 UNSAFE (BACKGROUND) — User: "${l2UserDetails}" — Category: "${result.category}" — Blocked silently`)
+          }
 
           if (!socket.destroyed) {
-            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false } }) + '\n')
+            socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false, serverIssue: false } }) + '\n')
           }
         } else {
           // Auto add to whitelist
@@ -1060,10 +1078,10 @@ function handleClientMessage(socket: net.Socket, data: any) {
           }
         }
       } catch (err: any) {
-        emitLog('warn', `[MITM] LAYER 2 ERROR: ${err.message}. Allowing by default.`)
+        emitLog('warn', `[MITM] LAYER 2 ERROR: ${err.message}. Showing Server Issue fallback page.`)
         console.error('Safety check failed:', err)
         if (!socket.destroyed) {
-          socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: true } }) + '\n')
+          socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false, serverIssue: true } }) + '\n')
         }
       }
     })()
@@ -1072,14 +1090,6 @@ function handleClientMessage(socket: net.Socket, data: any) {
     const machineId = clients.get(socket)
     if (machineId && db) {
       const { username, password } = data.payload || {}
-
-      // Check if machine is locked due to a safety violation
-      const machineState = db.prepare("SELECT violation_count FROM machines WHERE id = ?").get(machineId) as any
-      if (machineState && (machineState.violation_count || 0) >= 2) {
-        socket.write(JSON.stringify({ command: 'login-fail', message: '🔒 Your session was locked due to a safety violation. Please visit the Lab In-Charge to continue your session.' }) + '\n')
-        return
-      }
-
       const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password)
       if (!user) {
         socket.write(JSON.stringify({ command: 'login-fail', message: 'Invalid username or password.' }) + '\n')
@@ -1246,6 +1256,7 @@ function getMachinesData() {
            s.plan_id,
            s.mode,
            s.custom_duration,
+           COALESCE(s.penalty_amount, 0) as penalty_amount,
            COALESCE(p.duration_minutes, s.custom_duration) as duration_minutes,
            CASE 
              WHEN s.start_time IS NOT NULL THEN
@@ -2889,15 +2900,15 @@ function enforceViolation(
   }
 
   // Get penalty setting
-  const penaltyMinutesSetting = db.prepare("SELECT value FROM settings WHERE key = 'violation_penalty_minutes'").get() as any
-  const penaltyMinutes = Number(penaltyMinutesSetting?.value || '5')
+  const penaltyFeeSetting = db.prepare("SELECT value FROM settings WHERE key = 'violation_penalty_fee'").get() as any
+  const penaltyFee = Number(penaltyFeeSetting?.value || '50')
 
   if (violCount === 1) {
     // 1st violation: warning
     emitLog('block', `❌ 1st VIOLATION WARNING — User: "${userDetails}" — Query: "${query}" — warning Machine ${machineId}`)
     sendCommandToMachine(machineId, { 
       command: 'message', 
-      payload: `⚠️ Safety Violation Warning: Your search "${query}" is not allowed. This is your first warning. Further violations will incur penalty deductions.` 
+      payload: `⚠️ Safety Violation Warning: Your search "${query}" is not allowed. This is your first warning. Further violations will incur ₹${penaltyFee} penalty fee.` 
     })
     if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
       machineId, 
@@ -2908,74 +2919,27 @@ function enforceViolation(
     })
     broadcastMachines()
   } else {
-    // 2nd or subsequent violation
-    if (isRegisteredUser) {
-      // Registered User: Fine penalty deduction (NO lock / NO pause)
-      emitLog('block', `❌ REPEATED VIOLATION (Penalty Fine) — User: "${userDetails}" — Deducting ${penaltyMinutes} mins — Machine ${machineId}`)
+    // 2nd or subsequent violation: Fine penalty fee in Rupees (NO lock / NO pause / NO lock for walk-ins/guests)
+    emitLog('block', `❌ REPEATED VIOLATION (Penalty Fine) — User: "${userDetails}" — Charging ₹${penaltyFee} — Machine ${machineId}`)
+    
+    const activeSess = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
+    if (activeSess) {
+      db.prepare("UPDATE sessions SET penalty_amount = COALESCE(penalty_amount, 0) + ? WHERE id = ?").run(penaltyFee, activeSess.id)
       
-      const activeSess = db.prepare("SELECT id, custom_duration, start_time, paused_duration FROM sessions WHERE machine_id = ? AND end_time IS NULL").get(machineId) as any
-      if (activeSess) {
-        const oldDuration = activeSess.custom_duration || 0
-        const newDuration = Math.max(0, oldDuration - penaltyMinutes)
-        db.prepare("UPDATE sessions SET custom_duration = ? WHERE id = ?").run(newDuration, activeSess.id)
-        
-        // Calculate remaining seconds to see if session expires immediately
-        const elapsed = activeSess.paused_duration 
-          ? (activeSess.paused_duration - Math.floor(new Date(activeSess.start_time).getTime() / 1000))
-          : (Math.floor(Date.now() / 1000) - Math.floor(new Date(activeSess.start_time).getTime() / 1000))
-        const remainingSeconds = Math.max(0, (newDuration * 60) - elapsed)
-        
-        if (remainingSeconds <= 0) {
-          // Expire session immediately
-          db.prepare("UPDATE sessions SET end_time = datetime('now'), status = 'completed' WHERE id = ?").run(activeSess.id)
-          db.prepare("UPDATE machines SET status = 'available' WHERE id = ?").run(machineId)
-          sendCommandToMachine(machineId, { command: 'lock' })
-          sendCommandToMachine(machineId, { 
-            command: 'message', 
-            payload: `Terminal locked: your session has expired due to safety penalty deductions.` 
-          })
-        } else {
-          // Sync updated duration
-          sendCommandToMachine(machineId, {
-            command: 'sync-session',
-            session: {
-              startTime: activeSess.start_time,
-              mode: 'prepaid',
-              durationMinutes: newDuration,
-              customDuration: newDuration
-            }
-          })
-          sendCommandToMachine(machineId, { 
-            command: 'message', 
-            payload: `⚠️ Safety Violation Penalty: Search "${query}" is not allowed. A penalty of ${penaltyMinutes} minutes has been deducted from your session.` 
-          })
-        }
-      }
-      
-      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
-        machineId, 
-        query, 
-        reason: `${reasonText} (Penalty: ${penaltyMinutes} min deducted)`, 
-        userDetails, 
-        warned: true
-      })
-      broadcastMachines()
-    } else {
-      // Guest / Walk-in: lock the machine
-      emitLog('block', `❌ REPEATED VIOLATION (Lock) — User: "${userDetails}" — Locking Machine ${machineId}`)
-      sendCommandToMachine(machineId, { command: 'lock', payload: { isViolation: true, query: query } })
       sendCommandToMachine(machineId, { 
         command: 'message', 
-        payload: `Terminal locked: repeated blocked search detected ("${query}"). Please visit the Lab In-Charge to continue.` 
+        payload: `⚠️ Safety Violation Penalty: Search "${query}" is not allowed. A penalty fine of ₹${penaltyFee} has been charged to your session.` 
       })
-      if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
-        machineId, 
-        query, 
-        reason: reasonText, 
-        userDetails 
-      })
-      broadcastMachines()
     }
+    
+    if (mainWindow) mainWindow.webContents.send('safety-alert-triggered', { 
+      machineId, 
+      query, 
+      reason: `${reasonText} (Penalty: ₹${penaltyFee} fee charged)`, 
+      userDetails, 
+      warned: true
+    })
+    broadcastMachines()
   }
 }
 

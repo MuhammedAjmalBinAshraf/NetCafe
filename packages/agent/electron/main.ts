@@ -36,7 +36,7 @@ let currentSessionData: any = null;
 let pendingPasswordResolve: ((result: { success: boolean; message: string }) => void) | null = null;
 let isFullscreenApp = false;
 let fullscreenCheckInterval: NodeJS.Timeout | null = null;
-const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
+const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
 let nextRequestId = 1;
 
 const agentLogsCache: { timestamp: string, message: string }[] = [];
@@ -1307,11 +1307,11 @@ function unlockAndCloseWindow() {
 async function handleServerMessage(msg: any) {
   try {
     if (msg.type === 'query-check-response') {
-      const { requestId, allowed, message } = msg.payload || {};
+      const { requestId, allowed, message, serverIssue } = msg.payload || {};
       const pending = pendingQueryChecks.get(requestId);
       if (pending) {
         pendingQueryChecks.delete(requestId);
-        pending.resolve(allowed, message);
+        pending.resolve(allowed, message, serverIssue);
       }
       return;
     }
@@ -2437,32 +2437,26 @@ Add-Type -TypeDefinition $csharpSource
   }
 }
 
-function checkQuerySafety(query: string, url: string, ip: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
+function checkQuerySafety(query: string, url: string, ip: string, isUserInitiated: boolean): Promise<{ allowed: boolean; serverIssue?: boolean }> {
+  return new Promise<{ allowed: boolean; serverIssue?: boolean }>((resolve) => {
     const startTime = Date.now();
 
     // Check local blocked list first to instantly block recurring attempts
     if (mitmProxy && mitmProxy.blockedQueries.has(query.toLowerCase())) {
       logToUI(`[MITM] Query "${query}" matches local blocked list. Instantly blocking.`);
-      resolve(false);
+      resolve({ allowed: false, serverIssue: false });
       return;
     }
 
     if (!tcpSocket || tcpSocket.destroyed || !isTcpConnected) {
-      logToUI(`[MITM] Server not connected, allowing query "${query}"`);
-      const elapsed = Date.now() - startTime;
-      const remainingDelay = Math.max(0, 2500 - elapsed);
-      if (remainingDelay > 0) {
-        setTimeout(() => resolve(true), remainingDelay);
-      } else {
-        resolve(true);
-      }
+      logToUI(`[MITM] Server not connected, showing Server Issue fallback page for query "${query}"`);
+      resolve({ allowed: false, serverIssue: true });
       return;
     }
 
     const requestId = `${Date.now()}-${nextRequestId++}`;
     
-    if (islandWindow && !islandWindow.isDestroyed()) {
+    if (isUserInitiated && islandWindow && !islandWindow.isDestroyed()) {
       islandWindow.webContents.send('set-evaluating-state', true);
     }
 
@@ -2472,22 +2466,16 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
         logToUI(`[MITM] Timeout waiting for query check: "${query}"`);
         pendingQueryChecks.delete(requestId);
         
-        if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
+        if (isUserInitiated && pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
           islandWindow.webContents.send('set-evaluating-state', false);
         }
         
-        const elapsed = Date.now() - startTime;
-        const remainingDelay = Math.max(0, 2500 - elapsed);
-        if (remainingDelay > 0) {
-          setTimeout(() => resolve(true), remainingDelay);
-        } else {
-          resolve(true);
-        }
+        resolve({ allowed: false, serverIssue: true });
       }
     }, 15000);
 
     pendingQueryChecks.set(requestId, {
-      resolve: (allowed: boolean, msgText?: string) => {
+      resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean) => {
         clearTimeout(timeout);
         const elapsed = Date.now() - startTime;
         const remainingDelay = Math.max(0, 2500 - elapsed);
@@ -2496,13 +2484,10 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
           if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
             islandWindow.webContents.send('set-evaluating-state', false);
           }
-          if (allowed && msgText && islandWindow && !islandWindow.isDestroyed()) {
-            islandWindow.webContents.send('show-message', msgText);
-          }
-          resolve(allowed);
+          resolve({ allowed, serverIssue });
         };
 
-        if (remainingDelay > 0) {
+        if (isUserInitiated && remainingDelay > 0) {
           setTimeout(finish, remainingDelay);
         } else {
           finish();
@@ -2517,10 +2502,10 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
           if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
             islandWindow.webContents.send('set-evaluating-state', false);
           }
-          resolve(true);
+          resolve({ allowed: false, serverIssue: true });
         };
 
-        if (remainingDelay > 0) {
+        if (isUserInitiated && remainingDelay > 0) {
           setTimeout(finish, remainingDelay);
         } else {
           finish();
@@ -2532,7 +2517,7 @@ function checkQuerySafety(query: string, url: string, ip: string): Promise<boole
     logToUI(`[MITM] Sending query check request to server: "${query}" (ID: ${requestId})`);
     sendToServer({
       type: 'query-check-request',
-      payload: { query, url, ip, requestId }
+      payload: { query, url, ip, requestId, isUserInitiated }
     });
   });
 }
@@ -2656,19 +2641,21 @@ app.whenReady().then(async () => {
     try {
       mitmProxy = new MitmProxy(
         app.getPath('userData'),
-        async (query: string, url: string, ip: string) => {
-          logToUI(`[MITM] Browser query intercepted: "${query}" URL: "${url}" IP: "${ip}"`);
-          const allowed = await checkQuerySafety(query, url, ip);
-          logToUI(`[MITM] Safety check result for "${query}": ${allowed ? 'ALLOWED' : 'BLOCKED'}`);
-          if (!allowed) {
-            if (islandWindow && !islandWindow.isDestroyed()) {
+        async (query: string, url: string, ip: string, isUserInitiated: boolean) => {
+          logToUI(`[MITM] Browser query intercepted: "${query}" URL: "${url}" IP: "${ip}" isUserInitiated=${isUserInitiated}`);
+          const result = await checkQuerySafety(query, url, ip, isUserInitiated);
+          logToUI(`[MITM] Safety check result for "${query}": ALLOWED=${result.allowed}, SERVER_ISSUE=${result.serverIssue}`);
+          if (!result.allowed) {
+            if (isUserInitiated && islandWindow && !islandWindow.isDestroyed()) {
               islandWindow.webContents.send('safety-violation', {
-                type: 'Safety Warning',
-                message: `Search query "${query}" violates safety rules and has been blocked.`
+                type: result.serverIssue ? 'Server Issue' : 'Safety Warning',
+                message: result.serverIssue 
+                  ? `A safety check server issue occurred. Your request was blocked.`
+                  : `Search query "${query}" violates safety rules and has been blocked.`
               });
             }
           }
-          return allowed;
+          return result;
         },
         logToUI,
         (domain: string) => {

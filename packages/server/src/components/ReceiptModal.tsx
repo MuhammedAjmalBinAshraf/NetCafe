@@ -67,6 +67,9 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
   }
 
   const selectedPlan = plans.find(p => p.id === machine.plan_id)
+  const penalty = Number(machine.penalty_amount || 0)
+  const planCost = selectedPlan ? Number(selectedPlan.price || 0) : 0
+  const totalBill = planCost + penalty
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
@@ -81,7 +84,7 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
             <X size={20} />
           </button>
         </div>
-
+ 
         {/* Modal Content */}
         <div className="p-6 flex-1 overflow-y-auto space-y-4">
           {isPrintPreview ? (
@@ -121,8 +124,26 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
                   <span>Date:</span>
                   <span>{new Date().toLocaleString()}</span>
                 </div>
+                {selectedPlan && (
+                  <div className="flex justify-between">
+                    <span>Plan Price:</span>
+                    <span>₹{planCost.toFixed(2)}</span>
+                  </div>
+                )}
+                {penalty > 0 && (
+                  <div className="flex justify-between" style={{ color: '#dc2626', fontWeight: 'bold' }}>
+                    <span>Safety Penalty:</span>
+                    <span>₹{penalty.toFixed(2)}</span>
+                  </div>
+                )}
+                {totalBill > 0 && (
+                  <div className="flex justify-between" style={{ borderTop: '1px dashed #000', paddingTop: '4px', marginTop: '4px', fontWeight: 'bold' }}>
+                    <span>Total Bill:</span>
+                    <span>₹{totalBill.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
-
+ 
               <div className="border-t border-dashed border-slate-400 my-2" />
               <div className="text-xs font-bold uppercase tracking-tight">Thank you for visiting!</div>
               <div className="text-[10px] text-slate-500">Powered by NetCafe Manager</div>
@@ -156,11 +177,29 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
                   <span className="text-slate-400">Session Elapsed:</span>
                   <span className="text-white font-mono font-semibold">{formatTime(elapsedSeconds)}</span>
                 </div>
+                {selectedPlan && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Plan Price:</span>
+                    <span className="text-slate-200 font-semibold">₹{planCost.toFixed(2)}</span>
+                  </div>
+                )}
+                {penalty > 0 && (
+                  <div className="flex justify-between text-red-400 font-bold">
+                    <span>Safety Penalty Fine:</span>
+                    <span>₹{penalty.toFixed(2)}</span>
+                  </div>
+                )}
+                {totalBill > 0 && (
+                  <div className="flex justify-between border-t border-slate-850 pt-2 text-white font-bold text-base">
+                    <span>Total Bill:</span>
+                    <span>₹{totalBill.toFixed(2)}</span>
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
-
+ 
         {/* Modal Footer */}
         <div className="p-4 bg-slate-950 border-t border-slate-800 flex justify-between gap-3">
           <div>
@@ -190,14 +229,13 @@ export default function ReceiptModal({ isOpen, machine, plans, labName, onClose,
               </button>
             )}
             <button
-              onClick={() => onConfirm(0, 0, 'None')}
+              onClick={() => onConfirm(totalBill, 0, 'Cash')}
               className="flex items-center gap-2 px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm font-medium transition-colors"
             >
               <Check size={16} /> Complete & Lock
             </button>
           </div>
         </div>
-
       </div>
     </div>
   )
