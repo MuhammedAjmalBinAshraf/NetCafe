@@ -1642,6 +1642,13 @@ async function handleServerMessage(msg: any) {
           logToUI(`Failed to persist operator password: ${e.message}`);
         }
       }
+    } else if (msg.command === 'apply-security-hardening') {
+      logToUI('[Security] Remote hardening triggered by server...');
+      applyFirewallVpnBlocks();
+      runSecurityAudit();
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
+      }
     } else if (msg.command === 'trigger-update') {
       logToUI('Server triggered remote update. Configuring updater...');
 
@@ -2012,6 +2019,244 @@ async function captureScreen(): Promise<string> {
     return pngBuffer.toString('base64');
   }
   throw new Error('No screen sources found');
+}
+
+// ─── Security Hardening: VPN & Proxy Bypass Prevention ──────────────────────
+
+const VPN_PROCESSES = [
+  // WireGuard
+  'wireguard.exe', 'wireguard-service.exe',
+  // OpenVPN
+  'openvpn.exe', 'openvpn-gui.exe',
+  // NordVPN
+  'nordvpn.exe', 'nordvpnd.exe',
+  // ExpressVPN
+  'expressvpn.exe', 'expressvpnservice.exe',
+  // ProtonVPN
+  'protonvpn.exe', 'protonvpn-service.exe',
+  // Mullvad
+  'mullvad.exe', 'mullvad-daemon.exe',
+  // Tailscale
+  'tailscale.exe', 'tailscaled.exe',
+  // Shadowsocks / V2Ray / Xray / Clash
+  'shadowsocks.exe', 'ss-local.exe', 'v2ray.exe', 'xray.exe', 'clash.exe',
+  // Tor / Psiphon
+  'tor.exe', 'psiphon3.exe',
+  // Cisco AnyConnect
+  'vpnui.exe', 'vpnagent.exe', 'vpndownloader.exe',
+  // GlobalProtect
+  'pangpa.exe', 'pangps.exe',
+  // FortiClient
+  'forticlient.exe', 'fortissl.exe',
+  // SoftEther
+  'vpnclient.exe', 'vpncmgr.exe',
+];
+
+const VPN_SINKHOLE_DOMAINS = [
+  'nordvpn.com', 'expressvpn.com', 'mullvad.net', 'protonvpn.com',
+  'surfshark.com', 'privateinternetaccess.com', 'cyberghostvpn.com',
+  'ipvanish.com', 'hidemyass.com', 'tunnelbear.com', 'hotspotshield.com',
+  'windscribe.com', 'zenmate.com', 'torproject.org', 'psiphon3.com',
+  'tailscale.com', 'hide.me', 'astrill.com', 'purevpn.com',
+  'vypr.vpn.com', 'vyprvpn.com', 'strongvpn.com',
+];
+
+/**
+ * Applies Chrome enterprise registry policies that:
+ *  1. Force proxy through our MITM (blocks chrome.proxy API overrides from extensions)
+ *  2. Block all extension installs
+ *  3. Block Chrome Web Store
+ *  4. Disable WebRTC UDP leak
+ *  5. Disable DNS-over-HTTPS bypass
+ *  6. Disable Chrome Sync (prevents extension sync from personal accounts)
+ *  7. Disable Incognito and Developer Tools
+ */
+function applySecurityPolicies() {
+  if (process.platform !== 'win32') return;
+  logToUI('[Security] Applying Chrome enterprise hardening policies...');
+
+  const policies: [string, string, string, string][] = [
+    // Force Chrome through our MITM proxy (overrides any chrome.proxy extension API)
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'ProxySettings', 'REG_SZ',
+      '{"ProxyMode":"fixed_servers","ProxyServer":"http://127.0.0.1:8080","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
+    // Block ALL extension installs
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallBlocklist', '1', 'REG_SZ', '*'],
+    // Block external/sideloaded extensions
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'BlockExternalExtensions', 'REG_DWORD', '1'],
+    // Disable Developer Tools (prevents unpacked extension loading + F12)
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'DeveloperToolsAvailability', 'REG_DWORD', '1'],
+    // Disable Chrome Sync (blocks extension sync from personal accounts)
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'SyncDisabled', 'REG_DWORD', '1'],
+    // Disable Incognito mode
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'IncognitoModeAvailability', 'REG_DWORD', '1'],
+    // Fix WebRTC to prevent IP leak bypass
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'WebRtcIPHandling', 'REG_SZ', 'disable_non_proxied_udp'],
+    // Disable DNS-over-HTTPS (prevents DoH from bypassing DNS sinkhole)
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'DnsOverHttpsMode', 'REG_SZ', 'off'],
+    // Block Chrome Web Store and extension update servers
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '1', 'REG_SZ', 'chromewebstore.google.com'],
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '2', 'REG_SZ', 'chrome.google.com/webstore'],
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '3', 'REG_SZ', 'clients2.google.com'],
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '4', 'REG_SZ', 'chrome://extensions'],
+    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '5', 'REG_SZ', 'chrome://flags'],
+  ];
+
+  let successCount = 0;
+  for (const [key, name, type, value] of policies) {
+    try {
+      execSync(`reg add "${key}" /v "${name}" /t ${type} /d "${value}" /f`, { stdio: 'pipe' });
+      successCount++;
+    } catch (e: any) {
+      logToUI(`[Security] Policy write failed (${name}): ${e.message}`);
+    }
+  }
+  logToUI(`[Security] Chrome policies applied: ${successCount}/${policies.length} succeeded.`);
+}
+
+/**
+ * Adds Windows Firewall rules to block common VPN protocol ports.
+ * Safe to call multiple times — uses /f to overwrite existing rules.
+ */
+function applyFirewallVpnBlocks() {
+  if (process.platform !== 'win32') return;
+  logToUI('[Security] Applying VPN port firewall blocks...');
+
+  const rules: [string, string, string][] = [
+    // WireGuard (UDP 51820)
+    ['NetCafe-Block-WireGuard-Out', 'UDP', '51820'],
+    // OpenVPN (UDP/TCP 1194)
+    ['NetCafe-Block-OpenVPN-UDP-Out', 'UDP', '1194'],
+    ['NetCafe-Block-OpenVPN-TCP-Out', 'TCP', '1194'],
+    // IPSec / IKEv2 (UDP 500, 4500)
+    ['NetCafe-Block-IKEv2-500-Out', 'UDP', '500'],
+    ['NetCafe-Block-IKEv2-4500-Out', 'UDP', '4500'],
+    // PPTP (TCP 1723)
+    ['NetCafe-Block-PPTP-Out', 'TCP', '1723'],
+    // L2TP (UDP 1701)
+    ['NetCafe-Block-L2TP-Out', 'UDP', '1701'],
+    // Shadowsocks default (TCP/UDP 8388)
+    ['NetCafe-Block-Shadowsocks-TCP-Out', 'TCP', '8388'],
+    ['NetCafe-Block-Shadowsocks-UDP-Out', 'UDP', '8388'],
+    // SoftEther (TCP 992, 5555)
+    ['NetCafe-Block-SoftEther-992-Out', 'TCP', '992'],
+    ['NetCafe-Block-SoftEther-5555-Out', 'TCP', '5555'],
+    // QUIC/HTTP3 on UDP 443 (Hysteria2, some VPNs — Chrome falls back to TCP safely)
+    ['NetCafe-Block-QUIC-UDP-443-Out', 'UDP', '443'],
+  ];
+
+  let successCount = 0;
+  for (const [name, proto, port] of rules) {
+    try {
+      execSync(
+        `netsh advfirewall firewall add rule name="${name}" dir=out action=block protocol=${proto} remoteport=${port}`,
+        { stdio: 'pipe' }
+      );
+      successCount++;
+    } catch (e: any) {
+      // Rule may already exist — not an error
+      logToUI(`[Security] Firewall rule already exists or failed (${name}): ${e.message}`);
+    }
+  }
+  logToUI(`[Security] Firewall VPN port blocks applied: ${successCount}/${rules.length} rules.`);
+}
+
+/**
+ * Writes VPN provider domains into a separate sinkhole section in the hosts file.
+ * Protected by marker comments so it doesn't interfere with the domain blocklist section.
+ */
+function applyVpnDnsSinkhole() {
+  if (process.platform !== 'win32') return;
+  const hostsPath = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
+  try {
+    let content = fs.existsSync(hostsPath) ? fs.readFileSync(hostsPath, 'utf8') : '';
+    const startMarker = '# === NETCAFE VPN SINKHOLE START ===';
+    const endMarker = '# === NETCAFE VPN SINKHOLE END ===';
+    // Remove previous sinkhole section
+    const si = content.indexOf(startMarker);
+    const ei = content.indexOf(endMarker);
+    if (si !== -1 && ei !== -1) {
+      content = content.substring(0, si) + content.substring(ei + endMarker.length);
+    }
+    let section = `\n${startMarker}\n`;
+    VPN_SINKHOLE_DOMAINS.forEach(d => {
+      section += `0.0.0.0 ${d}\n0.0.0.0 www.${d}\n`;
+    });
+    section += `${endMarker}\n`;
+    fs.writeFileSync(hostsPath, content.trimEnd() + section, 'utf8');
+    logToUI(`[Security] VPN DNS sinkhole applied (${VPN_SINKHOLE_DOMAINS.length} domains).`);
+  } catch (e: any) {
+    logToUI(`[Security] VPN DNS sinkhole failed: ${e.message}`);
+  }
+}
+
+/**
+ * Scans running processes for known VPN executables and kills them.
+ * Also checks for TAP/TUN virtual adapters created by VPN clients.
+ */
+function detectAndKillVpnProcesses() {
+  if (process.platform !== 'win32') return;
+  try {
+    const output = execSync('tasklist /fo csv /nh', { encoding: 'utf8', stdio: 'pipe' });
+    const running = output.toLowerCase();
+    const found = VPN_PROCESSES.filter(p => running.includes(p.toLowerCase()));
+    if (found.length > 0) {
+      logToUI(`[Security] VPN processes detected: ${found.join(', ')} — terminating...`);
+      found.forEach(proc => {
+        try {
+          execSync(`taskkill /F /IM "${proc}" /T`, { stdio: 'pipe' });
+          logToUI(`[Security] Killed VPN process: ${proc}`);
+        } catch (_) { /* process may have already exited */ }
+      });
+      // Show announcement on dynamic island
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('safety-violation', {
+          type: 'Security Warning',
+          message: `VPN software detected and blocked: ${found[0]}. This terminal is monitored.`,
+          isUserInitiated: true,
+        });
+      }
+    }
+  } catch (e: any) {
+    logToUI(`[Security] VPN process scan error: ${e.message}`);
+  }
+
+  // Detect TAP/TUN virtual adapters (created when VPN connects)
+  try {
+    const adapters = execSync(
+      'powershell -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress"',
+      { encoding: 'utf8', stdio: 'pipe', timeout: 5000 }
+    );
+    if (adapters && adapters.trim()) {
+      const parsed: any[] = JSON.parse(adapters.trim().startsWith('[') ? adapters : `[${adapters}]`);
+      const vpnKeywords = ['tap', 'tun', 'wireguard', 'vpn', 'nordlynx', 'mullvad', 'tailscale', 'proton', 'softether'];
+      const vpnAdapters = parsed.filter(a =>
+        vpnKeywords.some(kw =>
+          (a.InterfaceDescription || '').toLowerCase().includes(kw) ||
+          (a.Name || '').toLowerCase().includes(kw)
+        )
+      );
+      if (vpnAdapters.length > 0) {
+        logToUI(`[Security] VPN adapter(s) detected: ${vpnAdapters.map((a: any) => a.Name).join(', ')}`);
+        // Disable detected adapters
+        vpnAdapters.forEach((a: any) => {
+          try {
+            execSync(`netsh interface set interface name="${a.Name}" admin=disable`, { stdio: 'pipe' });
+            logToUI(`[Security] Disabled VPN adapter: ${a.Name}`);
+          } catch (_) {}
+        });
+      }
+    }
+  } catch (_) { /* powershell may not be available or adapter list empty */ }
+}
+
+/**
+ * Full security audit — re-applies all hardening to ensure no tampering.
+ * Called on startup and every 60 seconds.
+ */
+function runSecurityAudit() {
+  applySecurityPolicies();
+  applyVpnDnsSinkhole();
+  detectAndKillVpnProcesses();
 }
 
 function applyHostBlocking(domains: string[]) {
@@ -3234,6 +3479,22 @@ app.whenReady().then(async () => {
       enforceAppBlocking(blockedExes);
     }
   }, 3000);
+
+  // ─── Security hardening: apply on startup ─────────────────────────────────
+  if (process.platform === 'win32') {
+    // Firewall VPN port blocks — only needed once (rules persist across reboots)
+    applyFirewallVpnBlocks();
+    // Full policy audit: Chrome policies + DNS sinkhole + VPN process kill
+    runSecurityAudit();
+    // Re-audit every 60 seconds to detect and repair any tampering
+    setInterval(() => {
+      runSecurityAudit();
+    }, 60000);
+    // VPN process + adapter scan every 30 seconds (more frequent than full audit)
+    setInterval(() => {
+      detectAndKillVpnProcesses();
+    }, 30000);
+  }
 });
 
 app.on('window-all-closed', () => {

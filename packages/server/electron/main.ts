@@ -2328,6 +2328,24 @@ ipcMain.handle('trigger-client-update-batch', (_, machineIds: number[]) => {
   return { success: true }
 })
 
+// Broadcast security hardening to ALL connected machines
+ipcMain.handle('apply-hardening-all', () => {
+  let count = 0
+  for (const [, mId] of clients.entries()) {
+    sendCommandToMachine(Number(mId), { command: 'apply-security-hardening' })
+    count++
+  }
+  logToUI(`[Security] Broadcast hardening to ${count} machine(s).`)
+  return { success: true, count }
+})
+
+// Apply security hardening to a specific machine
+ipcMain.handle('apply-hardening-machine', (_, machineId: number) => {
+  sendCommandToMachine(machineId, { command: 'apply-security-hardening' })
+  logToUI(`[Security] Sent hardening command to machine ${machineId}.`)
+  return { success: true }
+})
+
 ipcMain.handle('check-updates-health', () => {
   const updateDir = 'C:\\NetCafe\\updates\\agent';
   const ymlPath   = path.join(updateDir, 'latest-agent.yml');

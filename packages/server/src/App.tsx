@@ -94,6 +94,7 @@ export default function App() {
   const [safeQueries, setSafeQueries] = useState<Array<{id: number, query: string}>>([])
   const [newSafeQuery, setNewSafeQuery] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
+  const [hardeningStatus, setHardeningStatus] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState('')
   const [aiCustomContext, setAiCustomContext] = useState('')
   const [showApiKey, setShowApiKey] = useState(false)
@@ -1395,6 +1396,18 @@ export default function App() {
         setSafeQueries(freshSafe)
       }
     }
+  }
+
+  const handleApplyHardeningAll = async () => {
+    if (!window.ipcRenderer) return
+    setHardeningStatus('Applying...')
+    try {
+      const res = await window.ipcRenderer.invoke('apply-hardening-all')
+      setHardeningStatus(`✅ Hardening applied to ${res.count} machine(s)`)
+    } catch (e: any) {
+      setHardeningStatus(`❌ Failed: ${e.message}`)
+    }
+    setTimeout(() => setHardeningStatus(null), 5000)
   }
 
   const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
@@ -2703,6 +2716,57 @@ Respond strictly in JSON format:
   "reason": "Brief explanation of why this query is allowed or blocked (e.g. why it is safe or unsafe)"
 }`}
                     </div>
+                  </div>
+
+                  {/* Security Hardening Panel */}
+                  <div className="bg-slate-900/50 border border-violet-900/40 p-5 rounded-xl space-y-4 shadow-lg">
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <ShieldAlert size={16} className="text-violet-400" /> VPN & Proxy Bypass Prevention
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-1">
+                        Applies Chrome enterprise policies, firewall VPN port blocks, and DNS sinkhole to all connected client machines.
+                        This prevents VPN extensions, standalone VPN apps, and proxy bypass tools from circumventing AI filtering.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 text-[10px]">
+                      {[
+                        ['Chrome ProxySettings policy', 'Forces Chrome through MITM proxy — extensions cannot override'],
+                        ['ExtensionInstallBlocklist: *', 'Blocks all Chrome extension installs'],
+                        ['WebRTC IP Handling', 'Prevents WebRTC UDP leaks bypassing the proxy'],
+                        ['DNS-over-HTTPS: off', 'Disables DoH so DNS sinkhole works'],
+                        ['VPN Port Firewall Rules', 'Blocks WireGuard, OpenVPN, L2TP, PPTP, Shadowsocks ports'],
+                        ['DNS Sinkhole', 'Blocks VPN provider domains in hosts file'],
+                        ['Chrome Web Store blocked', 'Prevents accessing chromewebstore.google.com'],
+                        ['Incognito + DevTools disabled', 'Removes incognito mode and F12 developer tools'],
+                      ].map(([title, desc]) => (
+                        <div key={title} className="flex items-start gap-1.5 bg-slate-950/40 rounded-md p-2">
+                          <div className="w-1.5 h-1.5 rounded-full bg-violet-500 mt-1 flex-shrink-0" />
+                          <div>
+                            <div className="font-semibold text-slate-300">{title}</div>
+                            <div className="text-slate-600">{desc}</div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center gap-3 pt-1">
+                      <button
+                        onClick={handleApplyHardeningAll}
+                        disabled={hardeningStatus === 'Applying...'}
+                        className="px-4 py-2 bg-violet-700 hover:bg-violet-600 disabled:bg-violet-900 text-white rounded-lg text-xs font-bold transition-all shadow-md flex items-center gap-2"
+                      >
+                        <ShieldAlert size={13} />
+                        {hardeningStatus === 'Applying...' ? 'Applying...' : '🔒 Harden All Machines'}
+                      </button>
+                      {hardeningStatus && hardeningStatus !== 'Applying...' && (
+                        <span className="text-xs font-bold text-violet-300">{hardeningStatus}</span>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-600">
+                      Runs automatically on each client agent startup and every 60 seconds. VPN processes are scanned every 30 seconds and terminated.
+                    </p>
                   </div>
                 </div>
               </div>
