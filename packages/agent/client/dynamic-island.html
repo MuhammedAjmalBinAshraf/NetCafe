@@ -146,7 +146,7 @@
 
     #island.state-profile {
       width: 342px;
-      height: 320px;
+      height: 350px;
       border-radius: 18px;
     }
 
@@ -177,6 +177,40 @@
       border-radius: 16px;
       border-color: rgba(127, 119, 221, 0.32);
     }
+
+    /* ── STATE: penalty announcement (red announcement) ── */
+    #island.state-penalty {
+      width: 372px;
+      height: 130px;
+      border-radius: 16px;
+      border-color: rgba(239, 68, 68, 0.32);
+    }
+    .penalty-shell { display: flex; flex-direction: column; width: 100%; padding: 12px 15px; gap: 9px; text-align: left; }
+    .penalty-head { display: flex; align-items: center; justify-content: space-between; }
+    .penalty-left { display: flex; align-items: center; gap: 8px; }
+    .penalty-icon { width: 28px; height: 28px; border-radius: 8px; background: rgba(239, 68, 68, 0.14); border: 0.5px solid rgba(239, 68, 68, 0.28); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: #f87171; }
+    .penalty-label { font-size: 11px; font-weight: 500; color: #f87171; letter-spacing: 0.06em; text-transform: uppercase; }
+    .penalty-time { font-size: 10px; color: rgba(255, 255, 255, 0.4); }
+    .penalty-body { font-size: 12px; color: rgba(255, 255, 255, 0.7); line-height: 1.55; word-break: break-word; max-height: 48px; overflow-y: auto; }
+    .penalty-footer { display: flex; align-items: center; justify-content: flex-end; }
+    .penalty-dismiss { height: 22px; padding: 0 10px; border-radius: 6px; background: rgba(239, 68, 68, 0.16); border: 0.5px solid rgba(239, 68, 68, 0.28); color: #f87171; font-size: 10px; font-weight: 500; cursor: pointer; font-family: inherit; transition: background 0.15s; }
+    .penalty-dismiss:hover { background: rgba(239, 68, 68, 0.26); }
+
+    /* ── Violation History styles ── */
+    .viol-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 6px 8px;
+      background: rgba(239, 68, 68, 0.06);
+      border: 1px solid rgba(239, 68, 68, 0.12);
+      border-radius: 6px;
+      font-size: 10px;
+    }
+    .viol-query { font-weight: 700; color: #f87171; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .viol-meta { color: rgba(255,255,255,0.4); font-size: 9px; }
+    .viol-penalty { color: #fbbf24; font-size: 9px; font-weight: 600; }
+    .viol-empty { text-align: center; color: rgba(255,255,255,0.3); font-size: 10px; padding: 12px 0; }
 
     /* ── STATE: message ── */
     .msg-shell { display: flex; width: 100%; height: 100%; }
@@ -828,7 +862,6 @@
         </div>
 
         <div class="card-row-bottom">
-          <button class="profile-btn" id="btn-message">Message</button>
           <button class="profile-btn" id="btn-profile">Your Profile</button>
           <button class="exit-btn" id="btn-exit">Exit Session</button>
         </div>
@@ -843,7 +876,7 @@
 
         <div class="profile-tabs">
           <button class="tab-btn active" data-tab="tab-activity">Activity</button>
-          <button class="tab-btn" data-tab="tab-sessions">Sessions</button>
+          <button class="tab-btn" data-tab="tab-violations">Violations</button>
           <button class="tab-btn" data-tab="tab-usage">Usage</button>
           <button class="tab-btn" data-tab="tab-settings">Settings</button>
         </div>
@@ -856,10 +889,22 @@
             </div>
           </div>
 
-          <!-- Sessions Panel -->
-          <div class="tab-panel" id="tab-sessions">
-            <div class="list-item">
-              <span class="item-label">Loading sessions...</span>
+          <!-- Violations Panel -->
+          <div class="tab-panel" id="tab-violations">
+            <!-- Quick summary row -->
+            <div style="display:flex; gap:6px; margin-bottom:2px;">
+              <div style="flex:1; background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.15); border-radius:6px; padding:6px 8px; text-align:center;">
+                <div style="font-size:9px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.05em;">Total Violations</div>
+                <div id="viol-count" style="font-size:15px; font-weight:700; color:#f87171;">0</div>
+              </div>
+              <div style="flex:1; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.15); border-radius:6px; padding:6px 8px; text-align:center;">
+                <div style="font-size:9px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.05em;">Total Penalty</div>
+                <div id="viol-penalty" style="font-size:15px; font-weight:700; color:#fbbf24;">₹0</div>
+              </div>
+            </div>
+            <!-- Scrollable violation history list -->
+            <div id="viol-list" style="display:flex; flex-direction:column; gap:4px; overflow-y:auto; max-height:160px;">
+              <div class="viol-empty">No violations this session.</div>
             </div>
           </div>
 
@@ -974,6 +1019,25 @@
         </div>
       </div>
 
+      <!-- 10. PENALTY STATE -->
+      <div id="panel-penalty" class="panel">
+        <div class="penalty-shell">
+          <div class="penalty-head">
+            <div class="penalty-left">
+              <div class="penalty-icon">
+                <i class="ti ti-receipt-tax" aria-hidden="true"></i>
+              </div>
+              <div class="penalty-label">Penalty Charged</div>
+            </div>
+            <div class="penalty-time" id="penalty-time">Now</div>
+          </div>
+          <div class="penalty-body" id="penalty-body"></div>
+          <div class="penalty-footer">
+            <button class="penalty-dismiss" onclick="dismissPenalty()">Acknowledge</button>
+          </div>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -985,6 +1049,12 @@
     let collapsedState = 'compact'; // remembers collapsed state before hover
     let isAnnouncementBlocking = false;
     let lastAnnouncement = '';
+
+    // Penalty queue: holds penalty messages to show AFTER safety violation is dismissed
+    let pendingPenaltyMessage = null;
+
+    // Violation history for this session (in-memory)
+    let sessionViolations = []; // { query, reason, time, penalty }
 
     // Session states data cache
     let sessionData = {
@@ -1087,7 +1157,38 @@
       // Notify main process to unblock input
       ipcRenderer.send('set-announcement-blocking', false);
 
+      // If there's a pending penalty, show it now (after safety violation dismissal)
+      if (pendingPenaltyMessage) {
+        const msg = pendingPenaltyMessage;
+        pendingPenaltyMessage = null;
+        setTimeout(() => showPenaltyAnnouncement(msg), 400);
+        return;
+      }
+
       const nextState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+      setIslandState(nextState);
+    }
+
+    // Show penalty announcement (non-blocking, dismissable banner)
+    function showPenaltyAnnouncement(message) {
+      document.getElementById('penalty-body').textContent = message;
+      document.getElementById('penalty-time').textContent = 'Now';
+      island.className = '';
+      island.classList.add('state-penalty');
+      currentState = 'penalty';
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      const penPanel = document.getElementById('panel-penalty');
+      if (penPanel) penPanel.classList.add('active');
+      ipcRenderer.send('island-mouse', false);
+      // Auto-dismiss after 8 seconds
+      if (window._penaltyTimeout) clearTimeout(window._penaltyTimeout);
+      window._penaltyTimeout = setTimeout(() => dismissPenalty(), 8000);
+    }
+
+    function dismissPenalty() {
+      if (window._penaltyTimeout) clearTimeout(window._penaltyTimeout);
+      const nextState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+      collapsedState = nextState;
       setIslandState(nextState);
     }
 
@@ -1248,10 +1349,6 @@
 
     document.getElementById('btn-profile').addEventListener('click', () => {
       setIslandState('profile');
-    });
-
-    document.getElementById('btn-message').addEventListener('click', () => {
-      setIslandState('message');
     });
 
     document.getElementById('btn-profile-back').addEventListener('click', () => {
@@ -1776,41 +1873,86 @@
     });
 
     ipcRenderer.on('show-message', (event, msg) => {
+      // Only show non-safety operator messages as banner
       if (!msg) return;
-      const isW = msg.toLowerCase().includes('safety') || msg.toLowerCase().includes('violation') || msg.toLowerCase().includes('blocked');
-      if (isW) {
-        showAnnouncementBlocker({
-          title: 'Safety Warning',
-          body: msg,
-          from_label: 'Safety Guard'
-        });
-      } else {
-        document.getElementById('banner-type').textContent = 'Operator Alert';
-        document.getElementById('banner-message').textContent = msg;
-        
-        collapsedState = 'banner';
-        setIslandState('banner');
-        
-        if (window.bannerTimeout) clearTimeout(window.bannerTimeout);
-        window.bannerTimeout = setTimeout(() => {
-          if (currentState === 'banner') {
-            collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
-            setIslandState(collapsedState);
-          }
-        }, 4000);
-      }
+      document.getElementById('banner-type').textContent = 'Operator Alert';
+      document.getElementById('banner-message').textContent = msg;
+      
+      collapsedState = 'banner';
+      setIslandState('banner');
+      
+      if (window.bannerTimeout) clearTimeout(window.bannerTimeout);
+      window.bannerTimeout = setTimeout(() => {
+        if (currentState === 'banner') {
+          collapsedState = (sessionData.type === 'prepaid' && sessionData.remainingSeconds !== null && sessionData.remainingSeconds < 300) ? 'split' : 'compact';
+          setIslandState(collapsedState);
+        }
+      }, 4000);
     });
 
     ipcRenderer.on('safety-violation', (event, payload) => {
       const message = payload && payload.message ? payload.message : 'Violation detected!';
       const type = payload && payload.type ? payload.type : 'Safety Warning';
+      const isUserInitiated = payload && payload.isUserInitiated !== false;
       
+      // Background violations are NOT shown in dynamic island
+      if (!isUserInitiated) return;
+
+      // Track violation in session history
+      sessionViolations.push({ query: payload.query || message, reason: type, time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), penalty: 0 });
+      updateViolationPanel();
+
       showAnnouncementBlocker({
         title: type,
         body: message,
         from_label: 'Safety Guard'
       });
     });
+
+    // Penalty violation — queued to show after safety violation announcement is dismissed
+    ipcRenderer.on('penalty-violation', (event, payload) => {
+      const message = payload && payload.message ? payload.message : 'A penalty fine has been charged.';
+
+      // Update violation history with penalty amount (extract ₹ figure)
+      const match = message.match(/₹(\d+(?:\.\d+)?)/);
+      const penaltyAmt = match ? parseFloat(match[1]) : 0;
+      if (sessionViolations.length > 0) {
+        sessionViolations[sessionViolations.length - 1].penalty = penaltyAmt;
+      } else {
+        sessionViolations.push({ query: 'Unknown', reason: 'Penalty', time: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}), penalty: penaltyAmt });
+      }
+      updateViolationPanel();
+
+      if (isAnnouncementBlocking) {
+        // Safety violation announcement is active — queue penalty to show after
+        pendingPenaltyMessage = message;
+      } else {
+        // No blocking announcement — show penalty immediately
+        showPenaltyAnnouncement(message);
+      }
+    });
+
+    // Update violation history panel
+    function updateViolationPanel() {
+      const violList = document.getElementById('viol-list');
+      const violCount = document.getElementById('viol-count');
+      const violPenalty = document.getElementById('viol-penalty');
+      if (!violList) return;
+      const totalPenalty = sessionViolations.reduce((sum, v) => sum + (v.penalty || 0), 0);
+      if (violCount) violCount.textContent = String(sessionViolations.length);
+      if (violPenalty) violPenalty.textContent = '₹' + totalPenalty.toFixed(0);
+      if (sessionViolations.length === 0) {
+        violList.innerHTML = '<div class="viol-empty">No violations this session.</div>';
+      } else {
+        violList.innerHTML = sessionViolations.slice().reverse().map(v => `
+          <div class="viol-item">
+            <div class="viol-query">${v.query}</div>
+            <div class="viol-meta">${v.reason} &bull; ${v.time}</div>
+            ${v.penalty > 0 ? '<div class="viol-penalty">₹' + v.penalty.toFixed(0) + ' penalty charged</div>' : ''}
+          </div>
+        `).join('');
+      }
+    }
 
     ipcRenderer.on('session-warning', () => {
       collapsedState = 'split';

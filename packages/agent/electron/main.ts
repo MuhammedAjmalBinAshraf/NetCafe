@@ -1529,6 +1529,11 @@ async function handleServerMessage(msg: any) {
           message: msg.payload || ''
         });
       }
+    } else if (msg.command === 'penalty-violation') {
+      // Penalty announcement – shown after safety violation is dismissed on the island
+      if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('penalty-violation', { message: msg.payload || '' });
+      }
     } else if (msg.command === 'broadcast-receive') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('broadcast-receive', msg.payload);

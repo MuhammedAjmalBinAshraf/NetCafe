@@ -1373,6 +1373,30 @@ export default function App() {
     }
   }
 
+  const handleMoveBlockedToSafe = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-blocked-to-safe', id)
+      if (res.success) {
+        const freshBlocked = await window.ipcRenderer.invoke('get-blocked-queries')
+        const freshSafe = await window.ipcRenderer.invoke('get-safe-queries')
+        setBlockedQueries(freshBlocked)
+        setSafeQueries(freshSafe)
+      }
+    }
+  }
+
+  const handleMoveSafeToBlocked = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-safe-to-blocked', id)
+      if (res.success) {
+        const freshBlocked = await window.ipcRenderer.invoke('get-blocked-queries')
+        const freshSafe = await window.ipcRenderer.invoke('get-safe-queries')
+        setBlockedQueries(freshBlocked)
+        setSafeQueries(freshSafe)
+      }
+    }
+  }
+
   const handleFullscreenKeyDown = (e: React.KeyboardEvent<HTMLDivElement>, machineId: number) => {
     if (e.key === 'Escape') {
       setIsRemoteFullscreen(false)
@@ -2350,29 +2374,24 @@ export default function App() {
                         <div className="text-xs mt-1.5 text-slate-600">Alerts appear instantly when a client searches prohibited content.</div>
                       </div>
                     ) : (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-sm">
-                          <thead>
-                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 text-xs uppercase tracking-wider font-semibold">
-                              <th className="p-4">Terminal</th>
-                              <th className="p-4">Active User</th>
-                              <th className="p-4">Search Query</th>
-                              <th className="p-4">Reason</th>
-                              <th className="p-4">Timestamp</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-900">
-                            {safetyAlerts.map((alert: any) => (
-                              <tr key={alert.id} className="hover:bg-red-950/20 transition-colors">
-                                <td className="p-4 font-semibold text-white">{alert.machine_name || `PC-${alert.machine_id}`}</td>
-                                <td className="p-4 text-slate-300 text-xs font-semibold">{alert.user_details || 'Walk-in User'}</td>
-                                <td className="p-4 font-mono text-red-300 text-xs">{alert.query}</td>
-                                <td className="p-4 text-slate-300 text-xs">{alert.reason}</td>
-                                <td className="p-4 font-mono text-xs text-slate-400">{new Date(alert.timestamp).toLocaleString()}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="overflow-y-auto" style={{ maxHeight: '280px' }}>
+                        {safetyAlerts.map((alert: any) => (
+                          <div key={alert.id} className="flex items-start gap-3 px-4 py-3 border-b border-slate-900/60 hover:bg-red-950/20 transition-colors">
+                            <div className="flex-shrink-0 mt-0.5">
+                              <div className="w-1.5 h-1.5 rounded-full bg-red-500 mt-1.5" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-semibold text-white text-xs">{alert.machine_name || `PC-${alert.machine_id}`}</span>
+                                <span className="text-slate-500 text-xs">·</span>
+                                <span className="text-slate-400 text-xs">{alert.user_details || 'Walk-in User'}</span>
+                                <span className="text-slate-600 text-xs ml-auto font-mono">{new Date(alert.timestamp).toLocaleTimeString()}</span>
+                              </div>
+                              <div className="font-mono text-red-300 text-xs mt-0.5 truncate">"{alert.query}"</div>
+                              <div className="text-slate-500 text-xs mt-0.5">{alert.reason}</div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -2456,7 +2475,7 @@ export default function App() {
                           <thead>
                             <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-semibold">
                               <th className="p-2.5">Safe Query / Phrase</th>
-                              <th className="p-2.5 text-right w-16">Action</th>
+                              <th className="p-2.5 text-right w-24">Actions</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-900">
@@ -2464,13 +2483,22 @@ export default function App() {
                               <tr key={q.id} className="hover:bg-slate-900/40 transition-colors">
                                 <td className="p-2.5 font-mono text-slate-300">{q.query}</td>
                                 <td className="p-2.5 text-right">
-                                  <button
-                                    onClick={() => handleDeleteSafeQuery(q.id)}
-                                    className="text-slate-500 hover:text-red-400 transition-colors p-1"
-                                    title="Delete"
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      onClick={() => handleMoveSafeToBlocked(q.id)}
+                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                      title="Move to Blacklist"
+                                    >
+                                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteSafeQuery(q.id)}
+                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                      title="Delete"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
                                 </td>
                               </tr>
                             ))}
@@ -2478,6 +2506,7 @@ export default function App() {
                         </table>
                       </div>
                     )}
+
                   </div>
                 </div>
 
@@ -2567,7 +2596,7 @@ export default function App() {
                             <thead>
                               <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-semibold">
                                 <th className="p-2.5">Blocked Term / Site</th>
-                                <th className="p-2.5 text-right w-16">Action</th>
+                                <th className="p-2.5 text-right w-24">Actions</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-slate-900">
@@ -2575,13 +2604,22 @@ export default function App() {
                                 <tr key={q.id} className="hover:bg-slate-900/40 transition-colors">
                                   <td className="p-2.5 font-mono text-slate-300">{q.query}</td>
                                   <td className="p-2.5 text-right">
-                                    <button
-                                      onClick={() => handleDeleteBlockedQuery(q.id)}
-                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
-                                      title="Delete"
-                                    >
-                                      <Trash2 size={12} />
-                                    </button>
+                                    <div className="flex items-center justify-end gap-1">
+                                      <button
+                                        onClick={() => handleMoveBlockedToSafe(q.id)}
+                                        className="text-slate-500 hover:text-emerald-400 transition-colors p-1"
+                                        title="Move to Whitelist"
+                                      >
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                      </button>
+                                      <button
+                                        onClick={() => handleDeleteBlockedQuery(q.id)}
+                                        className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                        title="Delete"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               ))}
@@ -2589,6 +2627,7 @@ export default function App() {
                           </table>
                         </div>
                       )}
+
                     </div>
 
                     {/* Violation Penalty Fee */}

@@ -2527,6 +2527,34 @@ ipcMain.handle('update-blocked-query', (_, id, query) => {
   }
 })
 
+// Move a blocked query to safe list (switch blacklist → whitelist)
+ipcMain.handle('move-blocked-to-safe', (_, id) => {
+  if (!db) return { success: false }
+  try {
+    const row = db.prepare("SELECT query FROM blocked_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.prepare("DELETE FROM blocked_queries WHERE id = ?").run(id)
+    const info = db.prepare("INSERT OR IGNORE INTO safe_queries (query) VALUES (?)").run(row.query)
+    return { success: true, id: info.lastInsertRowid }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+// Move a safe query to blocked list (switch whitelist → blacklist)
+ipcMain.handle('move-safe-to-blocked', (_, id) => {
+  if (!db) return { success: false }
+  try {
+    const row = db.prepare("SELECT query FROM safe_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.prepare("DELETE FROM safe_queries WHERE id = ?").run(id)
+    const info = db.prepare("INSERT OR IGNORE INTO blocked_queries (query) VALUES (?)").run(row.query)
+    return { success: true, id: info.lastInsertRowid }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
 
 ipcMain.handle('get-broadcast-schedule', () => {
   if (!db) return null
@@ -3051,8 +3079,8 @@ function enforceViolation(
       db.prepare("UPDATE sessions SET penalty_amount = COALESCE(penalty_amount, 0) + ? WHERE id = ?").run(penaltyFee, activeSess.id)
       
       sendCommandToMachine(machineId, { 
-        command: 'message', 
-        payload: `⚠️ Safety Violation Penalty: Search "${query}" is not allowed. A penalty fine of ₹${penaltyFee} has been charged to your session.` 
+        command: 'penalty-violation', 
+        payload: `A penalty fine of ₹${penaltyFee} has been charged to your session for violating safety rules (query: "${query}"). Total penalties may be added to your bill.` 
       })
     }
     
