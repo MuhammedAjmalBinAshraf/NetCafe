@@ -8,12 +8,62 @@ import { exec, execSync, spawn, execFileSync } from 'child_process';
 import dgram from 'dgram';
 import { MitmProxy } from './mitm-proxy';
 
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-  console.log('Another instance of NetCafe Agent is already running. Exiting.');
-  app.quit();
-  process.exit(0);
+const hasServiceArg = process.argv.includes('--install-watchdog') ||
+                      process.argv.includes('--uninstall-watchdog') ||
+                      process.argv.includes('--install-kiosk') ||
+                      process.argv.includes('--uninstall-kiosk');
+
+if (hasServiceArg) {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch('disable-gpu');
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('headless');
+
+  app.whenReady().then(async () => {
+    if (process.argv.includes('--install-watchdog')) {
+      writeAgentRuntimeLog('Installing watchdog service (headless mode)...');
+      try {
+        await installWatchdogService();
+        writeAgentRuntimeLog('Watchdog service installed successfully.');
+      } catch (e: any) {
+        writeAgentRuntimeLog(`Watchdog install failed: ${e.message}`);
+      }
+    } else if (process.argv.includes('--uninstall-watchdog')) {
+      writeAgentRuntimeLog('Uninstalling watchdog service (headless mode)...');
+      try {
+        await uninstallWatchdogService();
+        writeAgentRuntimeLog('Watchdog service uninstalled successfully.');
+      } catch (e: any) {
+        writeAgentRuntimeLog(`Watchdog uninstall failed: ${e.message}`);
+      }
+    } else if (process.argv.includes('--install-kiosk')) {
+      writeAgentRuntimeLog('Running kiosk setup (headless mode)...');
+      try {
+        await runKioskSetup();
+        writeAgentRuntimeLog('Kiosk setup completed successfully.');
+      } catch (e: any) {
+        writeAgentRuntimeLog(`Kiosk setup failed: ${e.message}`);
+      }
+    } else if (process.argv.includes('--uninstall-kiosk')) {
+      writeAgentRuntimeLog('Running kiosk uninstall (headless mode)...');
+      try {
+        await runKioskUninstall();
+        writeAgentRuntimeLog('Kiosk uninstall completed successfully.');
+      } catch (e: any) {
+        writeAgentRuntimeLog(`Kiosk uninstall failed: ${e.message}`);
+      }
+    }
+    app.quit();
+  });
+} else {
+  const gotTheLock = app.requestSingleInstanceLock();
+  if (!gotTheLock) {
+    console.log('Another instance of NetCafe Agent is already running. Exiting.');
+    app.quit();
+    process.exit(0);
+  }
 }
+
 
 const IS_DEVELOPER_MODE = false;
 
@@ -1285,6 +1335,19 @@ function sendToServer(data: any) {
   }
 }
 
+/**
+ * Sends an update status event back to the server over the active TCP socket.
+ * The server relays this to the admin dashboard for display.
+ */
+function sendStatusToServer(event: string, payload: Record<string, any>) {
+  try {
+    sendToServer({ event, ...payload });
+  } catch (err: any) {
+    logToUI(`Failed to send status to server: ${err.message}`);
+  }
+}
+
+
 function unlockAndCloseWindow() {
   if (lockWindow && !lockWindow.isDestroyed()) {
     logToUI('Transitioning lock screen to loading state...');
@@ -1575,12 +1638,142 @@ async function handleServerMessage(msg: any) {
         }
       }
     } else if (msg.command === 'trigger-update') {
-      // Server requested a software update check — trigger auto-updater
-      logToUI('Server triggered remote update check. Running autoUpdater...');
+      logToUI('Server triggered remote update. Configuring updater...');
+
       try {
-        autoUpdater.checkForUpdates().catch((err: any) => logToUI(`Remote update check failed: ${err.message}`));
+        // 1. Get the server's IP from the payload or fall back to local serverHost
+        const serverIp = msg.serverIp || serverHost;
+        const serverPort = msg.serverPort || 9001;
+        const feedUrl = `http://${serverIp}:${serverPort}/updates/agent`;
+
+        // 2. Override feed URL at runtime so it always points to THIS server
+        autoUpdater.setFeedURL({
+          provider: 'generic',
+          url: feedUrl,
+        });
+
+        logToUI(`Update feed URL set to: ${feedUrl}`);
+
+        // 3. Emit status back to server: update check started
+        sendStatusToServer('update-status', {
+          stage: 'checking',
+          message: 'Checking for updates...',
+        });
+
+        // 4. Wire up all autoUpdater events (guard against duplicate listeners)
+        autoUpdater.removeAllListeners();
+
+        autoUpdater.on('checking-for-update', () => {
+          logToUI('Checking for update...');
+          sendUpdateStatus({ status: 'checking' });
+        });
+
+        autoUpdater.on('update-available', (info) => {
+          logToUI(`Update available: v${info.version}`);
+          sendStatusToServer('update-status', {
+            stage: 'downloading',
+            message: `Downloading v${info.version}...`,
+            version: info.version,
+          });
+          sendUpdateStatus({ status: 'available', info });
+        });
+
+        autoUpdater.on('update-not-available', (info) => {
+          const version = info?.version || '';
+          logToUI(`Already up to date: v${version}`);
+          sendStatusToServer('update-status', {
+            stage: 'up-to-date',
+            message: `Already on latest version (v${version})`,
+            version: version,
+          });
+          sendUpdateStatus({ status: 'not-available' });
+        });
+
+        autoUpdater.on('download-progress', (progress) => {
+          const pct = Math.round(progress.percent);
+          logToUI(`Download progress: ${pct}%`);
+          sendStatusToServer('update-status', {
+            stage: 'downloading',
+            message: `Downloading... ${pct}%`,
+            percent: pct,
+          });
+          sendUpdateStatus({ status: 'downloading', progress });
+        });
+
+        autoUpdater.on('update-downloaded', (info) => {
+          logToUI(`Update downloaded: v${info.version}. Preparing to install...`);
+          sendStatusToServer('update-status', {
+            stage: 'installing',
+            message: `v${info.version} downloaded. Installing via watchdog...`,
+            version: info.version,
+          });
+          
+          updateReady = true;
+          downloadedUpdatePath = info?.downloadedFile;
+          sendUpdateStatus({ status: 'downloaded', info });
+
+          // Log the download event in the setup/install log
+          const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
+          try {
+            fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
+          } catch {}
+
+          // Rebuild lock window to show the downloaded banner
+          if (isLocked) {
+            createLockWindow();
+          }
+
+          // Read setup log contents to display in the UI
+          let setupLogContent = '';
+          try {
+            if (fs.existsSync(logPath)) {
+              setupLogContent = fs.readFileSync(logPath, 'utf8');
+            }
+          } catch {}
+
+          let agentLogContent = '';
+          try {
+            if (fs.existsSync(runtimeLogFilePath)) {
+              agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
+            } else {
+              agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
+            }
+          } catch {}
+
+          const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
+
+          // Send IPC to show the Auto Updating screen
+          if (lockWindow && !lockWindow.isDestroyed()) {
+            lockWindow.webContents.send('show-auto-updating', {
+              version: info?.version,
+              logs: combinedLogs
+            });
+          }
+
+          // Stop watchdog and install update after 15 seconds automatically
+          updateInstallTimeout = setTimeout(() => {
+            triggerInstallUpdate(downloadedUpdatePath);
+          }, 15000);
+        });
+
+        autoUpdater.on('error', (err) => {
+          logToUI(`AutoUpdater error: ${err.message}`);
+          sendStatusToServer('update-status', {
+            stage: 'error',
+            message: `Update failed: ${err.message}`,
+          });
+          sendUpdateStatus({ status: 'error', message: err.message });
+        });
+
+        // 5. Start the check
+        await autoUpdater.checkForUpdates();
+
       } catch (e: any) {
-        logToUI(`autoUpdater.checkForUpdates error: ${e.message}`);
+        logToUI(`autoUpdater error: ${e.message}`);
+        sendStatusToServer('update-status', {
+          stage: 'error',
+          message: `Update error: ${e.message}`,
+        });
       }
     }
   } catch (e) {
@@ -2154,6 +2347,49 @@ function setupWindowsFirewall() {
 
 let udpListener: dgram.Socket | null = null;
 let updateReady = false;
+let downloadedUpdatePath: string | undefined;
+let updateInstallTimeout: NodeJS.Timeout | null = null;
+
+function sendUpdateStatus(payload: object) {
+  if (lockWindow && !lockWindow.isDestroyed()) {
+    lockWindow.webContents.send('agent-update-status', payload);
+  }
+}
+
+function triggerInstallUpdate(installerPath?: string) {
+  isAppQuitting = true;
+  if (updateInstallTimeout) {
+    clearTimeout(updateInstallTimeout);
+    updateInstallTimeout = null;
+  }
+
+  if (installerPath && fs.existsSync(installerPath)) {
+    try {
+      fs.writeFileSync("C:\\NetCafe\\install-update.flag", installerPath, "utf8");
+      logToUI("Delegating silent update installation to Watchdog service. Quitting agent in 1 second...");
+      setTimeout(() => {
+        app.quit();
+      }, 1000);
+      return; // Watchdog handles the silent installation and reboot
+    } catch (e) {
+      logToUI("Failed to write update flag: " + e);
+    }
+  }
+
+  // Fallback: If no installer path or flag write failed, attempt direct update
+  try {
+    fs.writeFileSync("C:\\NetCafe\\stop-watchdog.flag", "stop", "utf8");
+  } catch {}
+
+  if (process.platform === 'win32') {
+    const scProc = safeSpawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
+    scProc.on('close', () => {
+      setTimeout(() => autoUpdater.quitAndInstall(), 2000);
+    });
+  } else {
+    autoUpdater.quitAndInstall();
+  }
+}
 function startUdpDiscovery() {
   if (udpListener) return;
   logToUI('Starting UDP Discovery Listener on port 9090...');
@@ -2523,6 +2759,7 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
 }
 
 app.whenReady().then(async () => {
+  if (hasServiceArg) return;
   // Remove watchdog disable flag on startup to re-enable watchdog checks
   try {
     if (fs.existsSync("C:\\NetCafe\\stop-watchdog.flag")) {
@@ -2764,42 +3001,7 @@ app.whenReady().then(async () => {
     }
   }
 
-  let downloadedUpdatePath: string | undefined;
-  let updateInstallTimeout: NodeJS.Timeout | null = null;
-  const triggerInstallUpdate = (installerPath?: string) => {
-    isAppQuitting = true;
-    if (updateInstallTimeout) {
-      clearTimeout(updateInstallTimeout);
-      updateInstallTimeout = null;
-    }
-
-    if (installerPath && fs.existsSync(installerPath)) {
-      try {
-        fs.writeFileSync("C:\\NetCafe\\install-update.flag", installerPath, "utf8");
-        logToUI("Delegating silent update installation to Watchdog service. Quitting agent in 1 second...");
-        setTimeout(() => {
-          app.quit();
-        }, 1000);
-        return; // Watchdog handles the silent installation and reboot
-      } catch (e) {
-        logToUI("Failed to write update flag: " + e);
-      }
-    }
-
-    // Fallback: If no installer path or flag write failed, attempt direct update
-    try {
-      fs.writeFileSync("C:\\NetCafe\\stop-watchdog.flag", "stop", "utf8");
-    } catch {}
-
-    if (process.platform === 'win32') {
-      const scProc = safeSpawn('sc.exe', ['stop', 'NetCafeAgentWatchdog']);
-      scProc.on('close', () => {
-        setTimeout(() => autoUpdater.quitAndInstall(), 2000);
-      });
-    } else {
-      autoUpdater.quitAndInstall();
-    }
-  };
+  // Update variables and trigger function are defined globally
 
   ipcMain.handle('trigger-update-restart', () => {
     logToUI('Operator/System requested immediate update restart.');

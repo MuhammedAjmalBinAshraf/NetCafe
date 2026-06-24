@@ -213,6 +213,17 @@ export default function App() {
   // Auto-updater state
   const [updateStatus, setUpdateStatus] = useState<{ status: string; info?: any; progress?: any; message?: string } | null>(null)
 
+  // Agent remote update states
+  const [showAgentUpdatePanel, setShowAgentUpdatePanel] = useState(false)
+  const [agentUpdateStatuses, setAgentUpdateStatuses] = useState<Record<string, {
+    machineName: string;
+    stage: string;
+    message: string;
+    percent?: number;
+    timestamp: number;
+  }>>({})
+  const [updateHealth, setUpdateHealth] = useState<{ ready: boolean; version?: string; updateDir?: string } | null>(null)
+
   // User Management states
   const [users, setUsers] = useState<User[]>([])
   const [isUserModalOpen, setIsUserModalOpen] = useState(false)
@@ -351,7 +362,21 @@ export default function App() {
       window.ipcRenderer.on('machines-updated', machineListener)
 
       const updateListener = (_: any, payload: any) => {
-        setUpdateStatus(payload)
+        if (payload && payload.machineId !== undefined) {
+          setAgentUpdateStatuses(prev => ({
+            ...prev,
+            [payload.machineId]: {
+              machineName: payload.machineName,
+              stage: payload.stage,
+              message: payload.message,
+              percent: payload.percent,
+              timestamp: payload.timestamp
+            }
+          }))
+          setShowAgentUpdatePanel(true)
+        } else {
+          setUpdateStatus(payload)
+        }
       }
       window.ipcRenderer.on('update-status', updateListener)
 
@@ -419,6 +444,26 @@ export default function App() {
       }
     }
   }, [])
+
+  const fetchUpdateHealth = () => {
+    const ip = serverIp || '127.0.0.1';
+    fetch(`http://${ip}:9001/api/updates/health`)
+      .then(r => r.json())
+      .then(data => setUpdateHealth(data))
+      .catch(() => {
+        if (window.ipcRenderer) {
+          window.ipcRenderer.invoke('check-updates-health').then((data: any) => {
+            setUpdateHealth(data);
+          }).catch(() => {});
+        }
+      });
+  };
+
+  useEffect(() => {
+    fetchUpdateHealth();
+    const interval = setInterval(fetchUpdateHealth, 10000);
+    return () => clearInterval(interval);
+  }, [serverIp]);
 
   // Poll data periodically if running inside browser bridge mode (non-Electron environment)
   useEffect(() => {
@@ -860,8 +905,13 @@ export default function App() {
       const machine = machines.find((m: any) => m.id === machineId)
       const machineName = machine ? machine.name : `PC ${machineId}`
       if (confirm(`Trigger update check on terminal "${machineName}"? (Reboots if update is found)`)) {
-        if (window.ipcRenderer) await window.ipcRenderer.invoke('trigger-client-update', machineId)
+        if ((window as any).electronAPI) {
+          await (window as any).electronAPI.triggerUpdate(machineId)
+        } else if (window.ipcRenderer) {
+          await window.ipcRenderer.invoke('trigger-client-update', machineId)
+        }
         alert(`Update command sent to terminal "${machineName}".`)
+        fetchUpdateHealth();
       }
     }
   }
@@ -1721,6 +1771,14 @@ export default function App() {
                     <ArrowUpCircle size={12} />
                     <span>Batch Update Agents</span>
                   </button>
+                  {updateHealth && (
+                    <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-900/50 border border-slate-800/60 rounded text-[11px] font-medium text-slate-300">
+                      <div className={`w-2 h-2 rounded-full ${updateHealth.ready ? 'bg-emerald-500 animate-pulse' : 'bg-red-500 animate-pulse'}`} />
+                      <span title={updateHealth.ready ? `Update package is located at: ${updateHealth.updateDir}` : 'Copy the agent update installer and latest-agent.yml files to: C:\\NetCafe\\updates\\agent'}>
+                        {updateHealth.ready ? `v${updateHealth.version} ready` : 'No update files found'}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1777,6 +1835,21 @@ export default function App() {
                         >
                           Manage
                         </button>
+                        {machine.status !== 'offline' && (
+                          <button
+                            onClick={() => {
+                              if ((window as any).electronAPI) {
+                                (window as any).electronAPI.triggerUpdate(machine.id);
+                              } else {
+                                window.ipcRenderer?.invoke('trigger-client-update', machine.id);
+                              }
+                            }}
+                            className="px-2.5 py-1 bg-emerald-900/35 border border-emerald-850/50 text-emerald-400 hover:bg-emerald-850/30 rounded text-xs font-bold transition-all"
+                            title="Trigger remote update check"
+                          >
+                            Update
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -5486,6 +5559,77 @@ Respond strictly in JSON format:
             >
               Minimize Viewport
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Agent Update Status Panel */}
+      {showAgentUpdatePanel && (
+        <div className="fixed bottom-6 right-6 w-96 bg-slate-950/95 border border-slate-850 rounded-xl shadow-2xl z-[9999] overflow-hidden backdrop-blur-md">
+          <div className="px-4 py-3 border-b border-slate-850 flex justify-between items-center bg-slate-900/40">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
+              <span className="font-bold text-sm text-slate-200">Remote Update Status</span>
+            </div>
+            <button
+              onClick={() => setShowAgentUpdatePanel(false)}
+              className="text-slate-400 hover:text-white transition-colors"
+            >
+              <X size={16} />
+            </button>
+          </div>
+          <div className="max-h-72 overflow-y-auto divide-y divide-slate-850 p-2 space-y-1">
+            {Object.keys(agentUpdateStatuses).length === 0 ? (
+              <div className="p-4 text-center text-xs text-slate-500">No update signals received yet.</div>
+            ) : (
+              Object.entries(agentUpdateStatuses).map(([machineId, status]) => {
+                let stageIcon = '—';
+                let stageColor = 'text-slate-500';
+                let spinClass = '';
+
+                if (status.stage === 'checking') {
+                  stageIcon = '⟳';
+                  stageColor = 'text-slate-400';
+                  spinClass = 'animate-spin inline-block';
+                } else if (status.stage === 'downloading') {
+                  stageIcon = '↓';
+                  stageColor = 'text-blue-400';
+                } else if (status.stage === 'installing') {
+                  stageIcon = '⚙';
+                  stageColor = 'text-amber-400';
+                  spinClass = 'animate-spin inline-block';
+                } else if (status.stage === 'up-to-date') {
+                  stageIcon = '✓';
+                  stageColor = 'text-emerald-400';
+                } else if (status.stage === 'error') {
+                  stageIcon = '✗';
+                  stageColor = 'text-red-400';
+                }
+
+                return (
+                  <div key={machineId} className="flex flex-col gap-1 p-2 hover:bg-slate-900/40 rounded transition-colors">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold text-slate-350">{status.machineName}</span>
+                      <span className={`flex items-center gap-1 font-semibold ${stageColor}`}>
+                        <span className={spinClass}>{stageIcon}</span>
+                        {status.stage.toUpperCase().replace('-', ' ')}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 truncate" title={status.message}>
+                      {status.message}
+                    </div>
+                    {status.stage === 'downloading' && status.percent !== undefined && (
+                      <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden mt-1">
+                        <div
+                          className="bg-blue-500 h-full rounded-full transition-all duration-300"
+                          style={{ width: `${status.percent}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}

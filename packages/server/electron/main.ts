@@ -282,6 +282,19 @@ function setupDatabase() {
     );
   `)
 
+  // Create update log table for tracking remote agent update progress
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS update_log (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id TEXT NOT NULL,
+      stage      TEXT NOT NULL,
+      message    TEXT,
+      version    TEXT,
+      percent    INTEGER,
+      timestamp  INTEGER DEFAULT (strftime('%s','now'))
+    );
+  `)
+
   // Default violation penalty in minutes
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_minutes', '5');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_fee', '50');")
@@ -365,6 +378,38 @@ function handleClientMessage(socket: net.Socket, data: any) {
   if (!db) {
     logToUI("Error: DB not initialized yet")
     return
+  }
+  if (data.event === 'update-status') {
+    const machineId = clients.get(socket);
+    if (!machineId) return;
+
+    // Log to DB
+    db.prepare(`
+      INSERT INTO update_log (machine_id, stage, message, version, percent, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      machineId.toString(),
+      data.stage,
+      data.message,
+      data.version || null,
+      data.percent || null,
+      Date.now()
+    );
+
+    // Forward to admin dashboard renderer via IPC
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      const machine = db.prepare("SELECT name FROM machines WHERE id = ?").get(machineId) as any;
+      mainWindow.webContents.send('update-status', {
+        machineId: machineId,
+        machineName: machine ? machine.name : `PC-${machineId}`,
+        stage: data.stage,
+        message: data.message,
+        version: data.version,
+        percent: data.percent,
+        timestamp: Date.now(),
+      });
+    }
+    return;
   }
   if (data.type === 'register') {
     const payload = data.payload
@@ -1635,6 +1680,40 @@ Restart-Computer -Force
   }
   webApp.use('/updates/agent', express.static(serverAgentUpdateDir));
 
+  // GET /api/updates/health
+  // Returns whether the update files are correctly in place
+  webApp.get('/api/updates/health', (_req, res) => {
+    const updateDir = 'C:\\NetCafe\\updates\\agent';
+    const ymlPath   = path.join(updateDir, 'latest-agent.yml');
+    const ymlExists = fs.existsSync(ymlPath);
+
+    let version = null;
+    let exeFile = null;
+
+    if (ymlExists) {
+      try {
+        const yml = fs.readFileSync(ymlPath, 'utf-8');
+        const versionMatch = yml.match(/^version:\s*(.+)$/m);
+        const pathMatch    = yml.match(/^path:\s*(.+)$/m);
+        version = versionMatch ? versionMatch[1].trim() : null;
+        exeFile = pathMatch    ? pathMatch[1].trim()    : null;
+      } catch {}
+    }
+
+    const exeExists = exeFile
+      ? fs.existsSync(path.join(updateDir, exeFile))
+      : false;
+
+    res.json({
+      ready:      ymlExists && exeExists,
+      ymlExists,
+      exeExists,
+      version,
+      exeFile,
+      updateDir,
+    });
+  });
+
   // Serve static UI assets in production/packaged app
   const distPath = path.join(__dirname, '../dist');
   if (fs.existsSync(distPath)) {
@@ -2216,24 +2295,69 @@ ipcMain.handle('restart-machine', (_, machineId) => {
 })
 
 ipcMain.handle('trigger-client-update', (_, machineId) => {
+  const serverIp = getLanIPAddress();
+  const command = {
+    command: 'trigger-update',
+    serverIp: serverIp,
+    serverPort: 9001,
+  };
+
   if (machineId === 'all') {
     for (const socket of clients.keys()) {
       try {
-        socket.write(JSON.stringify({ command: 'trigger-update' }) + '\n')
+        socket.write(JSON.stringify(command) + '\n')
       } catch {}
     }
     return { success: true }
   } else {
-    sendCommandToMachine(machineId, { command: 'trigger-update' })
+    sendCommandToMachine(machineId, command)
     return { success: true }
   }
 })
 
 ipcMain.handle('trigger-client-update-batch', (_, machineIds: number[]) => {
+  const serverIp = getLanIPAddress();
+  const command = {
+    command: 'trigger-update',
+    serverIp: serverIp,
+    serverPort: 9001,
+  };
   for (const id of machineIds) {
-    sendCommandToMachine(id, { command: 'trigger-update' })
+    sendCommandToMachine(id, command)
   }
   return { success: true }
+})
+
+ipcMain.handle('check-updates-health', () => {
+  const updateDir = 'C:\\NetCafe\\updates\\agent';
+  const ymlPath   = path.join(updateDir, 'latest-agent.yml');
+  const ymlExists = fs.existsSync(ymlPath);
+
+  let version = null;
+  let exeFile = null;
+
+  if (ymlExists) {
+    try {
+      const yml = fs.readFileSync(ymlPath, 'utf-8');
+      const versionMatch = yml.match(/^version:\s*(.+)$/m);
+      const pathMatch    = yml.match(/^path:\s*(.+)$/m);
+      version = versionMatch ? versionMatch[1].trim() : null;
+      exeFile = pathMatch    ? pathMatch[1].trim()    : null;
+    } catch {}
+  }
+
+  const exeExists = exeFile
+    ? fs.existsSync(path.join(updateDir, exeFile))
+    : false;
+
+  return {
+    ready:      ymlExists && exeExists,
+    ymlExists,
+    exeExists,
+    version,
+    exeFile,
+    updateDir,
+  };
 })
 
 ipcMain.handle('limit-bandwidth', (_, machineId, rate) => {

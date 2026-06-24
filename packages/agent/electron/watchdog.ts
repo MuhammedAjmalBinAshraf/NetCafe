@@ -10,7 +10,7 @@ function checkAndRestart() {
       console.log('Update flag found. Delegating update installation to Watchdog service...');
       
       const logFile = 'C:\\NetCafe\\logs\\watchdog-update.log';
-      const psCommand = `Start-Transcript -Path "${logFile}" -Append; Write-Host "Watchdog starting update installation..."; Start-Process -FilePath "${installerPath}" -ArgumentList "/S" -Wait; Write-Host "Update installed. Rebooting..."; Restart-Computer -Force`;
+      const psCommand = `Start-Transcript -Path "${logFile}" -Append; Write-Host "Watchdog starting update installation..."; Start-Process -FilePath "${installerPath}" -ArgumentList "/S /headless /disable-gpu" -Wait; Write-Host "Update installed. Rebooting..."; Restart-Computer -Force`;
       
       // Ensure logs directory exists
       try {

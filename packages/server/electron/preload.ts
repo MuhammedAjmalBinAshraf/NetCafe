@@ -15,9 +15,23 @@ const api = {
   }
 };
 
+const electronAPI = {
+  onUpdateStatus: (cb: Function) => {
+    const subscription = (_event: any, payload: any) => cb(payload);
+    ipcRenderer.on('update-status', subscription);
+    return () => {
+      ipcRenderer.off('update-status', subscription);
+    };
+  },
+  triggerUpdate: (machineId: any) =>
+    ipcRenderer.invoke('trigger-client-update', machineId)
+};
+
 try {
   contextBridge.exposeInMainWorld('ipcRenderer', api);
+  contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 } catch (e) {
   (window as any).ipcRenderer = api;
+  (window as any).electronAPI = electronAPI;
 }
 
