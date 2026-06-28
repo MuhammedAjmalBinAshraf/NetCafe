@@ -75,11 +75,14 @@ let isConnecting = false;
 let isTcpConnected = false;
 let isLocked = true;
 let isAppQuitting = false;
+let testUserEnabled = false;
+let isTestUserSession = false;
 let activeBlockRules: any[] = [];
 let blockInterval: NodeJS.Timeout | null = null;
 let metricsInterval: NodeJS.Timeout | null = null;
 let lockEnforceInterval: NodeJS.Timeout | null = null;
 let pendingLoginResolve: ((result: { success: boolean; message?: string }) => void) | null = null;
+let pendingProfileResolve: ((result: { success: boolean; data?: any; message?: string }) => void) | null = null;
 let currentUser: string | null = null;
 let islandWindow: BrowserWindow | null = null;
 let currentSessionData: any = null;
@@ -309,6 +312,7 @@ function loadConfig() {
     }
     if (data.machineId) machineId = data.machineId;
     if (data.operatorPassword) operatorPassword = data.operatorPassword;
+    if (data.testUserEnabled !== undefined) testUserEnabled = !!data.testUserEnabled;
     if (data.clientUuid) {
       clientUuid = data.clientUuid;
     } else {
@@ -433,7 +437,31 @@ function createLockWindow() {
       text-align: center;
       box-shadow: 0 32px 64px -12px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05);
       width: 440px;
+      transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1), padding 0.4s cubic-bezier(0.16, 1, 0.3, 1);
       animation: fadeIn 0.5s cubic-bezier(0.16,1,0.3,1);
+    }
+    .container.wide-mode {
+      width: 760px;
+      padding: 2.5rem 2.5rem;
+    }
+    .test-btn {
+      width: 100%;
+      padding: 0.65rem;
+      background: rgba(16, 185, 129, 0.08);
+      border: 1px dashed rgba(16, 185, 129, 0.3);
+      border-radius: 10px;
+      color: #34d399;
+      font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+      font-size: 0.85rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      margin-top: 0.25rem;
+    }
+    .test-btn:hover {
+      background: rgba(16, 185, 129, 0.15);
+      border-color: rgba(16, 185, 129, 0.5);
+      transform: translateY(-1px);
     }
     @keyframes fadeIn {
       from { transform: translateY(16px); opacity: 0; }
@@ -702,12 +730,13 @@ function createLockWindow() {
     </div>
   </div>
 
-  <div class="container">
+  <div class="container" id="mainContainer">
     <div class="logo">🔒</div>
     <h1>NetCafe Terminal</h1>
     <div class="pc-badge">${machineId}</div>
 
-    <div class="login-card">
+    <!-- STAGE 1: LOGIN FORM SECTION -->
+    <div id="loginFormSection" class="login-card">
       <div class="login-title">Member Login</div>
       <div class="input-group">
         <label class="input-label" for="username">Username</label>
@@ -720,9 +749,61 @@ function createLockWindow() {
           <button type="button" id="togglePassword" style="position: absolute; right: 8px; background: none; border: none; color: rgba(255,255,255,0.4); cursor: pointer; outline: none; padding: 4px; display: flex; align-items: center; justify-content: center;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
         </div>
       </div>
-      <button class="login-btn" id="loginBtn">Start Session</button>
+      <button class="login-btn" id="loginBtn">Proceed to Profile</button>
+      
+      <!-- Test User Section -->
+      <div id="testUserSection" style="margin-top: 1rem; display: ${testUserEnabled ? 'block' : 'none'}; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 1rem;">
+        <button class="test-btn" id="testBtn">Start Test Session (Offline)</button>
+        <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.35rem; text-align: center;">Bypasses server connection, tracking, and filtering.</div>
+      </div>
+
       <div class="error-msg" id="errorMsg"></div>
       <div class="status-msg" id="statusMsg">⏳ Verifying credentials...</div>
+    </div>
+
+    <!-- STAGE 2: USER PROFILE SECTION -->
+    <div id="profileSection" class="login-card" style="display: none; text-align: left; max-height: 520px; overflow: hidden; flex-direction: column;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.08); padding-bottom: 0.75rem; margin-bottom: 1rem;">
+        <div>
+          <div style="font-size: 1.1rem; font-weight: 800; color: #f8fafc;" id="profDisplayName">User Profile</div>
+          <div style="font-size: 0.72rem; color: #64748b; font-weight: 600;" id="profSubDetails">Class: - | AD No: -</div>
+        </div>
+        <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.25); color: #34d399; padding: 0.35rem 0.75rem; border-radius: 10px; text-align: right;">
+          <div style="font-size: 0.6rem; text-transform: uppercase; font-weight: 700; letter-spacing: 0.05em; color: #10b981;">Balance</div>
+          <div style="font-size: 0.95rem; font-weight: 800;" id="profBalance">0 mins</div>
+        </div>
+      </div>
+
+      <!-- History tables -->
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; flex: 1; min-height: 0; margin-bottom: 1.25rem;">
+        <!-- Left: Usage -->
+        <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 0.85rem; display: flex; flex-direction: column; min-height: 0;">
+          <div style="font-size: 0.72rem; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.6rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>Usage History</span>
+            <span style="font-size: 0.65rem; color: #475569;" id="profTotalSessions">Total: 0</span>
+          </div>
+          <div id="usageHistoryList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.45rem; padding-right: 0.25rem; font-size: 0.7rem; color: #cbd5e1;">
+            <!-- Dynamic items -->
+          </div>
+        </div>
+
+        <!-- Right: Violations -->
+        <div style="background: rgba(15, 23, 42, 0.4); border: 1px solid rgba(255,255,255,0.05); border-radius: 12px; padding: 0.85rem; display: flex; flex-direction: column; min-height: 0;">
+          <div style="font-size: 0.72rem; font-weight: 700; color: #fca5a5; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.6rem; display: flex; justify-content: space-between; align-items: center;">
+            <span>Violations</span>
+            <span style="font-size: 0.65rem; color: #ef4444;" id="profTotalViolations">Count: 0</span>
+          </div>
+          <div id="violationsHistoryList" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 0.45rem; padding-right: 0.25rem; font-size: 0.7rem; color: #cbd5e1;">
+            <!-- Dynamic items -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Action buttons -->
+      <div style="display: flex; gap: 0.75rem; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 0.75rem;">
+        <button id="profileBackBtn" style="flex: 1; padding: 0.65rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; color: #94a3b8; font-weight: 600; font-size: 0.85rem; cursor: pointer; transition: all 0.15s;">Back to Login</button>
+        <button id="profileStartBtn" style="flex: 2; padding: 0.65rem; background: linear-gradient(135deg, #10b981, #059669); border: none; border-radius: 10px; color: white; font-weight: 700; font-size: 0.88rem; cursor: pointer; transition: all 0.15s; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.2);">Start Session</button>
+      </div>
     </div>
 
 
@@ -848,6 +929,18 @@ function createLockWindow() {
       const { ipcRenderer } = require('electron');
       const eyeOnSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
       const eyeOffSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" y1="2" x2="22" y2="22"/></svg>';
+      
+      let verifiedUsername = '';
+      let verifiedPassword = '';
+
+      const mainContainer = document.getElementById('mainContainer');
+      const loginFormSection = document.getElementById('loginFormSection');
+      const profileSection = document.getElementById('profileSection');
+      const testUserSection = document.getElementById('testUserSection');
+      const testBtn = document.getElementById('testBtn');
+      const profileBackBtn = document.getElementById('profileBackBtn');
+      const profileStartBtn = document.getElementById('profileStartBtn');
+
       const usernameEl = document.getElementById('username');
       const passwordEl = document.getElementById('password');
       const loginBtn = document.getElementById('loginBtn');
@@ -873,12 +966,75 @@ function createLockWindow() {
         }
         clearMessages();
         loginBtn.disabled = true;
+        statusMsg.textContent = '⏳ Verifying credentials...';
         statusMsg.style.display = 'block';
         try {
-          const result = await ipcRenderer.invoke('agent-user-login', username, password);
+          const result = await ipcRenderer.invoke('agent-get-user-profile', username, password);
           if (!result.success) {
             showError(result.message || 'Invalid credentials.');
             passwordEl.value = '';
+          } else {
+            // Success! Store verified credentials
+            verifiedUsername = username;
+            verifiedPassword = password;
+            clearMessages();
+
+            // Populate profile details
+            const prof = result.data.profile;
+            document.getElementById('profDisplayName').textContent = prof.display_name || prof.username;
+            document.getElementById('profSubDetails').textContent = 'Class: ' + (prof.class || 'N/A') + ' | AD No: ' + (prof.ad_no || 'N/A');
+            document.getElementById('profBalance').textContent = prof.balance_minutes + ' mins';
+            
+            // Populate sessions history list
+            const usageList = document.getElementById('usageHistoryList');
+            usageList.innerHTML = '';
+            document.getElementById('profTotalSessions').textContent = 'Total: ' + result.data.sessions.length;
+            if (result.data.sessions.length === 0) {
+              usageList.innerHTML = '<div style="color:#64748b; font-style:italic; padding:0.5rem; text-align:center;">No sessions found.</div>';
+            } else {
+              result.data.sessions.forEach(sess => {
+                const dateStr = sess.start_time ? new Date(sess.start_time.replace(' ', 'T')).toLocaleDateString() : 'N/A';
+                const timeStr = sess.start_time ? new Date(sess.start_time.replace(' ', 'T')).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+                const duration = sess.custom_duration || 'Unlimited';
+                const item = document.createElement('div');
+                item.style.cssText = 'background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.05); border-radius: 8px; padding: 0.45rem 0.6rem;';
+                item.innerHTML =
+                  '<div style="display:flex; justify-content:space-between; font-weight:600; font-size:0.7rem; color:#cbd5e1;">' +
+                    '<span>Session (' + (sess.mode || 'N/A') + ')</span>' +
+                    '<span style="color:#60a5fa;">' + duration + ' mins</span>' +
+                  '</div>' +
+                  '<div style="display:flex; justify-content:space-between; font-size:0.6rem; color:#475569; margin-top:0.15rem;">' +
+                    '<span>' + dateStr + ' ' + timeStr + '</span>' +
+                    '<span>Penalty: ₹' + (sess.penalty_amount || 0) + '</span>' +
+                  '</div>';
+                usageList.appendChild(item);
+              });
+            }
+
+            // Populate violations history list
+            const violList = document.getElementById('violationsHistoryList');
+            violList.innerHTML = '';
+            document.getElementById('profTotalViolations').textContent = 'Count: ' + result.data.violations.length;
+            if (result.data.violations.length === 0) {
+              violList.innerHTML = '<div style="color:#64748b; font-style:italic; padding:0.5rem; text-align:center;">No violations.</div>';
+            } else {
+              result.data.violations.forEach(v => {
+                const dateStr = v.timestamp ? new Date(v.timestamp.replace(' ', 'T')).toLocaleDateString() : 'N/A';
+                const timeStr = v.timestamp ? new Date(v.timestamp.replace(' ', 'T')).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+                const item = document.createElement('div');
+                item.style.cssText = 'background: rgba(239,68,68,0.05); border: 1px solid rgba(239,68,68,0.15); border-radius: 8px; padding: 0.45rem 0.6rem;';
+                item.innerHTML =
+                  '<div style="font-weight:600; color:#fca5a5; font-size:0.7rem; word-break:break-all;">Blocked: "' + (v.query || 'Unknown') + '"</div>' +
+                  '<div style="font-size:0.6rem; color:#f87171; margin-top:0.1rem;">Reason: ' + (v.reason || 'Safety rule') + '</div>' +
+                  '<div style="font-size:0.58rem; color:#64748b; margin-top:0.15rem;">' + dateStr + ' ' + timeStr + '</div>';
+                violList.appendChild(item);
+              });
+            }
+
+            // Transition UI to Stage 2 profile view
+            loginFormSection.style.display = 'none';
+            profileSection.style.display = 'flex';
+            mainContainer.classList.add('wide-mode');
           }
         } catch (err) {
           showError('Connection error. Please try again.');
@@ -891,6 +1047,61 @@ function createLockWindow() {
       loginBtn.addEventListener('click', attemptLogin);
       passwordEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') attemptLogin(); });
       usernameEl.addEventListener('keypress', (e) => { if (e.key === 'Enter') passwordEl.focus(); });
+
+      // Profile Back button controller
+      profileBackBtn.addEventListener('click', () => {
+        profileSection.style.display = 'none';
+        loginFormSection.style.display = 'block';
+        mainContainer.classList.remove('wide-mode');
+        passwordEl.value = '';
+        passwordEl.focus();
+      });
+
+      // Profile Start Session controller
+      profileStartBtn.addEventListener('click', async () => {
+        if (!verifiedUsername || !verifiedPassword) return;
+        profileStartBtn.disabled = true;
+        profileStartBtn.textContent = '⏳ Starting Session...';
+        try {
+          const result = await ipcRenderer.invoke('agent-user-login', verifiedUsername, verifiedPassword);
+          if (!result.success) {
+            alert(result.message || 'Failed to start session.');
+            profileSection.style.display = 'none';
+            loginFormSection.style.display = 'block';
+            mainContainer.classList.remove('wide-mode');
+            passwordEl.value = '';
+            passwordEl.focus();
+          }
+        } catch (err) {
+          alert('Connection error starting session.');
+        } finally {
+          profileStartBtn.disabled = false;
+          profileStartBtn.textContent = 'Start Session';
+        }
+      });
+
+      // Test Session trigger button controller
+      if (testBtn) {
+        testBtn.addEventListener('click', async () => {
+          testBtn.disabled = true;
+          testBtn.textContent = '⏳ Launching Test Session...';
+          try {
+            await ipcRenderer.invoke('agent-start-test-session');
+          } catch (err) {
+            alert('Failed to start test session.');
+          } finally {
+            testBtn.disabled = false;
+            testBtn.textContent = 'Start Test Session (Offline)';
+          }
+        });
+      }
+
+      // Reactive test-user visibility listener
+      ipcRenderer.on('test-user-setting-changed', (event, enabled) => {
+        if (testUserSection) {
+          testUserSection.style.display = enabled ? 'block' : 'none';
+        }
+      });
 
       // Password Eye Toggles
       const togglePassword = document.getElementById('togglePassword');
@@ -1380,7 +1591,32 @@ async function handleServerMessage(msg: any) {
     }
 
     logToUI(`Received server command: ${msg.command || 'unknown'}`);
-    if (msg.command === 'change-password-success') {
+    if (msg.command === 'update-test-user-setting') {
+      testUserEnabled = !!msg.enabled;
+      logToUI(`Test user setting updated from server: ${testUserEnabled}`);
+      try {
+        if (fs.existsSync(configPath)) {
+          const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+          cfg.testUserEnabled = testUserEnabled;
+          fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf8');
+        }
+      } catch (e: any) {
+        logToUI(`Failed to persist testUserEnabled to config: ${e.message}`);
+      }
+      if (lockWindow && !lockWindow.isDestroyed()) {
+        lockWindow.webContents.send('test-user-setting-changed', testUserEnabled);
+      }
+    } else if (msg.command === 'profile-success') {
+      if (pendingProfileResolve) {
+        pendingProfileResolve({ success: true, data: msg });
+        pendingProfileResolve = null;
+      }
+    } else if (msg.command === 'profile-fail') {
+      if (pendingProfileResolve) {
+        pendingProfileResolve({ success: false, message: msg.message || 'Failed to retrieve profile.' });
+        pendingProfileResolve = null;
+      }
+    } else if (msg.command === 'change-password-success') {
       if (pendingPasswordResolve) {
         pendingPasswordResolve({ success: true, message: msg.message || 'Password changed successfully.' });
         pendingPasswordResolve = null;
@@ -1871,6 +2107,61 @@ ipcMain.handle('agent-user-login', (_event, username: string, password: string):
       pendingLoginResolve = null;
       origResolve(result);
     };
+  });
+});
+
+ipcMain.handle('agent-get-user-profile', (_event, username: string, password: string): Promise<{ success: boolean; data?: any; message?: string }> => {
+  return new Promise((resolve) => {
+    if (!tcpSocket || tcpSocket.destroyed) {
+      resolve({ success: false, message: 'Not connected to server. Please try again.' });
+      return;
+    }
+    pendingProfileResolve = resolve;
+    const timeout = setTimeout(() => {
+      if (pendingProfileResolve === resolve) {
+        pendingProfileResolve = null;
+        resolve({ success: false, message: 'Server did not respond. Please try again.' });
+      }
+    }, 8000);
+    sendToServer({ type: 'get-user-profile', payload: { username, password } });
+    const origResolve = resolve;
+    pendingProfileResolve = (result) => {
+      clearTimeout(timeout);
+      pendingProfileResolve = null;
+      origResolve(result);
+    };
+  });
+});
+
+ipcMain.handle('agent-start-test-session', (): Promise<{ success: boolean }> => {
+  return new Promise((resolve) => {
+    isTestUserSession = true;
+    isLocked = false;
+    currentUser = 'Test User';
+    
+    stopLockEnforcement();
+    if (lockWindow) {
+      unlockAndCloseWindow();
+    }
+    
+    if (process.platform === 'win32') {
+      isDesktopShellRunning().then((running) => {
+        if (!running) {
+          logToUI('Spawning explorer.exe to load desktop shell (test session)...');
+          spawnExplorerShell();
+        }
+      });
+    }
+    
+    destroyIslandWindow();
+    createIslandWindow({
+      startTime: new Date().toISOString(),
+      mode: 'prepaid',
+      durationMinutes: 9999,
+      user: 'Test User'
+    });
+    
+    resolve({ success: true });
   });
 });
 
@@ -3035,6 +3326,10 @@ Add-Type -TypeDefinition $csharpSource
 
 function checkQuerySafety(query: string, url: string, ip: string, isUserInitiated: boolean): Promise<{ allowed: boolean; serverIssue?: boolean }> {
   return new Promise<{ allowed: boolean; serverIssue?: boolean }>((resolve) => {
+    if (isTestUserSession) {
+      resolve({ allowed: true });
+      return;
+    }
     const startTime = Date.now();
 
     // Check local blocked list first to instantly block recurring attempts
@@ -3256,6 +3551,7 @@ app.whenReady().then(async () => {
         },
         logToUI,
         (domain: string) => {
+          if (isTestUserSession) return false;
           const lowerDomain = domain.toLowerCase();
           return activeBlockRules.some(r => {
             if (r.type !== 'domain' || !r.value) return false;
@@ -3264,6 +3560,7 @@ app.whenReady().then(async () => {
           });
         },
         (domain: string) => {
+          if (isTestUserSession) return;
           logToUI(`[MITM] Domain block violation triggered: "${domain}"`);
           if (islandWindow && !islandWindow.isDestroyed()) {
             islandWindow.webContents.send('set-evaluating-state', true);
@@ -3786,7 +4083,18 @@ function destroyIslandWindow() {
 }
 
 ipcMain.on('exit-session-request', () => {
-  sendToServer({ type: 'client-request-close' });
+  if (isTestUserSession) {
+    logToUI('Ending local test user session. Locking terminal.');
+    isTestUserSession = false;
+    isLocked = true;
+    currentUser = null;
+    destroyIslandWindow();
+    if (!lockWindow) {
+      createLockWindow();
+    }
+  } else {
+    sendToServer({ type: 'client-request-close' });
+  }
 });
 
 ipcMain.on('student-reply', (event, text) => {

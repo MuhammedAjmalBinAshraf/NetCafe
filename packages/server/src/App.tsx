@@ -2906,6 +2906,30 @@ Respond strictly in JSON format:
                   </div>
                 </div>
 
+                {/* Test User Session Configuration */}
+                <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
+                  <h3 className="text-md font-bold text-white flex items-center gap-2">
+                    <UserCircle2 size={18} className="text-emerald-500" /> Test User Session Mode
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Enable or disable the Test User Session option on all client terminals. Enabling this allows users to run sessions locally without a live server connection, bypassing filters and usage tracking.
+                  </p>
+                  <div className="flex items-center justify-between bg-slate-950 border border-slate-800 p-4 rounded-lg">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-xs font-bold uppercase text-slate-400">Test User Option Status</span>
+                      <span className={`text-xs font-semibold ${settings.test_user_enabled === 'true' ? 'text-emerald-400' : 'text-slate-500'}`}>
+                        {settings.test_user_enabled === 'true' ? '● ENABLED' : '○ DISABLED'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => handleUpdateSetting('test_user_enabled', settings.test_user_enabled === 'true' ? 'false' : 'true')}
+                      className={`px-4 py-2 rounded text-xs font-bold transition-all shadow-md ${settings.test_user_enabled === 'true' ? 'bg-rose-600 hover:bg-rose-500' : 'bg-emerald-600 hover:bg-emerald-500'} text-white`}
+                    >
+                      {settings.test_user_enabled === 'true' ? 'Disable Test User' : 'Enable Test User'}
+                    </button>
+                  </div>
+                </div>
+
                 {/* AI API Configuration */}
                 <div className="bg-slate-900/50 border border-slate-900 p-6 rounded-xl space-y-4">
                   <h3 className="text-md font-bold text-white flex items-center gap-2">

@@ -255,6 +255,7 @@ function setupDatabase() {
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_violence', 'true');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_self_harm', 'true');")
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('filter_illegal', 'true');")
+  db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('test_user_enabled', 'false');")
   // Custom keyword/phrase terms that always trigger a block (stored as JSON array string)
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('custom_filter_terms', '[]');")
   // Admin-editable extra context injected into Gemini prompt
@@ -374,6 +375,21 @@ function broadcastBlockRulesToClients() {
   }
 }
 
+function isTestUserEnabled(): boolean {
+  if (!db) return false
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'test_user_enabled'").get() as any
+  return row ? (row.value === 'true') : false
+}
+
+function broadcastTestUserSetting(enabled: boolean) {
+  const payload = JSON.stringify({ command: 'update-test-user-setting', enabled })
+  for (const [socket] of clients.entries()) {
+    try {
+      socket.write(payload + '\n')
+    } catch {}
+  }
+}
+
 function handleClientMessage(socket: net.Socket, data: any) {
   if (!db) {
     logToUI("Error: DB not initialized yet")
@@ -484,6 +500,9 @@ function handleClientMessage(socket: net.Socket, data: any) {
     // Send current active block rules to this client
     const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
     socket.write(JSON.stringify({ command: 'update-blockrules', rules }) + '\n')
+
+    // Send test user setting to this client
+    socket.write(JSON.stringify({ command: 'update-test-user-setting', enabled: isTestUserEnabled() }) + '\n')
 
     // Look up active session
     const activeSession = db.prepare(`
@@ -1130,6 +1149,48 @@ function handleClientMessage(socket: net.Socket, data: any) {
         }
       }
     })()
+  }
+  else if (data.type === 'get-user-profile') {
+    const machineId = clients.get(socket)
+    if (machineId && db) {
+      const { username, password } = data.payload || {}
+      const user = db.prepare('SELECT * FROM users WHERE username = ? AND password = ?').get(username, password) as any
+      if (!user) {
+        socket.write(JSON.stringify({ command: 'profile-fail', message: 'Invalid username or password.' }) + '\n')
+      } else {
+        // Fetch usage since account creation (all sessions for this customer)
+        const sessions = db.prepare(`
+          SELECT s.start_time, s.end_time, s.total_amount, s.mode, s.status, s.custom_duration, s.penalty_amount, m.name as machine_name
+          FROM sessions s
+          LEFT JOIN machines m ON s.machine_id = m.id
+          WHERE s.customer_name = ?
+          ORDER BY s.start_time DESC
+        `).all(user.username) as any[]
+
+        // Fetch all violations since account creation
+        const violations = db.prepare(`
+          SELECT sa.query, sa.reason, sa.timestamp, m.name as machine_name
+          FROM safety_alerts sa
+          LEFT JOIN machines m ON sa.machine_id = m.id
+          WHERE sa.user_details = ? OR sa.user_details = ?
+          ORDER BY sa.timestamp DESC
+        `).all(user.username, user.display_name || user.username) as any[]
+
+        socket.write(JSON.stringify({
+          command: 'profile-success',
+          profile: {
+            username: user.username,
+            display_name: user.display_name,
+            balance_minutes: user.balance_minutes,
+            created_at: user.created_at,
+            ad_no: user.ad_no,
+            class: user.class
+          },
+          sessions,
+          violations
+        }) + '\n')
+      }
+    }
   }
   else if (data.type === 'user-login') {
     const machineId = clients.get(socket)
@@ -2493,7 +2554,11 @@ ipcMain.handle('get-settings', () => {
 })
 
 ipcMain.handle('update-settings', (_, key, value) => {
-  return db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value)
+  const result = db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run(key, value)
+  if (key === 'test_user_enabled') {
+    broadcastTestUserSetting(value === 'true')
+  }
+  return result
 })
 
 ipcMain.handle('get-safety-alerts', () => {
