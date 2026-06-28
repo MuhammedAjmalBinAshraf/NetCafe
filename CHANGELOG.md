@@ -1,6 +1,34 @@
 # Changelog
 
+## [1.1.13] — 2026-06-28
+### Added
+- Remote update: Admin confirmation modal displaying the target version before triggering the update check.
+- Remote update: Added "Abort Update" button on the server dashboard and TCP command handling to cancel pending updates within the 15-second timer.
+- Remote update: Active session detection to automatically defer updates on clients with open billing sessions.
+
+### Fixed
+- Remote update: Blocked triggering update if no valid update package or yml is found on the server (`updateHealth.ready === false`).
+
+## [1.1.12] — 2026-06-28
+### Fixed
+- Security hardening: Changed registry manipulation `execSync` to shell-less `execFileSync` to prevent string/nested double-quote escaping errors inside HKLM/HKCU policies.
+- Security hardening: Fixed hardcoded proxy port in Chrome's ProxySettings policy from `8080` to the actual `8889` port used by `MitmProxy`.
+- Security hardening: Extended Chrome enterprise policy coverage to Microsoft Edge (both HKLM and HKCU hives).
+
+## [1.1.11] — 2026-06-24
+### Added
+- VPN / Proxy Bypass Prevention: Implemented Chrome/Edge enterprise registry policies (force proxy, block extensions, block sideloading/developer mode).
+- VPN / Proxy Bypass Prevention: Added netsh firewall rules to block VPN protocols (WireGuard, OpenVPN, IPSec, L2TP, PPTP, Shadowsocks).
+- VPN / Proxy Bypass Prevention: Added hosts-file sinkhole for VPN provider domains and active background killing of VPN processes/TAP-TUN virtual adapters.
+
+## [1.1.10] — 2026-06-24
+### Added
+- Dynamic Island: Added Violations tab with session history and penalty totals.
+- Dynamic Island: Added queueing mechanism to display penalty announcements after safety violations are dismissed.
+- Server: Real-time violation log changed to a scrollable layout, and blacklist/whitelist UI got direct item switching and deletion controls.
+
 ## [1.1.9] — 2026-06-24
+
 ### Fixed
 - Remote update: agent now sets feed URL at runtime from server IP received in trigger-update payload, replacing broken baked-in app-update.yml URL
 - Remote update: watchdog now passes --headless --disable-gpu to installer subprocesses, fixing Session 0 GUI hang on silent install
