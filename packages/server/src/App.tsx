@@ -115,6 +115,7 @@ export default function App() {
   const [showBatchUpdateModal, setShowBatchUpdateModal] = useState(false)
   const [selectedMachinesForUpdate, setSelectedMachinesForUpdate] = useState<number[]>([])
   const [showUpdateConfirmation, setShowUpdateConfirmation] = useState(false)
+  const [pendingUpdateSent, setPendingUpdateSent] = useState(false)
 
   // New remote control & safety states
   const [isRemoteFullscreen, setIsRemoteFullscreen] = useState(false)
@@ -902,14 +903,23 @@ export default function App() {
       setSelectedMachinesForUpdate(onlineIds)
       setShowBatchUpdateModal(true)
       setShowUpdateConfirmation(false)
+      setPendingUpdateSent(false)
     } else {
       const machine = machines.find((m: any) => m.id === machineId)
       const machineName = machine ? machine.name : `PC ${machineId}`
-      if (confirm(`Trigger update check on terminal "${machineName}"? (Reboots if update is found)`)) {
+
+      // Guard: check update artifacts are ready before triggering
+      if (updateHealth && !updateHealth.ready) {
+        alert(`Cannot trigger update: No valid update package found on the server.\n\nPlace the installer and latest-agent.yml in C:\\NetCafe\\updates\\agent\\ first.`)
+        return
+      }
+
+      const versionInfo = updateHealth?.version ? ` (v${updateHealth.version})` : ''
+      if (confirm(`Trigger update on terminal "${machineName}"?${versionInfo}\n\nThis will install the update package and reboot the PC. Proceed?`)) {
         if ((window as any).electronAPI) {
           await (window as any).electronAPI.triggerUpdate(machineId)
         } else if (window.ipcRenderer) {
-          await window.ipcRenderer.invoke('trigger-client-update', machineId)
+          await window.ipcRenderer.invoke('trigger-client-update', machineId, updateHealth?.version)
         }
         alert(`Update command sent to terminal "${machineName}".`)
         fetchUpdateHealth();
@@ -4577,19 +4587,33 @@ Respond strictly in JSON format:
               </div>
               <button 
                 type="button" 
-                onClick={() => setShowBatchUpdateModal(false)} 
+                onClick={() => { setShowBatchUpdateModal(false); setPendingUpdateSent(false); }} 
                 className="text-slate-400 hover:text-white"
               >
                 <X size={18} />
               </button>
             </div>
 
-            {!showUpdateConfirmation ? (
+            {!showUpdateConfirmation && !pendingUpdateSent ? (
               <>
                 <div className="p-5 overflow-y-auto flex-1 space-y-4">
                   <p className="text-xs text-slate-400 leading-relaxed font-medium">
                     Select the client terminals you wish to check for software updates. Terminals running older versions will download the update package and restart to apply it.
                   </p>
+
+                  {updateHealth && !updateHealth.ready && (
+                    <div className="flex items-start gap-2.5 bg-red-950/30 border border-red-800/40 rounded-lg p-3 text-xs text-red-300">
+                      <AlertTriangle className="flex-shrink-0 text-red-500 mt-0.5" size={15} />
+                      <span><span className="font-bold">No update package found.</span> Place the installer and <code className="font-mono">latest-agent.yml</code> in <code className="font-mono">C:\NetCafe\updates\agent\</code> before triggering an update.</span>
+                    </div>
+                  )}
+
+                  {updateHealth?.ready && (
+                    <div className="flex items-center gap-2.5 bg-emerald-950/20 border border-emerald-800/30 rounded-lg px-3 py-2 text-xs text-emerald-300">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse flex-shrink-0" />
+                      <span>Update package ready: <span className="font-bold text-white">v{updateHealth.version}</span></span>
+                    </div>
+                  )}
 
                   <div className="flex items-center justify-between bg-slate-950/40 px-3.5 py-2 rounded border border-slate-800 text-xs">
                     <label className="flex items-center gap-2 cursor-pointer text-slate-300 font-semibold select-none">
@@ -4648,14 +4672,14 @@ Respond strictly in JSON format:
                 <div className="p-4 border-t border-slate-800 bg-slate-950/20 flex justify-end gap-2">
                   <button
                     type="button"
-                    onClick={() => setShowBatchUpdateModal(false)}
+                    onClick={() => { setShowBatchUpdateModal(false); setPendingUpdateSent(false); }}
                     className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
                   >
                     Cancel
                   </button>
                   <button
                     type="button"
-                    disabled={selectedMachinesForUpdate.length === 0}
+                    disabled={selectedMachinesForUpdate.length === 0 || (updateHealth != null && !updateHealth.ready)}
                     onClick={() => setShowUpdateConfirmation(true)}
                     className="px-3.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-950/30 disabled:text-emerald-800/60 disabled:cursor-not-allowed text-xs font-semibold text-white transition-all shadow-lg shadow-emerald-900/20"
                   >
@@ -4663,7 +4687,60 @@ Respond strictly in JSON format:
                   </button>
                 </div>
               </>
+            ) : pendingUpdateSent ? (
+              /* ── Sent confirmation + Abort option ─────────────────────── */
+              <>
+                <div className="p-5 flex-1 space-y-4">
+                  <div className="flex items-start gap-3 bg-emerald-950/20 border border-emerald-800/30 rounded-lg p-3.5 text-xs text-emerald-300">
+                    <ArrowUpCircle className="flex-shrink-0 text-emerald-500 mt-0.5 animate-pulse" size={18} />
+                    <div>
+                      <span className="font-bold block">Update Command Sent</span>
+                      <span>
+                        Sent update broadcast to {selectedMachinesForUpdate.length} terminal(s).
+                        {updateHealth?.version && <> Installing <span className="font-bold text-white">v{updateHealth.version}</span>.</>} Machines with active sessions will defer installation automatically.
+                      </span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    You have a short window to abort before the installer runs (≈15 seconds after download completes). Click <span className="font-semibold text-white">Abort Update</span> below to cancel.
+                  </p>
+                  <div className="bg-slate-950/40 border border-slate-800 rounded-lg p-3 max-h-[20vh] overflow-y-auto text-xs text-slate-300 flex flex-wrap gap-2">
+                    {selectedMachinesForUpdate.map(id => {
+                      const m = machines.find((mach: any) => mach.id === id)
+                      return (
+                        <span key={id} className="bg-slate-850 border border-slate-700/60 rounded px-2.5 py-1 text-white font-medium">
+                          {m ? m.name : `PC ${id}`}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="p-4 border-t border-slate-800 bg-slate-950/20 flex justify-between items-center">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (window.ipcRenderer) {
+                        await window.ipcRenderer.invoke('abort-client-update-batch', selectedMachinesForUpdate)
+                      }
+                      alert(`Abort command sent to ${selectedMachinesForUpdate.length} terminal(s).`)
+                      setShowBatchUpdateModal(false)
+                      setPendingUpdateSent(false)
+                    }}
+                    className="px-4 py-1.5 rounded bg-red-700 hover:bg-red-600 text-xs font-bold text-white transition-colors shadow-lg shadow-red-900/30"
+                  >
+                    Abort Update
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setShowBatchUpdateModal(false); setPendingUpdateSent(false); }}
+                    className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
             ) : (
+              /* ── Confirmation step ─────────────────────────────────────── */
               <>
                 <div className="p-5 flex-1 space-y-4">
                   <div className="flex items-start gap-3 bg-amber-950/20 border border-amber-800/30 rounded-lg p-3.5 text-xs text-amber-300">
@@ -4671,7 +4748,9 @@ Respond strictly in JSON format:
                     <div>
                       <span className="font-bold block">Important Notice</span>
                       <span>
-                        Triggering updates on active machines will cause them to download the package, close running sessions, and restart immediately if an update is found.
+                        Machines with active sessions will defer installation until the session ends.
+                        Idle terminals will download and install immediately then reboot.
+                        {updateHealth?.version && <> Installing <span className="font-bold text-white">v{updateHealth.version}</span>.</>}
                       </span>
                     </div>
                   </div>
@@ -4708,7 +4787,7 @@ Respond strictly in JSON format:
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => setShowBatchUpdateModal(false)}
+                      onClick={() => { setShowBatchUpdateModal(false); setPendingUpdateSent(false); }}
                       className="px-3.5 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-300 hover:text-white transition-colors"
                     >
                       Cancel
@@ -4716,11 +4795,11 @@ Respond strictly in JSON format:
                     <button
                       type="button"
                       onClick={async () => {
-                        setShowBatchUpdateModal(false)
+                        setPendingUpdateSent(true)
+                        setShowUpdateConfirmation(false)
                         if (window.ipcRenderer) {
-                          await window.ipcRenderer.invoke('trigger-client-update-batch', selectedMachinesForUpdate)
+                          await window.ipcRenderer.invoke('trigger-client-update-batch', selectedMachinesForUpdate, updateHealth?.version)
                         }
-                        alert(`Sent update check broadcast to ${selectedMachinesForUpdate.length} terminals.`)
                       }}
                       className="px-4 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-colors shadow-lg shadow-emerald-900/30"
                     >

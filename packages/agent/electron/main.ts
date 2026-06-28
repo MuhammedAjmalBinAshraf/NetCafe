@@ -1649,8 +1649,38 @@ async function handleServerMessage(msg: any) {
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
       }
+    } else if (msg.command === 'abort-update') {
+      // Admin requested abort of pending update installation
+      logToUI('Server requested update abort. Cancelling pending install...');
+      if (updateInstallTimeout) {
+        clearTimeout(updateInstallTimeout);
+        updateInstallTimeout = null;
+      }
+      // Also cancel any deferred-install poller
+      if ((global as any)._updateDeferPoller) {
+        clearInterval((global as any)._updateDeferPoller);
+        (global as any)._updateDeferPoller = null;
+      }
+      // Delete the install flag if it was already written
+      try {
+        if (fs.existsSync('C:\\NetCafe\\install-update.flag')) {
+          fs.unlinkSync('C:\\NetCafe\\install-update.flag');
+          logToUI('Deleted install-update.flag — update aborted.');
+        }
+      } catch {}
+      updateReady = false;
+      downloadedUpdatePath = undefined;
+      isAppQuitting = false;
+      sendStatusToServer('update-status', {
+        stage: 'aborted',
+        message: 'Update installation aborted by administrator.',
+      });
+      sendUpdateStatus({ status: 'aborted' });
     } else if (msg.command === 'trigger-update') {
       logToUI('Server triggered remote update. Configuring updater...');
+      if (msg.targetVersion) {
+        logToUI(`Target version for update: v${msg.targetVersion}`);
+      }
 
       try {
         // 1. Get the server's IP from the payload or fall back to local serverHost
@@ -1762,9 +1792,33 @@ async function handleServerMessage(msg: any) {
             });
           }
 
-          // Stop watchdog and install update after 15 seconds automatically
+          // Stop watchdog and install update after 15 seconds automatically.
+          // If a billing session is active when the timer fires, defer installation
+          // until the machine becomes idle (isLocked = true) to avoid killing a
+          // session mid-use.
           updateInstallTimeout = setTimeout(() => {
-            triggerInstallUpdate(downloadedUpdatePath);
+            if (!isLocked) {
+              // Session is active — defer and poll every 30 s
+              logToUI('Session is active. Deferring update installation until session ends...');
+              sendStatusToServer('update-status', {
+                stage: 'deferred',
+                message: 'Update ready. Waiting for active session to end before installing...',
+                version: info?.version,
+              });
+              if ((global as any)._updateDeferPoller) {
+                clearInterval((global as any)._updateDeferPoller);
+              }
+              (global as any)._updateDeferPoller = setInterval(() => {
+                if (isLocked) {
+                  logToUI('Session ended. Proceeding with deferred update installation.');
+                  clearInterval((global as any)._updateDeferPoller);
+                  (global as any)._updateDeferPoller = null;
+                  triggerInstallUpdate(downloadedUpdatePath);
+                }
+              }, 30000);
+            } else {
+              triggerInstallUpdate(downloadedUpdatePath);
+            }
           }, 15000);
         });
 
@@ -2062,60 +2116,110 @@ const VPN_SINKHOLE_DOMAINS = [
 ];
 
 /**
- * Applies Chrome enterprise registry policies that:
+ * Applies Chrome and Edge enterprise registry policies that:
  *  1. Force proxy through our MITM (blocks chrome.proxy API overrides from extensions)
  *  2. Block all extension installs
- *  3. Block Chrome Web Store
+ *  3. Block Chrome Web Store & Edge Extension Store
  *  4. Disable WebRTC UDP leak
  *  5. Disable DNS-over-HTTPS bypass
- *  6. Disable Chrome Sync (prevents extension sync from personal accounts)
- *  7. Disable Incognito and Developer Tools
+ *  6. Disable Chrome/Edge Sync (prevents extension sync from personal accounts)
+ *  7. Disable Incognito/InPrivate and Developer Tools
  */
 function applySecurityPolicies() {
   if (process.platform !== 'win32') return;
-  logToUI('[Security] Applying Chrome enterprise hardening policies...');
+  logToUI('[Security] Applying Chrome & Edge enterprise hardening policies...');
 
-  const policies: [string, string, string, string][] = [
-    // Force Chrome through our MITM proxy (overrides any chrome.proxy extension API)
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'ProxySettings', 'REG_SZ',
-      '{"ProxyMode":"fixed_servers","ProxyServer":"http://127.0.0.1:8080","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
-    // Block ALL extension installs
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallBlocklist', '1', 'REG_SZ', '*'],
-    // Block external/sideloaded extensions
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'BlockExternalExtensions', 'REG_DWORD', '1'],
-    // Disable Developer Tools (prevents unpacked extension loading + F12)
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'DeveloperToolsAvailability', 'REG_DWORD', '1'],
-    // Disable Chrome Sync (blocks extension sync from personal accounts)
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'SyncDisabled', 'REG_DWORD', '1'],
-    // Disable Incognito mode
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'IncognitoModeAvailability', 'REG_DWORD', '1'],
-    // Fix WebRTC to prevent IP leak bypass
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'WebRtcIPHandling', 'REG_SZ', 'disable_non_proxied_udp'],
-    // Disable DNS-over-HTTPS (prevents DoH from bypassing DNS sinkhole)
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome', 'DnsOverHttpsMode', 'REG_SZ', 'off'],
-    // Block Chrome Web Store and extension update servers
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '1', 'REG_SZ', 'chromewebstore.google.com'],
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '2', 'REG_SZ', 'chrome.google.com/webstore'],
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '3', 'REG_SZ', 'clients2.google.com'],
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '4', 'REG_SZ', 'chrome://extensions'],
-    ['HKLM\\SOFTWARE\\Policies\\Google\\Chrome\\URLBlocklist', '5', 'REG_SZ', 'chrome://flags'],
+  const chromeBase = 'Google\\Chrome';
+  const edgeBase = 'Microsoft\\Edge';
+
+  const chromePolicies: [string, string, string][] = [
+    ['ProxySettings', 'REG_SZ', '{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8889","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
+    ['BlockExternalExtensions', 'REG_DWORD', '1'],
+    ['DeveloperToolsAvailability', 'REG_DWORD', '1'],
+    ['SyncDisabled', 'REG_DWORD', '1'],
+    ['IncognitoModeAvailability', 'REG_DWORD', '1'],
+    ['WebRtcIPHandling', 'REG_SZ', 'disable_non_proxied_udp'],
+    ['DnsOverHttpsMode', 'REG_SZ', 'off'],
   ];
 
-  let successCount = 0;
-  for (const [key, name, type, value] of policies) {
+  const edgePolicies: [string, string, string][] = [
+    ['ProxySettings', 'REG_SZ', '{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8889","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
+    ['BlockExternalExtensions', 'REG_DWORD', '1'],
+    ['DeveloperToolsAvailability', 'REG_DWORD', '1'],
+    ['SyncDisabled', 'REG_DWORD', '1'],
+    ['InPrivateModeAvailability', 'REG_DWORD', '1'], // Edge specific
+    ['WebRtcIPHandling', 'REG_SZ', 'disable_non_proxied_udp'],
+    ['DnsOverHttpsMode', 'REG_SZ', 'off'],
+  ];
+
+  const chromeSublists = {
+    'ExtensionInstallBlocklist': { '1': '*' },
+    'URLBlocklist': {
+      '1': 'chromewebstore.google.com',
+      '2': 'chrome.google.com/webstore',
+      '3': 'clients2.google.com',
+      '4': 'chrome://extensions',
+      '5': 'chrome://flags',
+    }
+  };
+
+  const edgeSublists = {
+    'ExtensionInstallBlocklist': { '1': '*' },
+    'URLBlocklist': {
+      '1': 'edge.microsoft.com/extensionstore',
+      '2': 'microsoftedge.microsoft.com',
+      '3': 'clients2.google.com',
+      '4': 'edge://extensions',
+      '5': 'edge://flags',
+    }
+  };
+
+  function writeReg(hive: 'HKLM' | 'HKCU', pathBase: string, name: string, type: string, value: string) {
+    const fullKey = `${hive}\\SOFTWARE\\Policies\\${pathBase}`;
     try {
-      execSync(`reg add "${key}" /v "${name}" /t ${type} /d "${value}" /f`, { stdio: 'pipe' });
-      successCount++;
+      execFileSync('reg.exe', ['add', fullKey, '/v', name, '/t', type, '/d', value, '/f'], { stdio: 'pipe' });
     } catch (e: any) {
-      logToUI(`[Security] Policy write failed (${name}): ${e.message}`);
+      logToUI(`[Security] Failed registry write (${hive}\\${name}): ${e.message}`);
     }
   }
-  logToUI(`[Security] Chrome policies applied: ${successCount}/${policies.length} succeeded.`);
+
+  let successCount = 0;
+  // Write base policies
+  for (const hive of ['HKLM', 'HKCU'] as const) {
+    for (const [name, type, value] of chromePolicies) {
+      writeReg(hive, chromeBase, name, type, value);
+      successCount++;
+    }
+    for (const [name, type, value] of edgePolicies) {
+      writeReg(hive, edgeBase, name, type, value);
+      successCount++;
+    }
+  }
+
+  // Write sublists (blocklists)
+  for (const hive of ['HKLM', 'HKCU'] as const) {
+    // Chrome sublists
+    for (const [sub, values] of Object.entries(chromeSublists)) {
+      for (const [name, value] of Object.entries(values)) {
+        writeReg(hive, `${chromeBase}\\${sub}`, name, 'REG_SZ', value);
+        successCount++;
+      }
+    }
+    // Edge sublists
+    for (const [sub, values] of Object.entries(edgeSublists)) {
+      for (const [name, value] of Object.entries(values)) {
+        writeReg(hive, `${edgeBase}\\${sub}`, name, 'REG_SZ', value);
+        successCount++;
+      }
+    }
+  }
+
+  logToUI(`[Security] Chrome & Edge browser policies applied: ${successCount} entries updated.`);
 }
 
 /**
  * Adds Windows Firewall rules to block common VPN protocol ports.
- * Safe to call multiple times — uses /f to overwrite existing rules.
+ * Safe to call multiple times — deletes existing rules first.
  */
 function applyFirewallVpnBlocks() {
   if (process.platform !== 'win32') return;
@@ -2147,14 +2251,19 @@ function applyFirewallVpnBlocks() {
   let successCount = 0;
   for (const [name, proto, port] of rules) {
     try {
-      execSync(
-        `netsh advfirewall firewall add rule name="${name}" dir=out action=block protocol=${proto} remoteport=${port}`,
+      // Delete rule if exists to prevent duplication
+      try {
+        execFileSync('netsh.exe', ['advfirewall', 'firewall', 'delete', 'rule', `name=${name}`], { stdio: 'pipe' });
+      } catch (_) {}
+      
+      execFileSync(
+        'netsh.exe',
+        ['advfirewall', 'firewall', 'add', 'rule', `name=${name}`, 'dir=out', 'action=block', `protocol=${proto}`, `remoteport=${port}`],
         { stdio: 'pipe' }
       );
       successCount++;
     } catch (e: any) {
-      // Rule may already exist — not an error
-      logToUI(`[Security] Firewall rule already exists or failed (${name}): ${e.message}`);
+      logToUI(`[Security] Firewall rule write failed (${name}): ${e.message}`);
     }
   }
   logToUI(`[Security] Firewall VPN port blocks applied: ${successCount}/${rules.length} rules.`);
@@ -2196,14 +2305,14 @@ function applyVpnDnsSinkhole() {
 function detectAndKillVpnProcesses() {
   if (process.platform !== 'win32') return;
   try {
-    const output = execSync('tasklist /fo csv /nh', { encoding: 'utf8', stdio: 'pipe' });
+    const output = execFileSync('tasklist.exe', ['/fo', 'csv', '/nh'], { encoding: 'utf8', stdio: 'pipe' });
     const running = output.toLowerCase();
     const found = VPN_PROCESSES.filter(p => running.includes(p.toLowerCase()));
     if (found.length > 0) {
       logToUI(`[Security] VPN processes detected: ${found.join(', ')} — terminating...`);
       found.forEach(proc => {
         try {
-          execSync(`taskkill /F /IM "${proc}" /T`, { stdio: 'pipe' });
+          execFileSync('taskkill.exe', ['/F', '/IM', proc, '/T'], { stdio: 'pipe' });
           logToUI(`[Security] Killed VPN process: ${proc}`);
         } catch (_) { /* process may have already exited */ }
       });
@@ -2222,8 +2331,9 @@ function detectAndKillVpnProcesses() {
 
   // Detect TAP/TUN virtual adapters (created when VPN connects)
   try {
-    const adapters = execSync(
-      'powershell -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress"',
+    const adapters = execFileSync(
+      'powershell.exe',
+      ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Get-NetAdapter | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress'],
       { encoding: 'utf8', stdio: 'pipe', timeout: 5000 }
     );
     if (adapters && adapters.trim()) {
@@ -2240,7 +2350,7 @@ function detectAndKillVpnProcesses() {
         // Disable detected adapters
         vpnAdapters.forEach((a: any) => {
           try {
-            execSync(`netsh interface set interface name="${a.Name}" admin=disable`, { stdio: 'pipe' });
+            execFileSync('netsh.exe', ['interface', 'set', 'interface', `name=${a.Name}`, 'admin=disable'], { stdio: 'pipe' });
             logToUI(`[Security] Disabled VPN adapter: ${a.Name}`);
           } catch (_) {}
         });
@@ -3333,9 +3443,26 @@ app.whenReady().then(async () => {
       });
     }
 
-    // Stop watchdog and install update after 15 seconds automatically
+    // Stop watchdog and install update after 15 seconds automatically.
+    // If a billing session is active when the timer fires, defer installation
+    // until the machine becomes idle (isLocked = true).
     updateInstallTimeout = setTimeout(() => {
-      triggerInstallUpdate(downloadedUpdatePath);
+      if (!isLocked) {
+        logToUI('Session is active. Deferring update installation until session ends...');
+        if ((global as any)._updateDeferPoller) {
+          clearInterval((global as any)._updateDeferPoller);
+        }
+        (global as any)._updateDeferPoller = setInterval(() => {
+          if (isLocked) {
+            logToUI('Session ended. Proceeding with deferred update installation.');
+            clearInterval((global as any)._updateDeferPoller);
+            (global as any)._updateDeferPoller = null;
+            triggerInstallUpdate(downloadedUpdatePath);
+          }
+        }, 30000);
+      } else {
+        triggerInstallUpdate(downloadedUpdatePath);
+      }
     }, 15000);
 
     /* setTimeout(() => {

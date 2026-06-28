@@ -2294,13 +2294,14 @@ ipcMain.handle('restart-machine', (_, machineId) => {
   sendCommandToMachine(machineId, { command: 'restart' })
 })
 
-ipcMain.handle('trigger-client-update', (_, machineId) => {
+ipcMain.handle('trigger-client-update', (_, machineId, targetVersion?: string) => {
   const serverIp = getLanIPAddress();
-  const command = {
+  const command: Record<string, unknown> = {
     command: 'trigger-update',
     serverIp: serverIp,
     serverPort: 9001,
   };
+  if (targetVersion) command.targetVersion = targetVersion;
 
   if (machineId === 'all') {
     for (const socket of clients.keys()) {
@@ -2315,16 +2316,40 @@ ipcMain.handle('trigger-client-update', (_, machineId) => {
   }
 })
 
-ipcMain.handle('trigger-client-update-batch', (_, machineIds: number[]) => {
+ipcMain.handle('trigger-client-update-batch', (_, machineIds: number[], targetVersion?: string) => {
   const serverIp = getLanIPAddress();
-  const command = {
+  const command: Record<string, unknown> = {
     command: 'trigger-update',
     serverIp: serverIp,
     serverPort: 9001,
   };
+  if (targetVersion) command.targetVersion = targetVersion;
   for (const id of machineIds) {
     sendCommandToMachine(id, command)
   }
+  return { success: true }
+})
+
+// Abort a pending update on selected machines
+ipcMain.handle('abort-client-update', (_, machineId: number | 'all') => {
+  const command = { command: 'abort-update' };
+  if (machineId === 'all') {
+    for (const socket of clients.keys()) {
+      try { socket.write(JSON.stringify(command) + '\n') } catch {}
+    }
+  } else {
+    sendCommandToMachine(machineId, command)
+  }
+  logToUI(`[Update] Sent abort-update to machine ${machineId}.`)
+  return { success: true }
+})
+
+ipcMain.handle('abort-client-update-batch', (_, machineIds: number[]) => {
+  const command = { command: 'abort-update' };
+  for (const id of machineIds) {
+    sendCommandToMachine(id, command)
+  }
+  logToUI(`[Update] Sent abort-update to ${machineIds.length} machine(s).`)
   return { success: true }
 })
 
