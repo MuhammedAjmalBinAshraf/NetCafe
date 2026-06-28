@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.15] — 2026-06-28
+### Fixed
+- Remote update: Removed Windows session active check from the watchdog service. This check was permanently blocking update installation because the Windows kiosk user session is always considered 'Active' by the OS, even when the NetCafe Agent is locked. Session protection is fully handled on the agent side before shutdown.
+
+## [1.1.14] — 2026-06-28
+### Added
+- Member login: Stage 2 Profile screen displaying balance minutes, custom profile details, usage/billing logs, and historical safety violations.
+- Offline Test User: Local offline session option on the agent lock screen to bypass server connection, tracking, and web filtering (controllable via server dashboard settings toggle).
+
 ## [1.1.13] — 2026-06-28
 ### Added
 - Remote update: Admin confirmation modal displaying the target version before triggering the update check.

@@ -42,43 +42,8 @@ function checkAndRestart() {
   if (fs.existsSync('C:\\NetCafe\\install-update.flag')) {
     const installerPath = fs.readFileSync('C:\\NetCafe\\install-update.flag', 'utf8').trim();
     if (fs.existsSync(installerPath)) {
-      console.log('Update flag found. Checking for active user sessions before installing...');
-
-      // Guard: only install if no active user session is running.
-      // This prevents abruptly killing a billing session mid-use.
-      exec('query user', (_err, queryStdout) => {
-        const output = (queryStdout || '').toLowerCase();
-        let sessionActive = false;
-
-        const lines = output.split(/[\r\n]+/);
-        for (const line of lines) {
-          if (line.includes('active')) {
-            const parts = line.trim().split(/\s+/);
-            const username = parts[0]?.replace('>', '').trim();
-            if (username) {
-              sessionActive = true;
-              console.log(`Active user session detected ('${username}'). Deferring update installation until session ends.`);
-              // Log deferral to watchdog-update.log
-              try {
-                if (!fs.existsSync('C:\\NetCafe\\logs')) {
-                  fs.mkdirSync('C:\\NetCafe\\logs', { recursive: true });
-                }
-                fs.appendFileSync(
-                  'C:\\NetCafe\\logs\\watchdog-update.log',
-                  `[${new Date().toISOString()}] UPDATE DEFERRED: Active session for '${username}' detected. Will retry on next cycle.\r\n`,
-                  'utf8'
-                );
-              } catch {}
-              break;
-            }
-          }
-        }
-
-        if (!sessionActive) {
-          console.log('No active user session. Proceeding with update installation...');
-          runInstaller(installerPath);
-        }
-      });
+      console.log('Update flag found. Proceeding with update installation...');
+      runInstaller(installerPath);
       return; // Don't fall through to the restart logic while an update is pending
     }
   }
