@@ -2423,6 +2423,39 @@ function applySecurityPolicies() {
   const chromeBase = 'Google\\Chrome';
   const edgeBase = 'Microsoft\\Edge';
 
+  // 1. Clean up HKLM system-wide policies from previous versions so other users (e.g. Administrator) are not restricted.
+  const keysToClean = [
+    'ProxySettings',
+    'BlockExternalExtensions',
+    'DeveloperToolsAvailability',
+    'SyncDisabled',
+    'IncognitoModeAvailability',
+    'InPrivateModeAvailability',
+    'WebRtcIPHandling',
+    'DnsOverHttpsMode'
+  ];
+
+  for (const name of keysToClean) {
+    try {
+      execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${chromeBase}`, '/v', name, '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}`, '/v', name, '/f'], { stdio: 'pipe' });
+    } catch {}
+  }
+  try {
+    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${chromeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
+  } catch {}
+  try {
+    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${chromeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
+  } catch {}
+  try {
+    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
+  } catch {}
+  try {
+    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
+  } catch {}
+
   const chromePolicies: [string, string, string][] = [
     ['ProxySettings', 'REG_SZ', '{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8889","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
     ['BlockExternalExtensions', 'REG_DWORD', '1'],
@@ -2475,8 +2508,8 @@ function applySecurityPolicies() {
   }
 
   let successCount = 0;
-  // Write base policies
-  for (const hive of ['HKLM', 'HKCU'] as const) {
+  // Write base policies ONLY to HKCU (user level) to leave other users unaffected
+  for (const hive of ['HKCU'] as const) {
     for (const [name, type, value] of chromePolicies) {
       writeReg(hive, chromeBase, name, type, value);
       successCount++;
@@ -2487,8 +2520,8 @@ function applySecurityPolicies() {
     }
   }
 
-  // Write sublists (blocklists)
-  for (const hive of ['HKLM', 'HKCU'] as const) {
+  // Write sublists ONLY to HKCU (user level)
+  for (const hive of ['HKCU'] as const) {
     // Chrome sublists
     for (const [sub, values] of Object.entries(chromeSublists)) {
       for (const [name, value] of Object.entries(values)) {
@@ -2505,8 +2538,9 @@ function applySecurityPolicies() {
     }
   }
 
-  logToUI(`[Security] Chrome & Edge browser policies applied: ${successCount} entries updated.`);
+  logToUI(`[Security] Chrome & Edge browser policies applied to HKCU: ${successCount} entries updated.`);
 }
+
 
 /**
  * Adds Windows Firewall rules to block common VPN protocol ports.

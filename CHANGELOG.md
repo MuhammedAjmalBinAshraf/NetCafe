@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.16] — 2026-06-29
+### Fixed
+- Security hardening: Restricted Chrome and Edge enterprise policies strictly to the kiosk user's registry hive (`HKCU`). Legacies written to `HKLM` are auto-cleaned on startup. This resolves browser blockages and connection safety errors on the Administrator account.
+- Installer: Re-enabled starting the watchdog service at the end of the installation process. This prevents the kiosk system from going to a black screen when running the installer manually.
+
 ## [1.1.15] — 2026-06-28
 ### Fixed
 - Remote update: Removed Windows session active check from the watchdog service. This check was permanently blocking update installation because the Windows kiosk user session is always considered 'Active' by the OS, even when the NetCafe Agent is locked. Session protection is fully handled on the agent side before shutdown.

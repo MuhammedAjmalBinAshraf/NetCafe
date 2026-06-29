@@ -55,7 +55,13 @@ skip_kiosk_setup:
   nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --install-watchdog --headless --disable-gpu --no-sandbox`
   Pop $0
   DetailPrint "NetCafe: Watchdog service install exited with code $0"
+
+  ; ── Start the watchdog service so it can relaunch the agent shell ──
+  DetailPrint "NetCafe: Starting watchdog service..."
+  nsExec::ExecToLog 'sc start "NetCafeAgentWatchdog"'
+  Pop $0
 !macroend
+
 
 !macro customUnInit
   ; Stop watchdog service so it does not restart the agent during uninstall
