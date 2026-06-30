@@ -1930,7 +1930,7 @@ function startScheduledBroadcastMonitor() {
     if (!db) return;
     try {
       const now = Math.floor(Date.now() / 1000);
-      const pending = db.prepare("SELECT * FROM broadcasts WHERE sent = 0 AND send_at <= ?").all() as any[];
+      const pending = db.prepare("SELECT * FROM broadcasts WHERE sent = 0 AND send_at <= ?").all(now) as any[];
       for (const b of pending) {
         const payload = {
           type: b.type,
