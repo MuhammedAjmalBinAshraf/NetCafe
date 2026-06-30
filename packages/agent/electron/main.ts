@@ -2426,6 +2426,7 @@ function applySecurityPolicies() {
   // 1. Clean up HKLM system-wide policies from previous versions so other users (e.g. Administrator) are not restricted.
   const keysToClean = [
     'ProxySettings',
+    'ExtensionSettings',
     'BlockExternalExtensions',
     'DeveloperToolsAvailability',
     'SyncDisabled',
@@ -2443,21 +2444,32 @@ function applySecurityPolicies() {
       execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}`, '/v', name, '/f'], { stdio: 'pipe' });
     } catch {}
   }
-  try {
-    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${chromeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
-  } catch {}
-  try {
-    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${chromeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
-  } catch {}
-  try {
-    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
-  } catch {}
-  try {
-    execFileSync('reg.exe', ['delete', `HKLM\\SOFTWARE\\Policies\\${edgeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
-  } catch {}
+  
+  // Explicitly delete ExtensionInstallBlocklist and old URLBlocklist from both HKLM and HKCU
+  for (const hive of ['HKLM', 'HKCU'] as const) {
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${chromeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${chromeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${edgeBase}\\ExtensionInstallBlocklist`, '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${edgeBase}\\URLBlocklist`, '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${chromeBase}`, '/v', 'ExtensionSettings', '/f'], { stdio: 'pipe' });
+    } catch {}
+    try {
+      execFileSync('reg.exe', ['delete', `${hive}\\SOFTWARE\\Policies\\${edgeBase}`, '/v', 'ExtensionSettings', '/f'], { stdio: 'pipe' });
+    } catch {}
+  }
 
   const chromePolicies: [string, string, string][] = [
     ['ProxySettings', 'REG_SZ', '{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8889","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
+    ['ExtensionSettings', 'REG_SZ', '{"*":{"blocked_permissions":["proxy"]}}'], // Block only extensions requesting the 'proxy' permission (e.g. VPNs)
     ['BlockExternalExtensions', 'REG_DWORD', '1'],
     ['DeveloperToolsAvailability', 'REG_DWORD', '1'],
     ['SyncDisabled', 'REG_DWORD', '1'],
@@ -2468,6 +2480,7 @@ function applySecurityPolicies() {
 
   const edgePolicies: [string, string, string][] = [
     ['ProxySettings', 'REG_SZ', '{"ProxyMode":"fixed_servers","ProxyServer":"127.0.0.1:8889","ProxyBypassList":"localhost,127.0.0.1,<local>"}'],
+    ['ExtensionSettings', 'REG_SZ', '{"*":{"blocked_permissions":["proxy"]}}'], // Block proxy permission on Edge too
     ['BlockExternalExtensions', 'REG_DWORD', '1'],
     ['DeveloperToolsAvailability', 'REG_DWORD', '1'],
     ['SyncDisabled', 'REG_DWORD', '1'],
@@ -2476,25 +2489,16 @@ function applySecurityPolicies() {
     ['DnsOverHttpsMode', 'REG_SZ', 'off'],
   ];
 
+  // Blocklists — now we only block flags/experiments. Webstore and extensions are enabled.
   const chromeSublists = {
-    'ExtensionInstallBlocklist': { '1': '*' },
     'URLBlocklist': {
-      '1': 'chromewebstore.google.com',
-      '2': 'chrome.google.com/webstore',
-      '3': 'clients2.google.com',
-      '4': 'chrome://extensions',
-      '5': 'chrome://flags',
+      '1': 'chrome://flags',
     }
   };
 
   const edgeSublists = {
-    'ExtensionInstallBlocklist': { '1': '*' },
     'URLBlocklist': {
-      '1': 'edge.microsoft.com/extensionstore',
-      '2': 'microsoftedge.microsoft.com',
-      '3': 'clients2.google.com',
-      '4': 'edge://extensions',
-      '5': 'edge://flags',
+      '1': 'edge://flags',
     }
   };
 
@@ -2538,7 +2542,7 @@ function applySecurityPolicies() {
     }
   }
 
-  logToUI(`[Security] Chrome & Edge browser policies applied to HKCU: ${successCount} entries updated.`);
+  logToUI(`[Security] Chrome & Edge browser policies applied to HKCU: ${successCount} entries updated. Webstore enabled with proxy blocks.`);
 }
 
 

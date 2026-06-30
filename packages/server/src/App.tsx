@@ -2743,12 +2743,12 @@ Respond strictly in JSON format:
                     <div className="grid grid-cols-2 gap-2 text-[10px]">
                       {[
                         ['Chrome ProxySettings policy', 'Forces Chrome through MITM proxy — extensions cannot override'],
-                        ['ExtensionInstallBlocklist: *', 'Blocks all Chrome extension installs'],
+                        ['Blocked Extension Permissions', 'Blocks proxy/VPN permissions for all extensions'],
                         ['WebRTC IP Handling', 'Prevents WebRTC UDP leaks bypassing the proxy'],
                         ['DNS-over-HTTPS: off', 'Disables DoH so DNS sinkhole works'],
                         ['VPN Port Firewall Rules', 'Blocks WireGuard, OpenVPN, L2TP, PPTP, Shadowsocks ports'],
                         ['DNS Sinkhole', 'Blocks VPN provider domains in hosts file'],
-                        ['Chrome Web Store blocked', 'Prevents accessing chromewebstore.google.com'],
+                        ['Chrome Web Store enabled', 'Extensions allowed but VPN/proxy plugins are blocked'],
                         ['Incognito + DevTools disabled', 'Removes incognito mode and F12 developer tools'],
                       ].map(([title, desc]) => (
                         <div key={title} className="flex items-start gap-1.5 bg-slate-950/40 rounded-md p-2">
