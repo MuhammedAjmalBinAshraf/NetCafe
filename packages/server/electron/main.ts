@@ -10,6 +10,7 @@ import dgram from 'dgram'
 import { exec, spawn } from 'child_process'
 import * as XLSX from 'xlsx'
 import express from 'express'
+import { pipeline } from 'stream/promises'
 
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
@@ -2019,6 +2020,10 @@ app.whenReady().then(async () => {
   startPrepaidSessionMonitor()
   startScheduledBroadcastMonitor()
 
+  // Background check and sync for agent updates from GitHub
+  syncAgentUpdatesFromGithub().catch(err => console.error("Agent updates sync failed:", err));
+
+
   // Auto Updater logic for Server
   autoUpdater.channel = 'latest-server';   // ← must NOT pick up latest-agent.yml
   autoUpdater.autoDownload = false;
@@ -2431,6 +2436,104 @@ ipcMain.handle('apply-hardening-machine', (_, machineId: number) => {
   logToUI(`[Security] Sent hardening command to machine ${machineId}.`)
   return { success: true }
 })
+
+async function syncAgentUpdatesFromGithub(): Promise<{ success: boolean; message: string; version?: string }> {
+  try {
+    const updateDir = 'C:\\NetCafe\\updates\\agent';
+    if (!fs.existsSync(updateDir)) {
+      fs.mkdirSync(updateDir, { recursive: true });
+    }
+
+    logToUI('[Updates] Fetching latest agent release info from GitHub...');
+    const res = await fetch('https://api.github.com/repos/MuhammedAjmalBinAshraf/NetCafe/releases/latest', {
+      headers: { 'User-Agent': 'NetCafe-Server' }
+    });
+
+    if (!res.ok) {
+      throw new Error(`GitHub API returned status ${res.status}`);
+    }
+
+    const release = await res.json() as any;
+    if (!release || !release.tag_name) {
+      throw new Error('Invalid release payload returned from GitHub API');
+    }
+
+    logToUI(`[Updates] Latest release tag found on GitHub: ${release.tag_name}`);
+
+    // Find latest-agent.yml asset in the release
+    const ymlAsset = release.assets?.find((a: any) => a.name === 'latest-agent.yml');
+    if (!ymlAsset) {
+      return { success: false, message: 'No latest-agent.yml found in the latest release assets.' };
+    }
+
+    logToUI(`[Updates] Downloading latest-agent.yml from ${ymlAsset.browser_download_url}...`);
+    const ymlRes = await fetch(ymlAsset.browser_download_url, { headers: { 'User-Agent': 'NetCafe-Server' } });
+    if (!ymlRes.ok) throw new Error(`Failed to download latest-agent.yml: status ${ymlRes.status}`);
+    
+    const ymlContent = await ymlRes.text();
+    
+    // Parse version and path from yml content
+    const versionMatch = ymlContent.match(/^version:\s*(.+)$/m);
+    const pathMatch    = ymlContent.match(/^path:\s*(.+)$/m);
+    const version = versionMatch ? versionMatch[1].trim() : null;
+    const exeFile = pathMatch    ? pathMatch[1].trim()    : null;
+
+    if (!version || !exeFile) {
+      return { success: false, message: 'Failed to parse version or path from latest-agent.yml.' };
+    }
+
+    logToUI(`[Updates] Latest agent version parsed from YML: v${version}, expected installer file: ${exeFile}`);
+
+    // Find the installer exe asset in the release
+    let exeAsset = release.assets?.find((a: any) => a.name === exeFile);
+    if (!exeAsset) {
+      const sanitizedExeFile = exeFile.replace(/\s+/g, '-');
+      exeAsset = release.assets?.find((a: any) => 
+        a.name === sanitizedExeFile || 
+        a.name.toLowerCase() === exeFile.toLowerCase() ||
+        (a.name.toLowerCase().includes('agent') && a.name.toLowerCase().endsWith('.exe'))
+      );
+    }
+
+    if (!exeAsset) {
+      return { success: false, message: `No agent installer executable (${exeFile}) found in the latest release.` };
+    }
+
+    logToUI(`[Updates] Downloading agent installer from ${exeAsset.browser_download_url}...`);
+    const exeRes = await fetch(exeAsset.browser_download_url, { headers: { 'User-Agent': 'NetCafe-Server' } });
+    if (!exeRes.ok) throw new Error(`Failed to download installer exe: status ${exeRes.status}`);
+
+    const tempExePath = path.join(updateDir, `${exeFile}.tmp`);
+    const finalExePath = path.join(updateDir, exeFile);
+    const finalYmlPath = path.join(updateDir, 'latest-agent.yml');
+
+    // Stream download the executable file to prevent high memory usage
+    const fileStream = fs.createWriteStream(tempExePath);
+    if (!exeRes.body) throw new Error('Readable stream not available on response body');
+    // @ts-ignore
+    await pipeline(exeRes.body as any, fileStream);
+
+    // Save yml content
+    fs.writeFileSync(finalYmlPath, ymlContent, 'utf-8');
+    
+    // Rename temp file to final destination
+    if (fs.existsSync(finalExePath)) {
+      fs.unlinkSync(finalExePath);
+    }
+    fs.renameSync(tempExePath, finalExePath);
+
+    logToUI(`[Updates] Successfully synced agent v${version} to server directory!`);
+    return { success: true, message: `Successfully downloaded agent v${version}.`, version };
+
+  } catch (e: any) {
+    logToUI(`[Updates] Error syncing agent from GitHub: ${e.message}`);
+    return { success: false, message: e.message };
+  }
+}
+
+ipcMain.handle('sync-agent-updates', async () => {
+  return await syncAgentUpdatesFromGithub();
+});
 
 ipcMain.handle('check-updates-health', () => {
   const updateDir = 'C:\\NetCafe\\updates\\agent';

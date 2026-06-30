@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.18] — 2026-06-30
+### Added
+- Remote update: Sync Agent updates from GitHub Releases feature. The server automatically checks and downloads the latest agent installer and `latest-agent.yml` from GitHub on startup and provides a manual sync/download button next to the agent update status indicator.
+
+## [1.1.17] — 2026-06-30
+### Added
+- Browser extensions: Enabled Chrome Web Store access and extension downloads, with blocklists for proxy/VPN extensions.
+
 ## [1.1.16] — 2026-06-29
 ### Fixed
 - Security hardening: Restricted Chrome and Edge enterprise policies strictly to the kiosk user's registry hive (`HKCU`). Legacies written to `HKLM` are auto-cleaned on startup. This resolves browser blockages and connection safety errors on the Administrator account.

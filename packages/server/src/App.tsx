@@ -225,6 +225,8 @@ export default function App() {
     timestamp: number;
   }>>({})
   const [updateHealth, setUpdateHealth] = useState<{ ready: boolean; version?: string; updateDir?: string } | null>(null)
+  const [isSyncingAgent, setIsSyncingAgent] = useState(false)
+
 
   // User Management states
   const [users, setUsers] = useState<User[]>([])
@@ -924,6 +926,27 @@ export default function App() {
         alert(`Update command sent to terminal "${machineName}".`)
         fetchUpdateHealth();
       }
+    }
+  }
+
+  const handleSyncAgentUpdates = async () => {
+    setIsSyncingAgent(true)
+    try {
+      if (window.ipcRenderer) {
+        const res = await window.ipcRenderer.invoke('sync-agent-updates')
+        if (res.success) {
+          alert(`Successfully synced agent update from GitHub! Version: v${res.version}`)
+          fetchUpdateHealth()
+        } else {
+          alert(`Failed to sync agent updates: ${res.message}`)
+        }
+      } else {
+        alert("IPC renderer not available (running in browser)")
+      }
+    } catch (e: any) {
+      alert(`Error: ${e.message || e}`)
+    } finally {
+      setIsSyncingAgent(false)
     }
   }
 
@@ -1824,8 +1847,21 @@ export default function App() {
                       <span title={updateHealth.ready ? `Update package is located at: ${updateHealth.updateDir}` : 'Copy the agent update installer and latest-agent.yml files to: C:\\NetCafe\\updates\\agent'}>
                         {updateHealth.ready ? `v${updateHealth.version} ready` : 'No update files found'}
                       </span>
+                      <button
+                        onClick={handleSyncAgentUpdates}
+                        disabled={isSyncingAgent}
+                        title="Download/Sync latest agent from GitHub Releases"
+                        className="ml-1 p-0.5 hover:text-white disabled:opacity-40 transition-colors text-slate-400"
+                      >
+                        {isSyncingAgent ? (
+                          <Loader2 size={11} className="animate-spin text-emerald-400" />
+                        ) : (
+                          <Download size={11} />
+                        )}
+                      </button>
                     </div>
                   )}
+
                 </div>
               </div>
 
