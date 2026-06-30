@@ -38,7 +38,30 @@ ps_ready:
   ; Clean up legacy global scheduled task from older versions
   nsExec::ExecToLog 'schtasks /Delete /TN "NetCafeAgent" /F'
   Pop $0
+
+  ; ── Clean up legacy global HKLM browser policies to restore Administrator internet access ──
+  DetailPrint "NetCafe: Cleaning up legacy HKLM policies..."
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "ProxySettings" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "BlockExternalExtensions" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DeveloperToolsAvailability" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "SyncDisabled" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "IncognitoModeAvailability" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "WebRtcIPHandling" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DnsOverHttpsMode" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\URLBlocklist" /f'
+
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "ProxySettings" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "BlockExternalExtensions" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DeveloperToolsAvailability" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "SyncDisabled" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "InPrivateModeAvailability" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "WebRtcIPHandling" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DnsOverHttpsMode" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallBlocklist" /f'
+  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist" /f'
 !macroend
+
 
 !macro customInstall
   CreateDirectory "C:\NetCafe"

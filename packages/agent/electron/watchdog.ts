@@ -109,3 +109,36 @@ function checkAndRestart() {
 // Check every 10 seconds
 setInterval(checkAndRestart, 10000);
 console.log('NetCafe Agent watchdog service started.');
+
+function cleanLegacyHklmPolicies() {
+  if (process.platform !== 'win32') return;
+  const chromeBase = 'Google\\Chrome';
+  const edgeBase = 'Microsoft\\Edge';
+  const keys = [
+    'ProxySettings',
+    'BlockExternalExtensions',
+    'DeveloperToolsAvailability',
+    'SyncDisabled',
+    'IncognitoModeAvailability',
+    'InPrivateModeAvailability',
+    'WebRtcIPHandling',
+    'DnsOverHttpsMode'
+  ];
+
+  for (const name of keys) {
+    try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${chromeBase}" /v "${name}" /f`); } catch {}
+    try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${edgeBase}" /v "${name}" /f`); } catch {}
+  }
+  try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${chromeBase}\\ExtensionInstallBlocklist" /f`); } catch {}
+  try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${chromeBase}\\URLBlocklist" /f`); } catch {}
+  try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${edgeBase}\\ExtensionInstallBlocklist" /f`); } catch {}
+  try { exec(`reg.exe delete "HKLM\\SOFTWARE\\Policies\\${edgeBase}\\URLBlocklist" /f`); } catch {}
+}
+
+// Run cleanup immediately on watchdog service startup (runs with SYSTEM privileges)
+try {
+  cleanLegacyHklmPolicies();
+} catch (e: any) {
+  console.error('Failed to run HKLM cleanup in watchdog:', e.message);
+}
+

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.20] — 2026-06-30
+### Fixed
+- Registry policies: Added elevated HKLM policy cleanup execution to both the watchdog service startup (running as SYSTEM) and the NSIS installer initialization (running as Administrator). This ensures that old system-wide Chrome/Edge enterprise proxy settings are successfully removed from the `HKLM` registry hive, resolving `ERR_PROXY_CONNECTION_FAILED` errors.
+
 ## [1.1.19] — 2026-06-30
 ### Fixed
 - Watchdog packaging: Added `dist/watchdog.js` to `asarUnpack` in the agent configuration. Previously, the compiled watchdog script was inside the packaged ASAR archive, making it unavailable to the Windows service wrapper. This caused the watchdog service to crash on startup, preventing the silent update process and agent auto-restart from running.
