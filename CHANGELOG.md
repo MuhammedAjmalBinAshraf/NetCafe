@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.19] — 2026-06-30
+### Fixed
+- Watchdog packaging: Added `dist/watchdog.js` to `asarUnpack` in the agent configuration. Previously, the compiled watchdog script was inside the packaged ASAR archive, making it unavailable to the Windows service wrapper. This caused the watchdog service to crash on startup, preventing the silent update process and agent auto-restart from running.
+
 ## [1.1.18] — 2026-06-30
 ### Added
 - Remote update: Sync Agent updates from GitHub Releases feature. The server automatically checks and downloads the latest agent installer and `latest-agent.yml` from GitHub on startup and provides a manual sync/download button next to the agent update status indicator.

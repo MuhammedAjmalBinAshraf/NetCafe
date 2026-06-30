@@ -1,6 +1,7 @@
 {
   "name": "agent",
-  "version": "1.1.18",
+  "version": "1.1.19",
+
 
 
 
@@ -73,7 +74,8 @@
       }
     ],
     "asarUnpack": [
-      "node_modules/node-windows/**/*"
+      "node_modules/node-windows/**/*",
+      "dist/watchdog.js"
     ],
     "linux": {
       "target": [
