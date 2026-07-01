@@ -3640,24 +3640,32 @@ app.whenReady().then(async () => {
     });
     logToUI('Auto-start standard login item disabled (switching to Task Scheduler).');
 
-    // Register Scheduled Task to run instantly on logon with Highest Privileges
-    const taskName = "NetCafeAgent";
-    const exePath = process.execPath;
-    const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /rl highest /f`;
-    exec(cmd, (err, stdout, stderr) => {
-      if (err) {
-        logToUI(`Task Scheduler registration failed: ${err.message}`);
-        // Fallback to standard login item settings
-        app.setLoginItemSettings({
-          openAtLogin: true,
-          name: 'NetCafe Agent',
-          path: process.execPath,
-        });
-        logToUI('Fallback: Registered standard login item (openAtLogin: true).');
-      } else {
-        logToUI('Task Scheduler auto-start (instant launch) registered successfully.');
-      }
-    });
+
+    // Register Scheduled Task to run instantly on logon with Highest Privileges for current user only
+    const username = os.userInfo().username;
+    const lowerUser = username.toLowerCase();
+    if (lowerUser === 'administrator' || lowerUser === 'system') {
+      logToUI(`Running as ${username}. Skipping Task Scheduler auto-start registration.`);
+    } else {
+      const taskName = `NetCafeAgent_${username}`;
+      const exePath = process.execPath;
+      const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${username}" /rl highest /f`;
+      exec(cmd, (err) => {
+        if (err) {
+          logToUI(`Task Scheduler registration failed: ${err.message}`);
+          // Fallback to standard login item settings
+          app.setLoginItemSettings({
+            openAtLogin: true,
+            name: 'NetCafe Agent',
+            path: process.execPath,
+          });
+          logToUI('Fallback: Registered standard login item (openAtLogin: true).');
+        } else {
+          logToUI(`Task Scheduler auto-start (instant launch) registered successfully for user ${username}.`);
+        }
+      });
+    }
+
 
     // Also disable Windows Startup Delay for Explorer to ensure instant boot launch
     const serializeCmd = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "New-Item -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Serialize\' -Force | Out-Null; Set-ItemProperty -Path \'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Serialize\' -Name \'StartupDelayInMSec\' -Value 0 -Type DWord -Force"';

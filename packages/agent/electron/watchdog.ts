@@ -142,3 +142,9 @@ try {
   console.error('Failed to run HKLM cleanup in watchdog:', e.message);
 }
 
+// Remove legacy global NetCafeAgent scheduled task to prevent multi-user double-launch port conflicts
+try {
+  exec('schtasks /Delete /TN "NetCafeAgent" /F');
+} catch {}
+
+

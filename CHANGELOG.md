@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.21] — 2026-07-01
+### Fixed
+- Auto-start registration: Restricted the agent's Task Scheduler auto-start task creation to run-level highest on Kiosk user sessions only. Previously, it registered a global task named `NetCafeAgent` that launched on logon of any user (including Administrator and Guest). This caused multi-session double-launch port conflicts (e.g. `EADDRINUSE` on UDP port `9090` and proxy port `8889`), which broke proxy connections. Legacy `NetCafeAgent` tasks are automatically cleaned up on watchdog and installer execution.
+
 ## [1.1.20] — 2026-06-30
 ### Fixed
 - Registry policies: Added elevated HKLM policy cleanup execution to both the watchdog service startup (running as SYSTEM) and the NSIS installer initialization (running as Administrator). This ensures that old system-wide Chrome/Edge enterprise proxy settings are successfully removed from the `HKLM` registry hive, resolving `ERR_PROXY_CONNECTION_FAILED` errors.
