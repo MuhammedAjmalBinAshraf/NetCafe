@@ -1,8 +1,13 @@
 # Changelog
 
-## [1.1.21] — 2026-07-01
+## [1.1.22] — 2026-07-01
 ### Fixed
 - Auto-start registration: Restricted the agent's Task Scheduler auto-start task creation to run-level highest on Kiosk user sessions only. Previously, it registered a global task named `NetCafeAgent` that launched on logon of any user (including Administrator and Guest). This caused multi-session double-launch port conflicts (e.g. `EADDRINUSE` on UDP port `9090` and proxy port `8889`), which broke proxy connections. Legacy `NetCafeAgent` tasks are automatically cleaned up on watchdog and installer execution.
+
+## [1.1.21] — 2026-07-01
+### Added
+- Release version bump.
+
 
 ## [1.1.20] — 2026-06-30
 ### Fixed
