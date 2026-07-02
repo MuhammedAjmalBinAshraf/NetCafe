@@ -68,7 +68,7 @@ function checkAndRestart() {
             const parts = line.trim().split(/\s+/);
             if (parts.length > 0) {
               const username = parts[0].replace('>', '').trim();
-              if (username) {
+              if (username && username.toLowerCase() === 'cafekiosk') {
                 activeUser = username;
                 kioskUserFound = true;
                 break;

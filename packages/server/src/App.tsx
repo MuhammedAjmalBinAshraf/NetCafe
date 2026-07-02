@@ -5,7 +5,7 @@ import {
   BarChart3, Plus, Edit, Trash2, Database, Download, RefreshCw, X, Check,
   UserCircle2, RefreshCcw, ArrowDownToLine, CheckCircle, AlertTriangle, Loader2, Menu, ArrowUpCircle,
   Maximize2, Minimize2, Terminal, Activity, FileSpreadsheet, Upload, Smartphone, QrCode,
-  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles, Megaphone
+  ChevronDown, ChevronUp, Eye, EyeOff, Search, Copy, Sparkles, Megaphone, Laptop
 } from 'lucide-react'
 import SessionModal from './components/SessionModal'
 import ReceiptModal from './components/ReceiptModal'
@@ -50,7 +50,7 @@ export default function App() {
   })
 
   // Navigation & Data
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast' | 'messaging'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'sessions' | 'plans' | 'safety' | 'reports' | 'settings' | 'users' | 'activity_log' | 'broadcast' | 'messaging' | 'devices'>('dashboard')
   const [machines, setMachines] = useState<any[]>([])
   const [dashboardView, setDashboardView] = useState<'grid' | 'list' | 'large' | 'small' | 'grouped'>('grid')
   const [plans, setPlans] = useState<Plan[]>([])
@@ -77,6 +77,28 @@ export default function App() {
   const [unreadCounts, setUnreadCounts] = useState<Record<string,number>>({})
   const [broadcastTypeMsg, setBroadcastTypeMsg] = useState<'announcement'|'message'>('message')
 
+
+  // Device & Software Management State
+  const [selectedSoftwareMachineId, setSelectedSoftwareMachineId] = useState<number | null>(null)
+  const [softwareList, setSoftwareList] = useState<any[]>([])
+  const [isLoadingSoftware, setIsLoadingSoftware] = useState(false)
+  const [softwareSearchQuery, setSoftwareSearchQuery] = useState('')
+  const [selectedBatchMachines, setSelectedBatchMachines] = useState<number[]>([])
+  const [deployMethod, setDeployMethod] = useState<'winget' | 'url' | 'script'>('winget')
+  const [deploySoftwareName, setDeploySoftwareName] = useState('')
+  const [deployPackageId, setDeployPackageId] = useState('')
+  const [deployUrl, setDeployUrl] = useState('')
+  const [deployArgs, setDeployArgs] = useState('')
+  const [deployScript, setDeployScript] = useState('')
+  const [isDeploying, setIsDeploying] = useState(false)
+  const [installLogs, setInstallLogs] = useState<any[]>([])
+  const [activityLogs, setActivityLogs] = useState<any[]>([])
+  const [activeDevicesSubTab, setActiveDevicesSubTab] = useState<'devices' | 'install_logs' | 'audit_logs'>('devices')
+
+  const selectedSoftwareMachineIdRef = useRef<number | null>(null)
+  useEffect(() => {
+    selectedSoftwareMachineIdRef.current = selectedSoftwareMachineId
+  }, [selectedSoftwareMachineId])
 
   // AI Safety local state inputs (prevents keystroke DB lag)
   const [apiKeyInput, setApiKeyInput] = useState('')
@@ -437,6 +459,24 @@ export default function App() {
   }
       window.ipcRenderer.on('student-reply', studentReplyListener)
 
+      const softwareInventoryUpdatedListener = (_: any, data: any) => {
+        if (selectedSoftwareMachineIdRef.current === data.machineId) {
+          window.ipcRenderer.invoke('get-client-software-list', data.machineId).then(setSoftwareList);
+        }
+      }
+      window.ipcRenderer.on('software-inventory-updated', softwareInventoryUpdatedListener)
+
+      const softwareInstallBlockedListener = (_: any, data: any) => {
+        alert(`⚠️ Software Control Alert! Installer process "${data.processName}" was terminated on Machine ID ${data.machineId}.`)
+        window.ipcRenderer.invoke('get-software-activity-logs').then(setActivityLogs).catch(() => {})
+      }
+      window.ipcRenderer.on('software-install-blocked', softwareInstallBlockedListener)
+
+      const softwareInstallStatusUpdatedListener = (_: any, _data: any) => {
+        window.ipcRenderer.invoke('get-software-install-logs').then(setInstallLogs).catch(() => {})
+      }
+      window.ipcRenderer.on('software-install-status-updated', softwareInstallStatusUpdatedListener)
+
       return () => {
         window.ipcRenderer?.off('machines-updated', machineListener)
         window.ipcRenderer?.off('update-status', updateListener)
@@ -447,6 +487,9 @@ export default function App() {
         window.ipcRenderer?.off('filter-log', filterLogListener)
         window.ipcRenderer?.off('public-url-updated', publicUrlListener)
         window.ipcRenderer?.off('student-reply', studentReplyListener)
+        window.ipcRenderer?.off('software-inventory-updated', softwareInventoryUpdatedListener)
+        window.ipcRenderer?.off('software-install-blocked', softwareInstallBlockedListener)
+        window.ipcRenderer?.off('software-install-status-updated', softwareInstallStatusUpdatedListener)
         ipcBound.current = false
       }
     }
@@ -527,6 +570,109 @@ export default function App() {
     }
   }
 
+  const handleViewSoftware = (machineId: number) => {
+    setSelectedSoftwareMachineId(machineId)
+    setIsLoadingSoftware(true)
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('get-client-software-list', machineId)
+        .then((list) => {
+          setSoftwareList(list || [])
+          setIsLoadingSoftware(false)
+        })
+        .catch((err) => {
+          console.error(err)
+          setIsLoadingSoftware(false)
+        })
+    }
+  }
+
+  const handleTriggerScan = (machineId: number | 'all') => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('trigger-software-scan', machineId)
+        .then((res) => {
+          if (res.success) {
+            alert(machineId === 'all' 
+              ? `Scan command successfully broadcasted to ${res.count || 0} online client PCs.` 
+              : 'Scan command successfully sent to client PC. Inventory will be updated shortly.'
+            )
+          } else {
+            alert('Failed to trigger scan: ' + res.error)
+          }
+        })
+        .catch((err) => alert('Error triggering scan: ' + err.message))
+    }
+  }
+
+  const handleToggleBlockInstall = (machineId: number, block: boolean) => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('toggle-block-software-changes', machineId, block)
+        .then((res) => {
+          if (!res.success) {
+            alert('Failed to update software control setting.')
+          }
+        })
+        .catch((err) => console.error(err))
+    }
+  }
+
+  const handleBatchDeploy = () => {
+    if (selectedBatchMachines.length === 0) {
+      alert('Please select at least one client PC for deployment.')
+      return
+    }
+    if (deployMethod === 'winget' && !deployPackageId) {
+      alert('Please enter a Winget Package ID (e.g. Google.Chrome).')
+      return
+    }
+    if (deployMethod === 'url' && !deployUrl) {
+      alert('Please enter a Direct Download URL.')
+      return
+    }
+    if (deployMethod === 'script' && !deployScript) {
+      alert('Please enter a PowerShell script.')
+      return
+    }
+
+    setIsDeploying(true)
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('deploy-software-batch', selectedBatchMachines, {
+        softwareName: deploySoftwareName,
+        method: deployMethod,
+        packageId: deployPackageId,
+        url: deployUrl,
+        args: deployArgs,
+        script: deployScript
+      })
+      .then((res) => {
+        setIsDeploying(false)
+        if (res.success) {
+          alert('Batch software deployment triggered successfully! You can track the progress in the Deployment Logs sub-tab.')
+          setDeploySoftwareName('')
+          setDeployPackageId('')
+          setDeployUrl('')
+          setDeployArgs('')
+          setDeployScript('')
+          setSelectedBatchMachines([])
+          window.ipcRenderer.invoke('get-software-install-logs').then(setInstallLogs).catch(() => {})
+          setActiveDevicesSubTab('install_logs')
+        } else {
+          alert('Failed to trigger deployment: ' + res.error)
+        }
+      })
+      .catch((err) => {
+        setIsDeploying(false)
+        alert('Error deploying software: ' + err.message)
+      })
+    }
+  }
+
+  const handleRefreshDeviceLogs = () => {
+    if (window.ipcRenderer) {
+      window.ipcRenderer.invoke('get-software-install-logs').then(setInstallLogs).catch(() => {})
+      window.ipcRenderer.invoke('get-software-activity-logs').then(setActivityLogs).catch(() => {})
+    }
+  }
+
 
 
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -584,6 +730,9 @@ export default function App() {
           setSettings(fresh)
           initSettingsState(fresh)
         })
+      } else if (activeTab === 'devices') {
+        window.ipcRenderer.invoke('get-software-install-logs').then(setInstallLogs).catch(() => {})
+        window.ipcRenderer.invoke('get-software-activity-logs').then(setActivityLogs).catch(() => {})
       }
     }
   }, [activeTab, isAuthenticated])
@@ -1824,6 +1973,14 @@ export default function App() {
                   {Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0) > 99 ? '99+' : Object.values(unreadCounts).reduce((a: number, b: number) => a + b, 0)}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => { setActiveTab('devices'); setSelectedDrawerMachine(null) }}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                activeTab === 'devices' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+              }`}
+            >
+              <Laptop size={18} /> Device Management
             </button>
             <button
               onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null) }}
@@ -3901,6 +4058,502 @@ Respond strictly in JSON format:
             </div>
           )}
 
+          {/* TAB: Devices / Software Management */}
+          {activeTab === 'devices' && (
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 pb-4 border-b border-slate-900">
+                <div>
+                  <h2 className="text-xl font-bold text-white">Device & Software Management</h2>
+                  <p className="text-slate-400 text-sm mt-1">Audit installed software, block unauthorized installations, and deploy packages in batches.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleTriggerScan('all')}
+                    className="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-200 text-sm font-semibold rounded-lg transition-all"
+                  >
+                    <RefreshCw size={15} /> Force Scan All PCs
+                  </button>
+                  <button
+                    onClick={handleRefreshDeviceLogs}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-lg transition-all"
+                  >
+                    <RefreshCcw size={15} /> Refresh Logs
+                  </button>
+                </div>
+              </div>
+
+              {/* Inner Subtabs */}
+              <div className="flex border-b border-slate-900 gap-6">
+                <button
+                  onClick={() => setActiveDevicesSubTab('devices')}
+                  className={`pb-3 text-sm font-semibold transition-all border-b-2 ${
+                    activeDevicesSubTab === 'devices' 
+                      ? 'border-blue-500 text-white font-bold' 
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Connected Terminals
+                </button>
+                <button
+                  onClick={() => setActiveDevicesSubTab('install_logs')}
+                  className={`pb-3 text-sm font-semibold transition-all border-b-2 ${
+                    activeDevicesSubTab === 'install_logs' 
+                      ? 'border-blue-500 text-white font-bold' 
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Deployment Logs
+                </button>
+                <button
+                  onClick={() => setActiveDevicesSubTab('audit_logs')}
+                  className={`pb-3 text-sm font-semibold transition-all border-b-2 ${
+                    activeDevicesSubTab === 'audit_logs' 
+                      ? 'border-blue-500 text-white font-bold' 
+                      : 'border-transparent text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  Change Audit Trail
+                </button>
+              </div>
+
+              {/* Subtab Content */}
+              {activeDevicesSubTab === 'devices' && (
+                <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                  {/* Left: Terminals list */}
+                  <div className="xl:col-span-2 space-y-4">
+                    <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
+                      <div className="px-6 py-4 border-b border-slate-900/60 bg-slate-900/10">
+                        <h3 className="font-bold text-white text-sm">Active Terminal Clients</h3>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm border-collapse">
+                          <thead>
+                            <tr className="border-b border-slate-900 text-slate-450 uppercase text-[10px] tracking-wider font-bold">
+                              <th className="py-3 px-6">Terminal</th>
+                              <th className="py-3 px-6">Status / IP</th>
+                              <th className="py-3 px-6">Version</th>
+                              <th className="py-3 px-6">Installation Block</th>
+                              <th className="py-3 px-6 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900/50">
+                            {machines.length === 0 ? (
+                              <tr>
+                                <td colSpan={5} className="py-8 text-center text-slate-500">No client machines registered.</td>
+                              </tr>
+                            ) : (
+                              machines.map((m: any) => (
+                                <tr key={m.id} className="hover:bg-slate-900/10 transition-colors">
+                                  <td className="py-4 px-6">
+                                    <div className="flex items-center gap-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedBatchMachines.includes(m.id)}
+                                        onChange={() => {
+                                          setSelectedBatchMachines(prev =>
+                                            prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id]
+                                          )
+                                        }}
+                                        className="rounded border-slate-800 bg-slate-900 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                                        disabled={m.status !== 'online'}
+                                        title={m.status !== 'online' ? "Client must be online to deploy software" : "Select PC for batch deployment"}
+                                      />
+                                      <div>
+                                        <div className="font-bold text-white flex items-center gap-1.5">
+                                          {m.name}
+                                          {m.status === 'online' ? (
+                                            <span className="w-2 h-2 rounded-full bg-green-500" />
+                                          ) : (
+                                            <span className="w-2 h-2 rounded-full bg-slate-650" />
+                                          )}
+                                        </div>
+                                        <div className="text-[10px] text-slate-500 font-mono mt-0.5">{m.mac_address || 'No MAC'}</div>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="py-4 px-6">
+                                    <div className={`text-xs font-semibold ${m.status === 'online' ? 'text-green-400' : 'text-slate-500'}`}>
+                                      {m.status === 'online' ? 'Online' : 'Offline'}
+                                    </div>
+                                    <div className="text-xs text-slate-400 mt-0.5 font-mono">{m.ip_address || 'N/A'}</div>
+                                  </td>
+                                  <td className="py-4 px-6 text-xs text-slate-400 font-mono">
+                                    v{m.version || '1.0.0'}
+                                  </td>
+                                  <td className="py-4 px-6">
+                                    <label className="relative inline-flex items-center cursor-pointer">
+                                      <input
+                                        type="checkbox"
+                                        checked={!!m.block_software_changes}
+                                        onChange={(e) => handleToggleBlockInstall(m.id, e.target.checked)}
+                                        className="sr-only peer"
+                                      />
+                                      <div className="w-9 h-5 bg-slate-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-slate-400 after:border-slate-350 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 peer-checked:after:bg-white peer-checked:after:border-white"></div>
+                                      <span className="ml-2 text-xs font-semibold text-slate-400 peer-checked:text-blue-400 select-none">
+                                        {m.block_software_changes ? 'Blocked' : 'Allowed'}
+                                      </span>
+                                    </label>
+                                  </td>
+                                  <td className="py-4 px-6 text-right">
+                                    <div className="flex items-center justify-end gap-1.5">
+                                      <button
+                                        onClick={() => handleViewSoftware(m.id)}
+                                        className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-xs font-semibold rounded transition-colors"
+                                      >
+                                        View Software
+                                      </button>
+                                      <button
+                                        onClick={() => handleTriggerScan(m.id)}
+                                        disabled={m.status !== 'online'}
+                                        className="p-1 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded disabled:opacity-50 transition-colors"
+                                        title="Scan Software Installed"
+                                      >
+                                        <RefreshCw size={13} />
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              ))
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Right: Batch Deployment Panel */}
+                  <div className="space-y-4">
+                    <div className="bg-slate-950/40 border border-slate-900 rounded-2xl p-6 space-y-5">
+                      <div>
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                          <Download size={18} className="text-blue-500" /> Batch Installer
+                        </h3>
+                        <p className="text-slate-400 text-xs mt-1">Deploy installations silently to selected target client PCs.</p>
+                      </div>
+
+                      {/* Selected Target Count */}
+                      <div className="p-3 bg-slate-900/30 border border-slate-900 rounded-lg flex justify-between items-center text-xs">
+                        <span className="text-slate-400 font-semibold">Selected Clients:</span>
+                        <span className="font-bold text-blue-400">{selectedBatchMachines.length} PCs</span>
+                      </div>
+
+                      {/* Deployment Fields */}
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Software Label / Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Google Chrome, CapCut"
+                            value={deploySoftwareName}
+                            onChange={(e) => setDeploySoftwareName(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white text-sm outline-none focus:border-blue-500 transition-colors"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Installation Method</label>
+                          <select
+                            value={deployMethod}
+                            onChange={(e) => setDeployMethod(e.target.value as any)}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white text-sm outline-none focus:border-blue-500 transition-colors cursor-pointer"
+                          >
+                            <option value="winget">Winget (Windows Package Manager)</option>
+                            <option value="url">Direct Download URL (.exe / .msi)</option>
+                            <option value="script">Custom PowerShell Script</option>
+                          </select>
+                        </div>
+
+                        {deployMethod === 'winget' && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Winget Package ID</label>
+                            <input
+                              type="text"
+                              placeholder="e.g. Google.Chrome, CapCut.CapCut"
+                              value={deployPackageId}
+                              onChange={(e) => setDeployPackageId(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white text-sm font-mono outline-none focus:border-blue-500 transition-colors"
+                            />
+                            <p className="text-[10px] text-slate-500 mt-1">Provide the exact Winget package identity.</p>
+                          </div>
+                        )}
+
+                        {deployMethod === 'url' && (
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Direct File URL</label>
+                              <input
+                                type="url"
+                                placeholder="https://example.com/installer.msi"
+                                value={deployUrl}
+                                onChange={(e) => setDeployUrl(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white text-sm font-mono outline-none focus:border-blue-500 transition-colors"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Silent Arguments (Optional)</label>
+                              <input
+                                type="text"
+                                placeholder="e.g. /S or /VERYSILENT (defaults to /S for exe)"
+                                value={deployArgs}
+                                onChange={(e) => setDeployArgs(e.target.value)}
+                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-white text-sm outline-none focus:border-blue-500 transition-colors"
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        {deployMethod === 'script' && (
+                          <div>
+                            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">PowerShell Code</label>
+                            <textarea
+                              rows={5}
+                              placeholder="Write your custom silent install script..."
+                              value={deployScript}
+                              onChange={(e) => setDeployScript(e.target.value)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg p-3 text-white text-xs font-mono outline-none focus:border-blue-500 transition-colors resize-y"
+                            />
+                          </div>
+                        )}
+
+                        <button
+                          onClick={handleBatchDeploy}
+                          disabled={isDeploying || selectedBatchMachines.length === 0}
+                          className="w-full py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white font-bold text-sm rounded-lg flex items-center justify-center gap-2 transition-all cursor-pointer"
+                        >
+                          {isDeploying ? (
+                            <>
+                              <Loader2 size={16} className="animate-spin" /> Deploying...
+                            </>
+                          ) : (
+                            <>
+                              <Play size={15} /> Run Silent Installation
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {activeDevicesSubTab === 'install_logs' && (
+                <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-900/60 bg-slate-900/10 flex justify-between items-center">
+                    <h3 className="font-bold text-white text-sm">Deployment Progress Log</h3>
+                    <button
+                      onClick={handleRefreshDeviceLogs}
+                      className="p-1.5 hover:bg-slate-900 border border-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                      title="Reload logs"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-900 text-slate-450 uppercase text-[10px] tracking-wider font-bold">
+                          <th className="py-3 px-6">Machine</th>
+                          <th className="py-3 px-6">Software / Job</th>
+                          <th className="py-3 px-6">Status</th>
+                          <th className="py-3 px-6">Last Event Message</th>
+                          <th className="py-3 px-6 text-right">Time</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-900/50">
+                        {installLogs.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-500">No software deployments recorded yet.</td>
+                          </tr>
+                        ) : (
+                          installLogs.map((log: any) => (
+                            <tr key={log.id} className="hover:bg-slate-900/10 transition-colors">
+                              <td className="py-4 px-6 font-semibold text-white">{log.machine_name || `PC-${log.machine_id}`}</td>
+                              <td className="py-4 px-6 text-xs font-mono text-slate-350">{log.software_name}</td>
+                              <td className="py-4 px-6">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  log.status === 'completed' ? 'bg-green-950/30 text-green-400 border border-green-900/30' :
+                                  log.status === 'failed' ? 'bg-red-950/30 text-red-400 border border-red-900/30' :
+                                  log.status === 'installing' ? 'bg-blue-950/30 text-blue-400 border border-blue-900/30' :
+                                  'bg-slate-900 text-slate-400 border border-slate-800'
+                                }`}>
+                                  {log.status.toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="py-4 px-6 text-slate-300 text-xs">{log.message || 'N/A'}</td>
+                              <td className="py-4 px-6 text-right text-xs text-slate-550">{new Date(log.timestamp).toLocaleString()}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {activeDevicesSubTab === 'audit_logs' && (
+                <div className="bg-slate-950/40 border border-slate-900 rounded-2xl overflow-hidden">
+                  <div className="px-6 py-4 border-b border-slate-900/60 bg-slate-900/10 flex justify-between items-center">
+                    <h3 className="font-bold text-white text-sm">Software Audit History</h3>
+                    <button
+                      onClick={handleRefreshDeviceLogs}
+                      className="p-1.5 hover:bg-slate-900 border border-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                      title="Reload logs"
+                    >
+                      <RefreshCw size={14} />
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-900 text-slate-450 uppercase text-[10px] tracking-wider font-bold">
+                          <th className="py-3 px-6">Terminal</th>
+                          <th className="py-3 px-6">Audit Event</th>
+                          <th className="py-3 px-6">Software / Process</th>
+                          <th className="py-3 px-6">Details</th>
+                          <th className="py-3 px-6 text-right">Timestamp</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-900/50">
+                        {activityLogs.length === 0 ? (
+                          <tr>
+                            <td colSpan={5} className="py-8 text-center text-slate-500">No software activities logged.</td>
+                          </tr>
+                        ) : (
+                          activityLogs.map((log: any) => (
+                            <tr key={log.id} className="hover:bg-slate-900/10 transition-colors">
+                              <td className="py-4 px-6 font-semibold text-white">{log.machine_name}</td>
+                              <td className="py-4 px-6">
+                                <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  log.event_type === 'installed' ? 'bg-emerald-950/30 text-emerald-455 border border-emerald-900/30' :
+                                  log.event_type === 'deleted' ? 'bg-amber-950/30 text-amber-455 border border-amber-900/30' :
+                                  'bg-red-950/30 text-red-400 border border-red-900/30'
+                                }`}>
+                                  {log.event_type.replace('_', ' ').toUpperCase()}
+                                </span>
+                              </td>
+                              <td className="py-4 px-6 text-xs font-mono text-slate-300 font-semibold">{log.software_name}</td>
+                              <td className="py-4 px-6 text-slate-400 text-xs">{log.details || 'N/A'}</td>
+                              <td className="py-4 px-6 text-right text-xs text-slate-500">{new Date(log.timestamp).toLocaleString()}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Software list details modal overlay/drawer */}
+              {selectedSoftwareMachineId !== null && (
+                <div className="fixed inset-0 z-50 flex justify-end bg-slate-950/60 backdrop-blur-sm">
+                  {/* Backdrop closer click handler */}
+                  <div className="absolute inset-0" onClick={() => setSelectedSoftwareMachineId(null)} />
+                  
+                  {/* Drawer Content */}
+                  <div className="relative w-full max-w-2xl bg-slate-950 border-l border-slate-900 h-full flex flex-col shadow-2xl animate-slide-in">
+                    <div className="p-6 border-b border-slate-900 flex justify-between items-center">
+                      <div>
+                        <h3 className="text-lg font-bold text-white">
+                          Software Inventory
+                        </h3>
+                        <p className="text-slate-400 text-xs mt-1">
+                          Installed programs scanned on {machines.find(m => m.id === selectedSoftwareMachineId)?.name || 'Client PC'}.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setSelectedSoftwareMachineId(null)}
+                        className="p-1 hover:bg-slate-900 border border-slate-800 rounded text-slate-450 hover:text-white transition-colors"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Search and Filters */}
+                    <div className="p-6 border-b border-slate-900/50 bg-slate-900/10 flex items-center gap-3">
+                      <div className="relative flex-1">
+                        <Search size={14} className="absolute left-3 top-[11px] text-slate-500" />
+                        <input
+                          type="text"
+                          placeholder="Search installed programs..."
+                          value={softwareSearchQuery}
+                          onChange={(e) => setSoftwareSearchQuery(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-lg pl-9 pr-4 py-1.5 text-white text-sm outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                      <button
+                        onClick={() => handleViewSoftware(selectedSoftwareMachineId)}
+                        className="p-2 hover:bg-slate-900 border border-slate-800 rounded text-slate-400 hover:text-white transition-colors"
+                        title="Force reload list"
+                      >
+                        <RefreshCw size={14} />
+                      </button>
+                    </div>
+
+                    {/* Program List */}
+                    <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                      {isLoadingSoftware ? (
+                        <div className="h-full flex flex-col justify-center items-center gap-2 text-slate-400">
+                          <Loader2 className="animate-spin text-blue-500" size={24} />
+                          <span className="text-xs font-semibold">Reading registry data...</span>
+                        </div>
+                      ) : softwareList.length === 0 ? (
+                        <div className="h-full flex flex-col justify-center items-center text-slate-550">
+                          <Monitor size={36} className="text-slate-700 mb-2" />
+                          <span className="text-sm">No applications found or client has not scanned yet.</span>
+                        </div>
+                      ) : (
+                        (() => {
+                          const filtered = softwareList.filter(s => 
+                            s.name.toLowerCase().includes(softwareSearchQuery.toLowerCase()) ||
+                            (s.publisher && s.publisher.toLowerCase().includes(softwareSearchQuery.toLowerCase()))
+                          );
+                          if (filtered.length === 0) {
+                            return <div className="text-center text-slate-500 py-8">No matching applications found.</div>
+                          }
+                          return filtered.map((s, idx) => (
+                            <div key={s.id || idx} className="p-4 bg-slate-900/30 border border-slate-900 rounded-xl space-y-2.5">
+                              <div className="flex justify-between items-start gap-2">
+                                <div>
+                                  <h4 className="font-bold text-white text-sm leading-tight">{s.name}</h4>
+                                  <div className="text-xs text-slate-400 font-semibold mt-0.5">{s.publisher || 'Unknown Publisher'}</div>
+                                </div>
+                                <span className="shrink-0 px-2 py-0.5 bg-slate-900 border border-slate-800 rounded text-[10px] font-bold text-slate-350">
+                                  v{s.version || '1.0.0'}
+                                </span>
+                              </div>
+                              
+                              <div className="pt-2 border-t border-slate-900/60 grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
+                                <div>
+                                  <span className="text-slate-500 font-semibold block uppercase tracking-wider">Install Scope</span>
+                                  <span className="text-slate-300 font-medium">{s.installed_by || 'System (All Users)'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-500 font-semibold block uppercase tracking-wider">Install Date</span>
+                                  <span className="text-slate-300 font-mono">{s.install_date || 'N/A'}</span>
+                                </div>
+                                <div className="col-span-2">
+                                  <span className="text-slate-500 font-semibold block uppercase tracking-wider">Install Location</span>
+                                  <span className="text-slate-300 font-mono break-all">{s.install_location || 'N/A'}</span>
+                                </div>
+                                {s.install_source && (
+                                  <div className="col-span-2">
+                                    <span className="text-slate-500 font-semibold block uppercase tracking-wider">Install Source</span>
+                                    <span className="text-slate-300 font-mono break-all">{s.install_source}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ));
+                        })()
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* TAB: Messaging */}
           {activeTab === 'messaging' && (() => {
             const convMachines = [
@@ -5325,6 +5978,14 @@ Respond strictly in JSON format:
                 }`}
               >
                 <Megaphone size={18} /> Broadcast
+              </button>
+              <button
+                onClick={() => { setActiveTab('devices'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                  activeTab === 'devices' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <Laptop size={18} /> Device Management
               </button>
               <button
                 onClick={() => { setActiveTab('settings'); setSelectedDrawerMachine(null); setIsMobileMenuOpen(false) }}

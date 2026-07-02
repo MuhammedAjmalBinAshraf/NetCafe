@@ -192,6 +192,55 @@ function setupDatabase() {
   try {
     db.exec("ALTER TABLE machines ADD COLUMN version TEXT DEFAULT '1.0.76';")
   } catch {}
+  try {
+    db.exec("ALTER TABLE machines ADD COLUMN block_software_changes INTEGER DEFAULT 0;")
+  } catch {}
+
+  // Client installed software table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS client_softwares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER,
+      name TEXT,
+      version TEXT,
+      publisher TEXT,
+      install_date TEXT,
+      install_location TEXT,
+      install_source TEXT,
+      installed_by TEXT,
+      uninstall_string TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (machine_id) REFERENCES machines (id) ON DELETE CASCADE
+    );
+  `)
+
+  // Software installation log table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS software_install_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER,
+      install_id TEXT,
+      software_name TEXT,
+      status TEXT,
+      message TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (machine_id) REFERENCES machines (id) ON DELETE CASCADE
+    );
+  `)
+
+  // Software auditing activity log table
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS software_activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER,
+      event_type TEXT,
+      software_name TEXT,
+      details TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (machine_id) REFERENCES machines (id) ON DELETE CASCADE
+    );
+  `)
+
 
 
   // Session app logs table
@@ -500,11 +549,15 @@ function handleClientMessage(socket: net.Socket, data: any) {
     logToUI(`Mapped client socket to machine ID ${machine.id}`)
 
     // Enforce hardware lock state on registration if enabled
-    const machineRow = db.prepare("SELECT hardware_locked FROM machines WHERE id = ?").get(machine.id)
+    const machineRow = db.prepare("SELECT hardware_locked, block_software_changes FROM machines WHERE id = ?").get(machine.id)
     if (machineRow && machineRow.hardware_locked) {
       socket.write(JSON.stringify({ command: 'block-inputs', payload: { block: true } }) + '\n')
       logToUI(`Enforcing hardware input lock on machine ID ${machine.id} on reconnection.`)
     }
+
+    // Send software block control state
+    const blockSoftwareChanges = machineRow?.block_software_changes ? 1 : 0;
+    socket.write(JSON.stringify({ command: 'update-software-control', payload: { blockSoftwareChanges: !!blockSoftwareChanges } }) + '\n')
 
     // Send current active block rules to this client
     const rules = db.prepare("SELECT * FROM block_rules WHERE is_active = 1").all()
@@ -1283,6 +1336,120 @@ function handleClientMessage(socket: net.Socket, data: any) {
       }
       socket.write(JSON.stringify({ command: 'offline-sessions-ack', startTimes: ackedTimes }) + '\n');
       broadcastMachines();
+    }
+  }
+  else if (data.type === 'software-inventory') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const softwares = data.payload.softwares || [];
+      try {
+        // Compare new scan with previous database entries to log installations/deletions
+        const oldSoftwares = db.prepare("SELECT name FROM client_softwares WHERE machine_id = ?").all(machineId) as any[];
+        const oldSet = new Set(oldSoftwares.map(s => s.name));
+        const newSet = new Set(softwares.map((s: any) => s.Name));
+        const hasPreviousRecords = oldSoftwares.length > 0;
+
+        if (hasPreviousRecords) {
+          // Detect newly installed software
+          for (const s of softwares) {
+            if (s.Name && !oldSet.has(s.Name)) {
+              db.prepare(`
+                INSERT INTO software_activity_log (machine_id, event_type, software_name, details)
+                VALUES (?, 'installed', ?, ?)
+              `).run(machineId, s.Name, `Version: ${s.Version || 'N/A'}, Publisher: ${s.Publisher || 'N/A'}, Installed By: ${s.InstalledBy || 'System'}`);
+            }
+          }
+          // Detect deleted software
+          for (const oldName of oldSet) {
+            if (oldName && !newSet.has(oldName)) {
+              db.prepare(`
+                INSERT INTO software_activity_log (machine_id, event_type, software_name, details)
+                VALUES (?, 'deleted', ?, 'Removed from system')
+              `).run(machineId, oldName);
+            }
+          }
+        }
+
+        // Overwrite software list in DB
+        db.transaction(() => {
+          db.prepare("DELETE FROM client_softwares WHERE machine_id = ?").run(machineId);
+          const insertStmt = db.prepare(`
+            INSERT INTO client_softwares (machine_id, name, version, publisher, install_date, install_location, install_source, installed_by, uninstall_string)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const s of softwares) {
+            if (s.Name) {
+              insertStmt.run(
+                machineId,
+                s.Name,
+                s.Version || null,
+                s.Publisher || null,
+                s.InstallDate || null,
+                s.InstallLocation || null,
+                s.InstallSource || null,
+                s.InstalledBy || 'System (All Users)',
+                s.UninstallString || null
+              );
+            }
+          }
+        })();
+
+        logToUI(`Updated software inventory for machine ID ${machineId}: ${softwares.length} applications found.`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('software-inventory-updated', { machineId });
+        }
+      } catch (err: any) {
+        logToUI(`Error updating software inventory for machine ID ${machineId}: ${err.message}`);
+      }
+    }
+  }
+  else if (data.type === 'software-blocked') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const { processName } = data.payload || {};
+      try {
+        db.prepare(`
+          INSERT INTO software_activity_log (machine_id, event_type, software_name, details)
+          VALUES (?, 'install_blocked', ?, 'Terminated installer process because software installations are blocked.')
+        `).run(machineId, processName || 'Unknown Installer');
+
+        logToUI(`[Block Alert] Terminated installer "${processName}" on machine ID ${machineId}`);
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('software-install-blocked', {
+            machineId,
+            processName,
+            timestamp: Date.now()
+          });
+        }
+      } catch (err: any) {
+        console.error('Error logging software block event:', err);
+      }
+    }
+  }
+  else if (data.type === 'install-progress') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const { installId, status, message, softwareName } = data.payload || {};
+      try {
+        db.prepare(`
+          UPDATE software_install_logs
+          SET status = ?, message = ?, timestamp = datetime('now')
+          WHERE machine_id = ? AND install_id = ?
+        `).run(status, message, machineId, installId);
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('software-install-status-updated', {
+            machineId,
+            installId,
+            status,
+            message,
+            softwareName
+          });
+        }
+      } catch (err: any) {
+        console.error('Error updating software installation log:', err);
+      }
     }
   }
   else if (data.type === 'client-request-close') {
@@ -2655,6 +2822,131 @@ ipcMain.handle('power-all', () => {
       socket.write(payload + '\n')
     } catch {}
   }
+})
+
+function getSocketByMachineId(machineId: number): net.Socket | null {
+  for (const [socket, mId] of clients.entries()) {
+    if (Number(mId) === machineId) {
+      return socket;
+    }
+  }
+  return null;
+}
+
+// Client Software Inventory & Management CRUD
+ipcMain.handle('get-client-software-list', (_, machineId) => {
+  return db.prepare("SELECT * FROM client_softwares WHERE machine_id = ? ORDER BY name ASC").all(machineId);
+})
+
+ipcMain.handle('get-software-install-logs', () => {
+  return db.prepare(`
+    SELECT l.*, m.name as machine_name 
+    FROM software_install_logs l 
+    JOIN machines m ON l.machine_id = m.id 
+    ORDER BY l.timestamp DESC 
+    LIMIT 200
+  `).all();
+})
+
+ipcMain.handle('get-software-activity-logs', () => {
+  return db.prepare(`
+    SELECT a.*, m.name as machine_name 
+    FROM software_activity_log a 
+    JOIN machines m ON a.machine_id = m.id 
+    ORDER BY a.timestamp DESC 
+    LIMIT 500
+  `).all();
+})
+
+ipcMain.handle('trigger-software-scan', (_, machineId) => {
+  if (machineId === 'all') {
+    const payload = JSON.stringify({ command: 'scan-software' }) + '\n';
+    let count = 0;
+    for (const socket of clients.keys()) {
+      try {
+        socket.write(payload);
+        count++;
+      } catch {}
+    }
+    return { success: true, count };
+  } else {
+    const socket = getSocketByMachineId(Number(machineId));
+    if (socket) {
+      try {
+        socket.write(JSON.stringify({ command: 'scan-software' }) + '\n');
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err.message };
+      }
+    }
+    return { success: false, error: 'Machine is offline or not registered.' };
+  }
+})
+
+ipcMain.handle('toggle-block-software-changes', (_, machineId, block) => {
+  db.prepare("UPDATE machines SET block_software_changes = ? WHERE id = ?").run(block ? 1 : 0, machineId);
+  const socket = getSocketByMachineId(Number(machineId));
+  if (socket) {
+    try {
+      socket.write(JSON.stringify({ command: 'update-software-control', payload: { blockSoftwareChanges: block } }) + '\n');
+    } catch {}
+  }
+  broadcastMachines();
+  return { success: true };
+})
+
+ipcMain.handle('deploy-software-batch', (_, machineIds: number[], installPayload) => {
+  const { softwareName, method, packageId, url, args, script } = installPayload;
+  const installId = 'inst_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  
+  for (const mId of machineIds) {
+    // Check if record exists
+    db.prepare(`
+      INSERT INTO software_install_logs (machine_id, install_id, software_name, status, message)
+      VALUES (?, ?, ?, 'pending', 'Deployment queued by administrator.')
+    `).run(mId, installId, softwareName || packageId || 'Custom Command');
+
+    const socket = getSocketByMachineId(mId);
+    if (socket) {
+      try {
+        socket.write(JSON.stringify({
+          command: 'install-software',
+          payload: {
+            installId,
+            softwareName: softwareName || packageId || 'Custom Command',
+            method,
+            packageId,
+            url,
+            args,
+            script
+          }
+        }) + '\n');
+        db.prepare(`
+          UPDATE software_install_logs 
+          SET status = 'downloading', message = 'Deployment sent to client PC.' 
+          WHERE machine_id = ? AND install_id = ?
+        `).run(mId, installId);
+      } catch (err: any) {
+        db.prepare(`
+          UPDATE software_install_logs 
+          SET status = 'failed', message = ? 
+          WHERE machine_id = ? AND install_id = ?
+        `).run('Failed to send command over socket: ' + err.message, mId, installId);
+      }
+    } else {
+      db.prepare(`
+        UPDATE software_install_logs 
+        SET status = 'failed', message = 'Client machine is offline.' 
+        WHERE machine_id = ? AND install_id = ?
+      `).run(mId, installId);
+    }
+  }
+  
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('software-install-batch-triggered');
+  }
+  
+  return { success: true, installId };
 })
 
 // Plans CRUD
