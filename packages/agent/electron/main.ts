@@ -89,7 +89,7 @@ let currentSessionData: any = null;
 let pendingPasswordResolve: ((result: { success: boolean; message: string }) => void) | null = null;
 let isFullscreenApp = false;
 let fullscreenCheckInterval: NodeJS.Timeout | null = null;
-const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
+const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean, softBlocked?: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
 let nextRequestId = 1;
 
 const agentLogsCache: { timestamp: string, message: string }[] = [];
@@ -280,11 +280,77 @@ let machineId = os.hostname();
 let clientUuid = '';
 let operatorPassword = 'admin'; // synced from server via update-operator-password command
 
+const offlineSessionsPath = path.join(app.getPath('userData'), 'offline_sessions.json');
+let currentOfflineSession: { startTime: string; endTime: string; durationMinutes: number } | null = null;
+let offlineSessionTimer: NodeJS.Timeout | null = null;
+
 function generateUUID() {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
     const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
     return v.toString(16);
   });
+}
+
+function updateTestUserVisibility() {
+  const shouldShow = !isTcpConnected || testUserEnabled;
+  if (lockWindow && !lockWindow.isDestroyed()) {
+    lockWindow.webContents.send('test-user-setting-changed', shouldShow);
+  }
+}
+
+function saveOfflineSession(sess: { startTime: string; endTime: string; durationMinutes: number }) {
+  try {
+    let sessions: any[] = [];
+    if (fs.existsSync(offlineSessionsPath)) {
+      sessions = JSON.parse(fs.readFileSync(offlineSessionsPath, 'utf8'));
+    }
+    sessions.push({
+      startTime: sess.startTime,
+      endTime: sess.endTime,
+      durationMinutes: sess.durationMinutes,
+      sent: false
+    });
+    fs.writeFileSync(offlineSessionsPath, JSON.stringify(sessions, null, 2), 'utf8');
+  } catch (err: any) {
+    logToUI(`Error saving offline session: ${err.message}`);
+  }
+}
+
+function updateCurrentOfflineSessionInFile() {
+  if (!currentOfflineSession) return;
+  try {
+    if (fs.existsSync(offlineSessionsPath)) {
+      const sessions = JSON.parse(fs.readFileSync(offlineSessionsPath, 'utf8'));
+      const match = sessions.find((s: any) => s.startTime === currentOfflineSession!.startTime && !s.sent);
+      if (match) {
+        match.endTime = currentOfflineSession.endTime;
+        match.durationMinutes = currentOfflineSession.durationMinutes;
+        fs.writeFileSync(offlineSessionsPath, JSON.stringify(sessions, null, 2), 'utf8');
+      }
+    }
+  } catch (err: any) {
+    logToUI(`Error updating offline session in file: ${err.message}`);
+  }
+}
+
+function sendOfflineSessionsReport() {
+  try {
+    if (fs.existsSync(offlineSessionsPath)) {
+      const sessions = JSON.parse(fs.readFileSync(offlineSessionsPath, 'utf8'));
+      const unsent = sessions.filter((s: any) => !s.sent);
+      if (unsent.length > 0) {
+        logToUI(`Sending ${unsent.length} offline sessions to server...`);
+        sendToServer({
+          type: 'offline-sessions-report',
+          payload: {
+            sessions: unsent
+          }
+        });
+      }
+    }
+  } catch (err: any) {
+    logToUI(`Error sending offline sessions report: ${err.message}`);
+  }
 }
 
 // ─── Address helpers ───────────────────────────────────────────────────────────
@@ -752,7 +818,7 @@ function createLockWindow() {
       <button class="login-btn" id="loginBtn">Proceed to Profile</button>
       
       <!-- Test User Section -->
-      <div id="testUserSection" style="margin-top: 1rem; display: ${testUserEnabled ? 'block' : 'none'}; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 1rem;">
+      <div id="testUserSection" style="margin-top: 1rem; display: ${(!isTcpConnected || testUserEnabled) ? 'block' : 'none'}; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 1rem;">
         <button class="test-btn" id="testBtn">Start Test Session (Offline)</button>
         <div style="font-size: 0.7rem; color: #64748b; margin-top: 0.35rem; text-align: center;">Bypasses server connection, tracking, and filtering.</div>
       </div>
@@ -1581,11 +1647,11 @@ function unlockAndCloseWindow() {
 async function handleServerMessage(msg: any) {
   try {
     if (msg.type === 'query-check-response') {
-      const { requestId, allowed, message, serverIssue } = msg.payload || {};
+      const { requestId, allowed, message, serverIssue, softBlocked } = msg.payload || {};
       const pending = pendingQueryChecks.get(requestId);
       if (pending) {
         pendingQueryChecks.delete(requestId);
-        pending.resolve(allowed, message, serverIssue);
+        pending.resolve(allowed, message, serverIssue, softBlocked);
       }
       return;
     }
@@ -1603,8 +1669,23 @@ async function handleServerMessage(msg: any) {
       } catch (e: any) {
         logToUI(`Failed to persist testUserEnabled to config: ${e.message}`);
       }
-      if (lockWindow && !lockWindow.isDestroyed()) {
-        lockWindow.webContents.send('test-user-setting-changed', testUserEnabled);
+      updateTestUserVisibility();
+    } else if (msg.command === 'offline-sessions-ack') {
+      const ackedTimes = msg.startTimes || [];
+      try {
+        if (fs.existsSync(offlineSessionsPath)) {
+          const sessions = JSON.parse(fs.readFileSync(offlineSessionsPath, 'utf8'));
+          sessions.forEach((s: any) => {
+            if (ackedTimes.includes(s.startTime)) {
+              s.sent = true;
+            }
+          });
+          const keptSessions = sessions.filter((s: any) => !s.sent || (new Date().getTime() - new Date(s.startTime).getTime() < 30 * 24 * 3600 * 1000)).slice(-50);
+          fs.writeFileSync(offlineSessionsPath, JSON.stringify(keptSessions, null, 2), 'utf8');
+          logToUI(`Acknowledged ${ackedTimes.length} offline sessions in local file.`);
+        }
+      } catch (err: any) {
+        logToUI(`Error handling offline sessions ack: ${err.message}`);
       }
     } else if (msg.command === 'profile-success') {
       if (pendingProfileResolve) {
@@ -2139,6 +2220,28 @@ ipcMain.handle('agent-start-test-session', (): Promise<{ success: boolean }> => 
     isLocked = false;
     currentUser = 'Test User';
     
+    // Start offline session tracking
+    const startTimeStr = new Date().toISOString();
+    currentOfflineSession = {
+      startTime: startTimeStr,
+      endTime: startTimeStr,
+      durationMinutes: 0
+    };
+    saveOfflineSession(currentOfflineSession);
+
+    if (offlineSessionTimer) {
+      clearInterval(offlineSessionTimer);
+    }
+    offlineSessionTimer = setInterval(() => {
+      if (currentOfflineSession) {
+        const now = new Date();
+        currentOfflineSession.endTime = now.toISOString();
+        const diffMs = now.getTime() - new Date(currentOfflineSession.startTime).getTime();
+        currentOfflineSession.durationMinutes = Math.max(0, Math.round(diffMs / 60000));
+        updateCurrentOfflineSessionInFile();
+      }
+    }, 10000);
+
     stopLockEnforcement();
     if (lockWindow) {
       unlockAndCloseWindow();
@@ -2155,7 +2258,7 @@ ipcMain.handle('agent-start-test-session', (): Promise<{ success: boolean }> => 
     
     destroyIslandWindow();
     createIslandWindow({
-      startTime: new Date().toISOString(),
+      startTime: startTimeStr,
       mode: 'prepaid',
       durationMinutes: 9999,
       user: 'Test User'
@@ -2893,6 +2996,9 @@ function connectToServer() {
     isConnecting = false;
     isTcpConnected = true;
     logToUI(`Connected to server successfully!`);
+    
+    updateTestUserVisibility();
+    
     const mac = getMACAddress() || machineId;
     sendToServer({ 
       type: 'register', 
@@ -2905,6 +3011,7 @@ function connectToServer() {
       } 
     });
     startScreenMirroring();
+    sendOfflineSessionsReport();
   });
 
   socket.setEncoding('utf8');
@@ -2929,6 +3036,8 @@ function connectToServer() {
     tcpSocket = null;
     logToUI('Disconnected from server. Retrying in 5 seconds...');
     stopScreenMirroring();
+    
+    updateTestUserVisibility();
     
     // Resolve all pending query checks to true
     for (const pending of pendingQueryChecks.values()) {
@@ -3362,8 +3471,8 @@ Add-Type -TypeDefinition $csharpSource
   }
 }
 
-function checkQuerySafety(query: string, url: string, ip: string, isUserInitiated: boolean): Promise<{ allowed: boolean; serverIssue?: boolean }> {
-  return new Promise<{ allowed: boolean; serverIssue?: boolean }>((resolve) => {
+function checkQuerySafety(query: string, url: string, ip: string, isUserInitiated: boolean): Promise<{ allowed: boolean; serverIssue?: boolean; softBlocked?: boolean }> {
+  return new Promise<{ allowed: boolean; serverIssue?: boolean; softBlocked?: boolean }>((resolve) => {
     if (isTestUserSession) {
       resolve({ allowed: true });
       return;
@@ -3404,7 +3513,7 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
     }, 15000);
 
     pendingQueryChecks.set(requestId, {
-      resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean) => {
+      resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean, softBlocked?: boolean) => {
         clearTimeout(timeout);
         const elapsed = Date.now() - startTime;
         const remainingDelay = Math.max(0, 2500 - elapsed);
@@ -3413,7 +3522,7 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
           if (pendingQueryChecks.size === 0 && islandWindow && !islandWindow.isDestroyed()) {
             islandWindow.webContents.send('set-evaluating-state', false);
           }
-          resolve({ allowed, serverIssue });
+          resolve({ allowed, serverIssue, softBlocked });
         };
 
         if (isUserInitiated && remainingDelay > 0) {
@@ -3574,14 +3683,17 @@ app.whenReady().then(async () => {
         async (query: string, url: string, ip: string, isUserInitiated: boolean) => {
           logToUI(`[MITM] Browser query intercepted: "${query}" URL: "${url}" IP: "${ip}" isUserInitiated=${isUserInitiated}`);
           const result = await checkQuerySafety(query, url, ip, isUserInitiated);
-          logToUI(`[MITM] Safety check result for "${query}": ALLOWED=${result.allowed}, SERVER_ISSUE=${result.serverIssue}`);
+           logToUI(`[MITM] Safety check result for "${query}": ALLOWED=${result.allowed}, SERVER_ISSUE=${result.serverIssue}, SOFT_BLOCKED=${result.softBlocked}`);
           if (!result.allowed) {
-            if (isUserInitiated && islandWindow && !islandWindow.isDestroyed()) {
+            if (isUserInitiated && !result.serverIssue && !result.softBlocked && islandWindow && !islandWindow.isDestroyed()) {
               islandWindow.webContents.send('safety-violation', {
-                type: result.serverIssue ? 'Server Issue' : 'Safety Warning',
-                message: result.serverIssue 
-                  ? `A safety check server issue occurred. Your request was blocked.`
-                  : `Search query "${query}" violates safety rules and has been blocked.`
+                type: 'Safety Warning',
+                message: `Search query "${query}" violates safety rules and has been blocked.`
+              });
+            } else if (isUserInitiated && result.serverIssue && islandWindow && !islandWindow.isDestroyed()) {
+              islandWindow.webContents.send('safety-violation', {
+                type: 'Server Issue',
+                message: `A safety check server issue occurred. Your request was blocked.`
               });
             }
           }
@@ -4131,6 +4243,20 @@ function destroyIslandWindow() {
 ipcMain.on('exit-session-request', () => {
   if (isTestUserSession) {
     logToUI('Ending local test user session. Locking terminal.');
+    
+    if (offlineSessionTimer) {
+      clearInterval(offlineSessionTimer);
+      offlineSessionTimer = null;
+    }
+    if (currentOfflineSession) {
+      const now = new Date();
+      currentOfflineSession.endTime = now.toISOString();
+      const diffMs = now.getTime() - new Date(currentOfflineSession.startTime).getTime();
+      currentOfflineSession.durationMinutes = Math.max(0, Math.round(diffMs / 60000));
+      updateCurrentOfflineSessionInFile();
+      currentOfflineSession = null;
+    }
+
     isTestUserSession = false;
     isLocked = true;
     currentUser = null;

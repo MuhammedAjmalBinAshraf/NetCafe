@@ -93,6 +93,8 @@ export default function App() {
   const [violationPenaltyFee, setViolationPenaltyFee] = useState('50')
   const [safeQueries, setSafeQueries] = useState<Array<{id: number, query: string}>>([])
   const [newSafeQuery, setNewSafeQuery] = useState('')
+  const [softBlockedQueries, setSoftBlockedQueries] = useState<Array<{id: number, query: string}>>([])
+  const [newSoftBlockedQuery, setNewSoftBlockedQuery] = useState('')
   const [isSavingSettings, setIsSavingSettings] = useState(false)
   const [hardeningStatus, setHardeningStatus] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState('')
@@ -343,6 +345,7 @@ export default function App() {
       })
       window.ipcRenderer.invoke('get-blocked-queries').then(setBlockedQueries).catch(() => {})
       window.ipcRenderer.invoke('get-safe-queries').then(setSafeQueries).catch(() => {})
+      window.ipcRenderer.invoke('get-soft-blocked-queries').then(setSoftBlockedQueries).catch(() => {})
       window.ipcRenderer.invoke('get-users').then(setUsers)
       window.ipcRenderer.invoke('get-latest-screen-frames').then(setScreenFrames)
       window.ipcRenderer.invoke('get-server-logs').then(setSystemLogs)
@@ -1426,6 +1429,78 @@ export default function App() {
         const freshBlocked = await window.ipcRenderer.invoke('get-blocked-queries')
         const freshSafe = await window.ipcRenderer.invoke('get-safe-queries')
         setBlockedQueries(freshBlocked)
+        setSafeQueries(freshSafe)
+      }
+    }
+  }
+
+  const handleAddSoftBlockedQuery = async () => {
+    const query = newSoftBlockedQuery.trim()
+    if (query && window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('add-soft-blocked-query', query)
+      if (res.success) {
+        setNewSoftBlockedQuery('')
+        const fresh = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        setSoftBlockedQueries(fresh)
+      } else {
+        alert(res.error || 'Failed to add soft blocked query')
+      }
+    }
+  }
+
+  const handleDeleteSoftBlockedQuery = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('delete-soft-blocked-query', id)
+      if (res.success) {
+        const fresh = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        setSoftBlockedQueries(fresh)
+      }
+    }
+  }
+
+  const handleMoveSoftBlockedToSafe = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-soft-blocked-to-safe', id)
+      if (res.success) {
+        const freshSoft = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        const freshSafe = await window.ipcRenderer.invoke('get-safe-queries')
+        setSoftBlockedQueries(freshSoft)
+        setSafeQueries(freshSafe)
+      }
+    }
+  }
+
+  const handleMoveSoftBlockedToBlocked = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-soft-blocked-to-blocked', id)
+      if (res.success) {
+        const freshSoft = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        const freshBlocked = await window.ipcRenderer.invoke('get-blocked-queries')
+        setSoftBlockedQueries(freshSoft)
+        setBlockedQueries(freshBlocked)
+      }
+    }
+  }
+
+  const handleMoveBlockedToSoft = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-blocked-to-soft', id)
+      if (res.success) {
+        const freshSoft = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        const freshBlocked = await window.ipcRenderer.invoke('get-blocked-queries')
+        setSoftBlockedQueries(freshSoft)
+        setBlockedQueries(freshBlocked)
+      }
+    }
+  }
+
+  const handleMoveSafeToSoft = async (id: number) => {
+    if (window.ipcRenderer) {
+      const res = await window.ipcRenderer.invoke('move-safe-to-soft', id)
+      if (res.success) {
+        const freshSoft = await window.ipcRenderer.invoke('get-soft-blocked-queries')
+        const freshSafe = await window.ipcRenderer.invoke('get-safe-queries')
+        setSoftBlockedQueries(freshSoft)
         setSafeQueries(freshSafe)
       }
     }
@@ -2544,6 +2619,13 @@ export default function App() {
                                 <td className="p-2.5 text-right">
                                   <div className="flex items-center justify-end gap-1">
                                     <button
+                                      onClick={() => handleMoveSafeToSoft(q.id)}
+                                      className="text-slate-500 hover:text-amber-400 transition-colors p-1"
+                                      title="Move to Soft Blocked"
+                                    >
+                                      <AlertTriangle size={12} />
+                                    </button>
+                                    <button
                                       onClick={() => handleMoveSafeToBlocked(q.id)}
                                       className="text-slate-500 hover:text-red-400 transition-colors p-1"
                                       title="Move to Blacklist"
@@ -2552,6 +2634,90 @@ export default function App() {
                                     </button>
                                     <button
                                       onClick={() => handleDeleteSafeQuery(q.id)}
+                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                      title="Delete"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                  </div>
+
+                  {/* Soft Blocked Queries (No Violation/Penalty) */}
+                  <div className="bg-slate-900/40 border border-slate-900 rounded-xl overflow-hidden shadow-lg space-y-4 p-5">
+                    <div>
+                      <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                        <AlertTriangle size={16} className="text-amber-400" /> Soft Blocked Queries (No Violation / Penalty)
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Searches matching these terms are blocked silently on the browser, but user never gets a penalty or violation count.
+                      </p>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="Enter term to block without penalty (e.g. facebook, instagram)..."
+                        value={newSoftBlockedQuery}
+                        onChange={(e) => setNewSoftBlockedQuery(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleAddSoftBlockedQuery();
+                          }
+                        }}
+                        className="flex-1 bg-slate-950 border border-slate-800 focus:border-blue-500 rounded-lg px-3 py-2 text-xs text-white outline-none transition-colors"
+                      />
+                      <button
+                        onClick={handleAddSoftBlockedQuery}
+                        className="px-3 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors flex items-center gap-1 shrink-0 text-xs font-bold"
+                      >
+                        <Plus size={14} /> Add
+                      </button>
+                    </div>
+
+                    {softBlockedQueries.length === 0 ? (
+                      <div className="text-slate-600 text-xs py-4 text-center">
+                        No soft blocked queries added yet.
+                      </div>
+                    ) : (
+                      <div className="max-h-48 overflow-y-auto border border-slate-900 rounded-lg bg-slate-950/20">
+                        <table className="w-full text-left border-collapse text-xs">
+                          <thead>
+                            <tr className="bg-slate-950 text-slate-400 border-b border-slate-900 font-semibold">
+                              <th className="p-2.5">Soft Blocked Term</th>
+                              <th className="p-2.5 text-right w-24">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-900">
+                            {softBlockedQueries.map((q) => (
+                              <tr key={q.id} className="hover:bg-slate-900/40 transition-colors">
+                                <td className="p-2.5 font-mono text-slate-300">{q.query}</td>
+                                <td className="p-2.5 text-right">
+                                  <div className="flex items-center justify-end gap-1">
+                                    <button
+                                      onClick={() => handleMoveSoftBlockedToSafe(q.id)}
+                                      className="text-slate-500 hover:text-emerald-400 transition-colors p-1"
+                                      title="Move to Whitelist"
+                                    >
+                                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+                                    </button>
+                                    <button
+                                      onClick={() => handleMoveSoftBlockedToBlocked(q.id)}
+                                      className="text-slate-500 hover:text-red-400 transition-colors p-1"
+                                      title="Move to Blacklist"
+                                    >
+                                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteSoftBlockedQuery(q.id)}
                                       className="text-slate-500 hover:text-red-400 transition-colors p-1"
                                       title="Delete"
                                     >
@@ -2665,11 +2831,18 @@ export default function App() {
                                   <td className="p-2.5 text-right">
                                     <div className="flex items-center justify-end gap-1">
                                       <button
+                                        onClick={() => handleMoveBlockedToSoft(q.id)}
+                                        className="text-slate-500 hover:text-amber-400 transition-colors p-1"
+                                        title="Move to Soft Blocked"
+                                      >
+                                        <AlertTriangle size={12} />
+                                      </button>
+                                      <button
                                         onClick={() => handleMoveBlockedToSafe(q.id)}
                                         className="text-slate-500 hover:text-emerald-400 transition-colors p-1"
                                         title="Move to Whitelist"
                                       >
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
                                       </button>
                                       <button
                                         onClick={() => handleDeleteBlockedQuery(q.id)}

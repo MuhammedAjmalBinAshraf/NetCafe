@@ -284,6 +284,14 @@ function setupDatabase() {
     );
   `)
 
+  // Create soft blocked queries table (Non-Violation Blocked List)
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS soft_blocked_queries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      query TEXT UNIQUE NOT NULL
+    );
+  `)
+
   // Create update log table for tracking remote agent update progress
   db.exec(`
     CREATE TABLE IF NOT EXISTS update_log (
@@ -1050,6 +1058,19 @@ function handleClientMessage(socket: net.Socket, data: any) {
       return
     }
 
+    // Soft Blocked Queries (Non-Violation Blocked List) check
+    const isSoftBlockedExact = db.prepare("SELECT 1 FROM soft_blocked_queries WHERE lower(query) = ?").get(cleanQ)
+    const softBlacklistRows = db.prepare("SELECT query FROM soft_blocked_queries").all() as any[]
+    const softHit = isSoftBlockedExact ? cleanQ : softBlacklistRows.find(r => r.query && cleanQ.includes(r.query.toLowerCase()))?.query
+
+    if (softHit) {
+      emitLog('block', `[MITM] ❌ SOFT BLOCKED (NON-VIOLATION) — Term: "${softHit}"`)
+      if (!socket.destroyed) {
+        socket.write(JSON.stringify({ type: 'query-check-response', payload: { query, requestId, allowed: false, softBlocked: true, serverIssue: false } }) + '\n')
+      }
+      return
+    }
+
     // Layer 1: Blacklist check (exact & substring)
     const isBlockedExact = db.prepare("SELECT 1 FROM blocked_queries WHERE lower(query) = ?").get(cleanQ)
     const blacklistRows = db.prepare("SELECT query FROM blocked_queries").all() as any[]
@@ -1234,6 +1255,34 @@ function handleClientMessage(socket: net.Socket, data: any) {
         socket.write(JSON.stringify({ command: 'change-password-success', message: 'Password updated successfully!' }) + '\n');
         emitLog('info', `Member ${username} updated their password successfully.`);
       }
+    }
+  }
+  else if (data.type === 'offline-sessions-report') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const payload = data.payload || {};
+      const reportedSessions = payload.sessions || [];
+      const ackedTimes: string[] = [];
+      const machine = db.prepare("SELECT name FROM machines WHERE id = ?").get(machineId) as { name: string } | undefined;
+      const machineName = machine ? machine.name : `Machine ${machineId}`;
+
+      for (const s of reportedSessions) {
+        try {
+          const exist = db.prepare("SELECT id FROM sessions WHERE machine_id = ? AND start_time = ? AND customer_name = 'Test User'").get(machineId, s.startTime);
+          if (!exist) {
+            db.prepare(`
+              INSERT INTO sessions (machine_id, customer_name, plan_id, start_time, end_time, mode, status, total_amount)
+              VALUES (?, 'Test User', NULL, ?, ?, 'offline_test', 'completed', 0)
+            `).run(machineId, s.startTime, s.endTime);
+            emitLog('info', `Imported offline Test User session from ${machineName}: Start=${s.startTime}, Duration=${s.durationMinutes} mins`);
+          }
+          ackedTimes.push(s.startTime);
+        } catch (e: any) {
+          console.error('Failed to import offline session:', e);
+        }
+      }
+      socket.write(JSON.stringify({ command: 'offline-sessions-ack', startTimes: ackedTimes }) + '\n');
+      broadcastMachines();
     }
   }
   else if (data.type === 'client-request-close') {
@@ -2764,6 +2813,96 @@ ipcMain.handle('move-safe-to-blocked', (_, id) => {
   } catch (err: any) {
     return { success: false, error: err.message }
   }
+// Soft Blocked Queries (Non-Violation Blocked List) handlers
+ipcMain.handle('get-soft-blocked-queries', () => {
+  if (!db) return []
+  try {
+    return db.prepare("SELECT * FROM soft_blocked_queries ORDER BY id DESC").all()
+  } catch (err) {
+    console.error('Failed to get soft blocked queries:', err)
+    return []
+  }
+})
+
+ipcMain.handle('add-soft-blocked-query', (_, query) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    db.prepare("INSERT INTO soft_blocked_queries (query) VALUES (?)").run(query.trim())
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('delete-soft-blocked-query', (_, id) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    db.prepare("DELETE FROM soft_blocked_queries WHERE id = ?").run(id)
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('move-soft-blocked-to-safe', (_, id) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    const row = db.prepare("SELECT query FROM soft_blocked_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.transaction(() => {
+      db.prepare("DELETE FROM soft_blocked_queries WHERE id = ?").run(id)
+      db.prepare("INSERT OR IGNORE INTO safe_queries (query) VALUES (?)").run(row.query)
+    })()
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('move-soft-blocked-to-blocked', (_, id) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    const row = db.prepare("SELECT query FROM soft_blocked_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.transaction(() => {
+      db.prepare("DELETE FROM soft_blocked_queries WHERE id = ?").run(id)
+      db.prepare("INSERT OR IGNORE INTO blocked_queries (query) VALUES (?)").run(row.query)
+    })()
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('move-blocked-to-soft', (_, id) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    const row = db.prepare("SELECT query FROM blocked_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.transaction(() => {
+      db.prepare("DELETE FROM blocked_queries WHERE id = ?").run(id)
+      db.prepare("INSERT OR IGNORE INTO soft_blocked_queries (query) VALUES (?)").run(row.query)
+    })()
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
+
+ipcMain.handle('move-safe-to-soft', (_, id) => {
+  if (!db) return { success: false, error: 'Database not initialized' }
+  try {
+    const row = db.prepare("SELECT query FROM safe_queries WHERE id = ?").get(id) as any
+    if (!row) return { success: false, error: 'Not found' }
+    db.transaction(() => {
+      db.prepare("DELETE FROM safe_queries WHERE id = ?").run(id)
+      db.prepare("INSERT OR IGNORE INTO soft_blocked_queries (query) VALUES (?)").run(row.query)
+    })()
+    return { success: true }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+})
 })
 
 
