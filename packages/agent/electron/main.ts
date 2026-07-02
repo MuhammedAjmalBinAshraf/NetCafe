@@ -78,6 +78,8 @@ let isAppQuitting = false;
 let testUserEnabled = false;
 let isTestUserSession = false;
 let activeBlockRules: any[] = [];
+let blockSoftwareChanges = false;
+let isAgentUpdating = false;
 let blockInterval: NodeJS.Timeout | null = null;
 let metricsInterval: NodeJS.Timeout | null = null;
 let lockEnforceInterval: NodeJS.Timeout | null = null;
@@ -151,6 +153,12 @@ function isAgentTheShell(): boolean {
   } catch {
     return false;
   }
+}
+
+function isKioskUser(): boolean {
+  if (process.platform !== 'win32') return true;
+  const username = os.userInfo().username.toLowerCase();
+  return username === 'cafekiosk';
 }
 
 function isDesktopShellRunning(): Promise<boolean> {
@@ -411,6 +419,7 @@ function updateUpdaterFeedURL() {
 
 // ─── Lock enforcement: re-focus every 500ms ───────────────────────────────────
 function startLockEnforcement() {
+  if (!isKioskUser()) return;
   // NOTE: Do NOT guard with isAgentTheShell() — WMI Shell Launcher bypasses the
   // HKCU Winlogon\Shell registry key entirely, causing isAgentTheShell() to return
   // false even when the agent IS the kiosk shell. Always enforce lock on Windows.
@@ -435,6 +444,7 @@ function stopLockEnforcement() {
 }
 
 function createLockWindow() {
+  if (!isKioskUser()) return;
   if (lockWindow) return;
   lockWindow = new BrowserWindow({
     fullscreen: true,
@@ -1832,7 +1842,7 @@ async function handleServerMessage(msg: any) {
       }
 
       // Always kill explorer.exe on Windows when locking
-      if (process.platform === 'win32') {
+      if (process.platform === 'win32' && isKioskUser()) {
         logToUI('Terminating explorer.exe to lock desktop shell...');
         safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
       }
@@ -1902,6 +1912,16 @@ async function handleServerMessage(msg: any) {
           }
         });
       });
+    } else if (msg.command === 'scan-software') {
+      logToUI('Server requested software scan. Starting scanner...');
+      runSoftwareScan();
+    } else if (msg.command === 'update-software-control') {
+      blockSoftwareChanges = !!msg.payload?.blockSoftwareChanges;
+      logToUI(`Software control changes update: blockSoftwareChanges = ${blockSoftwareChanges}`);
+    } else if (msg.command === 'install-software') {
+      const { installId, softwareName, method, packageId, url, args, script } = msg.payload || {};
+      logToUI(`Server requested batch software installation for: ${softwareName || packageId || 'Custom'}`);
+      runSoftwareInstallation(installId, softwareName, method, packageId, url, args, script);
     } else if (msg.command === 'remote-input') {
       const { action, x, y, button, value } = msg.payload || {};
       if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
@@ -2836,6 +2856,238 @@ function applyHostBlocking(domains: string[]) {
   }
 }
 
+function runSoftwareScan() {
+  if (process.platform !== 'win32') {
+    sendToServer({ type: 'software-inventory', payload: { softwares: [] } });
+    return;
+  }
+
+  const psScript = `
+    $installed = @()
+    $keys = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
+    foreach ($k in $keys) {
+        if ($k.DisplayName) {
+            $installed += [PSCustomObject]@{
+                Name = $k.DisplayName
+                Version = $k.DisplayVersion
+                Publisher = $k.Publisher
+                InstallDate = $k.InstallDate
+                InstallLocation = $k.InstallLocation
+                InstallSource = $k.InstallSource
+                InstalledBy = 'System (All Users)'
+                UninstallString = $k.UninstallString
+            }
+        }
+    }
+    $keysWow = Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
+    foreach ($k in $keysWow) {
+        if ($k.DisplayName) {
+            $installed += [PSCustomObject]@{
+                Name = $k.DisplayName
+                Version = $k.DisplayVersion
+                Publisher = $k.Publisher
+                InstallDate = $k.InstallDate
+                InstallLocation = $k.InstallLocation
+                InstallSource = $k.InstallSource
+                InstalledBy = 'System (All Users)'
+                UninstallString = $k.UninstallString
+            }
+        }
+    }
+    $keysCu = Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
+    foreach ($k in $keysCu) {
+        if ($k.DisplayName) {
+            $installed += [PSCustomObject]@{
+                Name = $k.DisplayName
+                Version = $k.DisplayVersion
+                Publisher = $k.Publisher
+                InstallDate = $k.InstallDate
+                InstallLocation = $k.InstallLocation
+                InstallSource = $k.InstallSource
+                InstalledBy = 'User (Current)'
+                UninstallString = $k.UninstallString
+            }
+        }
+    }
+    $installed | ConvertTo-Json -Compress
+  `;
+
+  const resolvedPowershell = resolveWinPath('powershell.exe');
+  const child = spawn(resolvedPowershell, ['-NoProfile', '-Command', psScript]);
+  let output = '';
+
+  child.stdout.on('data', (data) => {
+    output += data.toString('utf8');
+  });
+
+  child.on('close', (code) => {
+    if (code === 0) {
+      try {
+        const trimmed = output.trim();
+        if (!trimmed) {
+          sendToServer({ type: 'software-inventory', payload: { softwares: [] } });
+          return;
+        }
+        const softwares = JSON.parse(trimmed);
+        sendToServer({
+          type: 'software-inventory',
+          payload: { softwares: Array.isArray(softwares) ? softwares : [softwares].filter(Boolean) }
+        });
+      } catch (err: any) {
+        logToUI(`Error parsing software scan JSON: ${err.message}`);
+      }
+    } else {
+      logToUI(`Powershell software scan failed with exit code ${code}`);
+    }
+  });
+}
+
+function runSoftwareInstallation(installId: string, softwareName: string, method: string, packageId: string, url: string, args: string, script: string) {
+  const reportProgress = (status: string, message: string) => {
+    sendToServer({
+      type: 'install-progress',
+      payload: { installId, status, message, softwareName }
+    });
+  };
+
+  reportProgress('downloading', 'Starting software setup on client PC...');
+
+  if (method === 'winget') {
+    reportProgress('installing', `Running winget silent installation for package ${packageId}...`);
+    const cmd = `winget install --silent --accept-source-agreements --accept-package-agreements ${packageId}`;
+    
+    const child = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', cmd]);
+    let output = '';
+    
+    child.stdout.on('data', (d) => { output += d.toString('utf8'); });
+    child.stderr.on('data', (d) => { output += d.toString('utf8'); });
+    
+    child.on('close', (code) => {
+      if (code === 0) {
+        reportProgress('completed', 'Software installed successfully via Winget!');
+        runSoftwareScan();
+      } else {
+        reportProgress('failed', `Installation failed with exit code ${code}. Output: ${output.slice(-200)}`);
+      }
+    });
+  } else if (method === 'url') {
+    reportProgress('downloading', `Downloading setup file from URL: ${url}`);
+    
+    const tempDir = app.getPath('temp');
+    const urlParts = url.split('/');
+    let fileName = urlParts[urlParts.length - 1] || 'installer.exe';
+    if (!fileName.includes('.')) fileName += '.exe';
+    const filePath = path.join(tempDir, `netcafe_installer_${Date.now()}_${fileName}`);
+    
+    const downloadCmd = `Invoke-WebRequest -Uri "${url}" -OutFile "${filePath}"`;
+    const downloadChild = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', downloadCmd]);
+    
+    downloadChild.on('close', (downloadCode) => {
+      if (downloadCode !== 0) {
+        reportProgress('failed', `Downloading installer failed. Make sure the URL is accessible from the client PC.`);
+        return;
+      }
+      
+      reportProgress('installing', `Running silent setup...`);
+      let installCmd = '';
+      
+      if (filePath.toLowerCase().endsWith('.msi')) {
+        installCmd = `msiexec.exe /i "${filePath}" /qn /norestart`;
+      } else {
+        const silentArgs = args || '/S';
+        installCmd = `Start-Process -FilePath "${filePath}" -ArgumentList "${silentArgs}" -Wait -NoNewWindow`;
+      }
+      
+      const installChild = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', installCmd]);
+      let installOutput = '';
+      installChild.stdout.on('data', (d) => { installOutput += d.toString('utf8'); });
+      installChild.stderr.on('data', (d) => { installOutput += d.toString('utf8'); });
+      
+      installChild.on('close', (installCode) => {
+        try {
+          fs.unlinkSync(filePath);
+        } catch {}
+        
+        if (installCode === 0) {
+          reportProgress('completed', 'Software installed successfully via URL!');
+          runSoftwareScan();
+        } else {
+          reportProgress('failed', `Silent setup execution failed with exit code ${installCode}. Output: ${installOutput.slice(-200)}`);
+        }
+      });
+    });
+  } else if (method === 'script') {
+    reportProgress('installing', 'Executing custom installation PowerShell script...');
+    
+    const child = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
+    let output = '';
+    child.stdout.on('data', (d) => { output += d.toString('utf8'); });
+    child.stderr.on('data', (d) => { output += d.toString('utf8'); });
+    
+    child.on('close', (code) => {
+      if (code === 0) {
+        reportProgress('completed', 'Custom installation script completed successfully!');
+        runSoftwareScan();
+      } else {
+        reportProgress('failed', `Script failed with exit code ${code}. Output: ${output.slice(-200)}`);
+      }
+    });
+  } else {
+    reportProgress('failed', `Unknown installation method: ${method}`);
+  }
+}
+
+function enforceInstallerBlocking() {
+  const installersToKill: string[] = [];
+  
+  for (const proc of lastProcessSet) {
+    const name = proc.toLowerCase();
+    
+    const isCurrent = name.includes('netcafe agent') || name.includes(path.basename(process.execPath).toLowerCase());
+    if (isCurrent) continue;
+    
+    const isInstaller = name === 'msiexec.exe' || 
+                        name === 'setup.exe' || 
+                        name === 'install.exe' || 
+                        name === 'installer.exe' || 
+                        name === 'uninstall.exe' || 
+                        name.startsWith('unins') || 
+                        (name.includes('setup') && name.endsWith('.exe')) || 
+                        (name.includes('install') && name.endsWith('.exe')) || 
+                        (name.includes('uninst') && name.endsWith('.exe'));
+                        
+    if (isInstaller) {
+      installersToKill.push(proc);
+    }
+  }
+  
+  if (installersToKill.length > 0) {
+    installersToKill.forEach((procName) => {
+      logToUI(`[Block] Terminating installer process: "${procName}"`);
+      if (process.platform === 'win32') {
+        safeSpawn('taskkill.exe', ['/F', '/IM', procName]);
+      } else {
+        exec(`pkill -f ${procName.slice(0, -4)}`, () => {});
+      }
+      
+      sendToServer({
+        type: 'software-blocked',
+        payload: { processName: procName, timestamp: new Date().toISOString() }
+      });
+    });
+    
+    if (islandWindow && !islandWindow.isDestroyed()) {
+      islandWindow.webContents.send('show-message', `Admin Policy: Software installations and removals are blocked on this PC.`);
+    } else {
+      dialog.showMessageBox({
+        type: 'warning',
+        title: 'Action Blocked',
+        message: 'Admin Policy: Installation or removal of software is blocked on this PC.'
+      }).catch(() => {});
+    }
+  }
+}
+
 function enforceAppBlocking(executables: string[]) {
   if (executables.length === 0) return;
 
@@ -3012,6 +3264,7 @@ function connectToServer() {
     });
     startScreenMirroring();
     sendOfflineSessionsReport();
+    runSoftwareScan();
   });
 
   socket.setEncoding('utf8');
@@ -3060,20 +3313,28 @@ function connectToServer() {
     }
     
     // Enforce lock immediately upon server disconnection
-    isLocked = true;
-    currentUser = null;
-    destroyIslandWindow();
-    if (!lockWindow || lockWindow.isDestroyed()) {
-      lockWindow = null;
-      createLockWindow();
-    } else {
-      startLockEnforcement();
-    }
+    // Do NOT lock if there is an active test session — the socket retries in the background
+    // but should never interrupt an offline test user session.
+    if (isKioskUser() && !isTestUserSession) {
+      isLocked = true;
+      currentUser = null;
+      destroyIslandWindow();
+      if (!lockWindow || lockWindow.isDestroyed()) {
+        lockWindow = null;
+        createLockWindow();
+      } else {
+        startLockEnforcement();
+      }
 
-    // Always kill explorer.exe on Windows when locking on server disconnect
-    if (process.platform === 'win32') {
-      logToUI('Terminating explorer.exe on server disconnect lock...');
-      safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+      // Always kill explorer.exe on Windows when locking on server disconnect
+      if (process.platform === 'win32') {
+        logToUI('Terminating explorer.exe on server disconnect lock...');
+        safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+      }
+    } else if (isTestUserSession) {
+      logToUI('Server disconnected during offline test session — lock suppressed. Session continues.');
+    } else {
+      logToUI('Server disconnected, but skipping lock enforcement because current user is not CafeKiosk.');
     }
     
     setTimeout(connectToServer, 5000);
@@ -3562,6 +3823,9 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
 
 app.whenReady().then(async () => {
   if (hasServiceArg) return;
+  if (!isKioskUser()) {
+    isLocked = false;
+  }
   // Remove watchdog disable flag on startup to re-enable watchdog checks
   try {
     if (fs.existsSync("C:\\NetCafe\\stop-watchdog.flag")) {
@@ -3756,8 +4020,8 @@ app.whenReady().then(async () => {
     // Register Scheduled Task to run instantly on logon with Highest Privileges for current user only
     const username = os.userInfo().username;
     const lowerUser = username.toLowerCase();
-    if (lowerUser === 'administrator' || lowerUser === 'system') {
-      logToUI(`Running as ${username}. Skipping Task Scheduler auto-start registration.`);
+    if (lowerUser !== 'cafekiosk') {
+      logToUI(`Running as ${username}. Skipping Task Scheduler auto-start registration (non-kiosk user).`);
     } else {
       const taskName = `NetCafeAgent_${username}`;
       const exePath = process.execPath;
@@ -3825,7 +4089,7 @@ app.whenReady().then(async () => {
   });
 
   // Always terminate explorer.exe on Windows startup when locked
-  if (isLocked && process.platform === 'win32') {
+  if (isLocked && process.platform === 'win32' && isKioskUser()) {
     logToUI('Terminating explorer.exe on startup (locked)...');
     safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
   }
@@ -4059,6 +4323,9 @@ app.whenReady().then(async () => {
     const blockedExes = activeBlockRules.filter(r => r.type === 'executable').map(r => r.value);
     if (blockedExes.length > 0) {
       enforceAppBlocking(blockedExes);
+    }
+    if (blockSoftwareChanges && !isAgentUpdating) {
+      enforceInstallerBlocking();
     }
   }, 3000);
 
