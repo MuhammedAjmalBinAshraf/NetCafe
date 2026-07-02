@@ -2576,6 +2576,11 @@ ipcMain.handle('restart-machine', (_, machineId) => {
   sendCommandToMachine(machineId, { command: 'restart' })
 })
 
+ipcMain.handle('restore-client-explorer-shell', (_, machineId) => {
+  sendCommandToMachine(machineId, { command: 'restore-explorer-shell' })
+})
+
+
 ipcMain.handle('trigger-client-update', (_, machineId, targetVersion?: string) => {
   const serverIp = getLanIPAddress();
   const command: Record<string, unknown> = {

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import net from 'net';
+import http from 'http';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -1986,7 +1987,38 @@ async function handleServerMessage(msg: any) {
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
       }
+    } else if (msg.command === 'restore-explorer-shell') {
+      logToUI('Server requested shell restore to explorer.exe.');
+      try {
+        // 1. Reset registry key to explorer.exe
+        const regPath = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
+        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
+        
+        // 2. Disable proxy settings
+        const internetSettings = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+        execSync(`reg add "${internetSettings}" /v ProxyEnable /t REG_DWORD /d 0 /f`);
+        
+        // 3. Stop watchdog so it won't relaunch the agent shell
+        exec('sc stop "NetCafeAgentWatchdog"');
+        
+        // 4. Start explorer.exe
+        safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+
+        logToUI('Registry shell restored to explorer.exe, proxy disabled, watchdog stopped, and explorer.exe spawned.');
+        
+        sendStatusToServer('update-status', {
+          stage: 'aborted',
+          message: 'Shell successfully restored to explorer.exe. Watchdog service stopped.'
+        });
+      } catch (e: any) {
+        logToUI(`Failed to restore explorer shell: ${e.message}`);
+        sendStatusToServer('update-status', {
+          stage: 'error',
+          message: `Failed to restore explorer shell: ${e.message}`
+        });
+      }
     } else if (msg.command === 'abort-update') {
+
       // Admin requested abort of pending update installation
       logToUI('Server requested update abort. Cancelling pending install...');
       if (updateInstallTimeout) {
@@ -1997,6 +2029,18 @@ async function handleServerMessage(msg: any) {
       if ((global as any)._updateDeferPoller) {
         clearInterval((global as any)._updateDeferPoller);
         (global as any)._updateDeferPoller = null;
+      }
+      // Abort active direct download request
+      if ((global as any)._activeDownloadRequest) {
+        try {
+          (global as any)._activeDownloadRequest.destroy();
+        } catch {}
+        (global as any)._activeDownloadRequest = null;
+      }
+      // Delete the downloaded setup file if exists
+      const destPath = 'C:\\NetCafe\\updates\\agent-setup.exe';
+      if (fs.existsSync(destPath)) {
+        try { fs.unlinkSync(destPath); } catch {}
       }
       // Delete the install flag if it was already written
       try {
@@ -2014,165 +2058,228 @@ async function handleServerMessage(msg: any) {
       });
       sendUpdateStatus({ status: 'aborted' });
     } else if (msg.command === 'trigger-update') {
-      logToUI('Server triggered remote update. Configuring updater...');
+      logToUI('Server triggered remote update. Configuring direct LAN downloader...');
       if (msg.targetVersion) {
         logToUI(`Target version for update: v${msg.targetVersion}`);
       }
 
       try {
-        // 1. Get the server's IP from the payload or fall back to local serverHost
         const serverIp = msg.serverIp || serverHost;
         const serverPort = msg.serverPort || 9001;
-        const feedUrl = `http://${serverIp}:${serverPort}/updates/agent`;
+        const destPath = 'C:\\NetCafe\\updates\\agent-setup.exe';
 
-        // 2. Override feed URL at runtime so it always points to THIS server
-        autoUpdater.setFeedURL({
-          provider: 'generic',
-          url: feedUrl,
-        });
-
-        logToUI(`Update feed URL set to: ${feedUrl}`);
-
-        // 3. Emit status back to server: update check started
+        // 1. Emit status: checking
         sendStatusToServer('update-status', {
           stage: 'checking',
-          message: 'Checking for updates...',
+          message: 'Checking for updates on the local server...',
         });
+        sendUpdateStatus({ status: 'checking' });
 
-        // 4. Wire up all autoUpdater events (guard against duplicate listeners)
-        autoUpdater.removeAllListeners();
+        // 2. Fetch /api/updates/health to get the installer name
+        const healthUrl = `http://${serverIp}:${serverPort}/api/updates/health`;
+        
+        // Cancel any active previous download request
+        if ((global as any)._activeDownloadRequest) {
+          try { (global as any)._activeDownloadRequest.destroy(); } catch {}
+          (global as any)._activeDownloadRequest = null;
+        }
 
-        autoUpdater.on('checking-for-update', () => {
-          logToUI('Checking for update...');
-          sendUpdateStatus({ status: 'checking' });
-        });
-
-        autoUpdater.on('update-available', (info) => {
-          logToUI(`Update available: v${info.version}`);
-          sendStatusToServer('update-status', {
-            stage: 'downloading',
-            message: `Downloading v${info.version}...`,
-            version: info.version,
-          });
-          sendUpdateStatus({ status: 'available', info });
-        });
-
-        autoUpdater.on('update-not-available', (info) => {
-          const version = info?.version || '';
-          logToUI(`Already up to date: v${version}`);
-          sendStatusToServer('update-status', {
-            stage: 'up-to-date',
-            message: `Already on latest version (v${version})`,
-            version: version,
-          });
-          sendUpdateStatus({ status: 'not-available' });
-        });
-
-        autoUpdater.on('download-progress', (progress) => {
-          const pct = Math.round(progress.percent);
-          logToUI(`Download progress: ${pct}%`);
-          sendStatusToServer('update-status', {
-            stage: 'downloading',
-            message: `Downloading... ${pct}%`,
-            percent: pct,
-          });
-          sendUpdateStatus({ status: 'downloading', progress });
-        });
-
-        autoUpdater.on('update-downloaded', (info) => {
-          logToUI(`Update downloaded: v${info.version}. Preparing to install...`);
-          sendStatusToServer('update-status', {
-            stage: 'installing',
-            message: `v${info.version} downloaded. Installing via watchdog...`,
-            version: info.version,
-          });
-          
-          updateReady = true;
-          downloadedUpdatePath = info?.downloadedFile;
-          sendUpdateStatus({ status: 'downloaded', info });
-
-          // Log the download event in the setup/install log
-          const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
-          try {
-            fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
-          } catch {}
-
-          // Rebuild lock window to show the downloaded banner
-          if (isLocked) {
-            createLockWindow();
+        http.get(healthUrl, (res) => {
+          if (res.statusCode !== 200) {
+            const errMsg = `Update server returned status code ${res.statusCode}`;
+            logToUI(errMsg);
+            sendStatusToServer('update-status', { stage: 'error', message: errMsg });
+            sendUpdateStatus({ status: 'error', message: errMsg });
+            return;
           }
 
-          // Read setup log contents to display in the UI
-          let setupLogContent = '';
-          try {
-            if (fs.existsSync(logPath)) {
-              setupLogContent = fs.readFileSync(logPath, 'utf8');
-            }
-          } catch {}
-
-          let agentLogContent = '';
-          try {
-            if (fs.existsSync(runtimeLogFilePath)) {
-              agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
-            } else {
-              agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
-            }
-          } catch {}
-
-          const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
-
-          // Send IPC to show the Auto Updating screen
-          if (lockWindow && !lockWindow.isDestroyed()) {
-            lockWindow.webContents.send('show-auto-updating', {
-              version: info?.version,
-              logs: combinedLogs
-            });
-          }
-
-          // Stop watchdog and install update after 15 seconds automatically.
-          // If a billing session is active when the timer fires, defer installation
-          // until the machine becomes idle (isLocked = true) to avoid killing a
-          // session mid-use.
-          updateInstallTimeout = setTimeout(() => {
-            if (!isLocked) {
-              // Session is active — defer and poll every 30 s
-              logToUI('Session is active. Deferring update installation until session ends...');
-              sendStatusToServer('update-status', {
-                stage: 'deferred',
-                message: 'Update ready. Waiting for active session to end before installing...',
-                version: info?.version,
-              });
-              if ((global as any)._updateDeferPoller) {
-                clearInterval((global as any)._updateDeferPoller);
+          let body = '';
+          res.on('data', chunk => { body += chunk; });
+          res.on('end', () => {
+            try {
+              const data = JSON.parse(body);
+              if (!data.ready || !data.exeFile) {
+                const errMsg = 'No updates ready or package is missing on the server.';
+                logToUI(errMsg);
+                sendStatusToServer('update-status', { stage: 'error', message: errMsg });
+                sendUpdateStatus({ status: 'error', message: errMsg });
+                return;
               }
-              (global as any)._updateDeferPoller = setInterval(() => {
-                if (isLocked) {
-                  logToUI('Session ended. Proceeding with deferred update installation.');
-                  clearInterval((global as any)._updateDeferPoller);
-                  (global as any)._updateDeferPoller = null;
-                  triggerInstallUpdate(downloadedUpdatePath);
-                }
-              }, 30000);
-            } else {
-              triggerInstallUpdate(downloadedUpdatePath);
-            }
-          }, 15000);
-        });
 
-        autoUpdater.on('error', (err) => {
-          logToUI(`AutoUpdater error: ${err.message}`);
-          sendStatusToServer('update-status', {
-            stage: 'error',
-            message: `Update failed: ${err.message}`,
+              const downloadUrl = `http://${serverIp}:${serverPort}/updates/agent/${encodeURIComponent(data.exeFile)}`;
+              logToUI(`Update available: v${data.version}. Starting download from: ${downloadUrl}`);
+              
+              sendStatusToServer('update-status', {
+                stage: 'downloading',
+                message: `Downloading v${data.version} directly from server...`,
+                version: data.version,
+              });
+              sendUpdateStatus({ status: 'available', info: { version: data.version } });
+
+              // Delete old download if exists
+              if (fs.existsSync(destPath)) {
+                try { fs.unlinkSync(destPath); } catch {}
+              }
+
+              // Start direct download helper function
+              const downloadUpdateInstaller = (url: string, fileDest: string, onProgress: (pct: number) => void): Promise<void> => {
+                return new Promise((resolve, reject) => {
+                  const dir = path.dirname(fileDest);
+                  if (!fs.existsSync(dir)) {
+                    fs.mkdirSync(dir, { recursive: true });
+                  }
+
+                  const file = fs.createWriteStream(fileDest);
+                  
+                  const req = http.get(url, (response) => {
+                    if (response.statusCode !== 200) {
+                      file.close();
+                      fs.unlink(fileDest, () => {});
+                      reject(new Error(`Failed to download update: HTTP Status ${response.statusCode}`));
+                      return;
+                    }
+
+                    const totalSize = parseInt(response.headers['content-length'] || '0', 10);
+                    let downloadedSize = 0;
+
+                    response.on('data', (chunk) => {
+                      downloadedSize += chunk.length;
+                      if (totalSize > 0) {
+                        const percent = Math.round((downloadedSize / totalSize) * 100);
+                        onProgress(percent);
+                      }
+                    });
+
+                    response.pipe(file);
+
+                    file.on('finish', () => {
+                      file.close();
+                      resolve();
+                    });
+
+                    file.on('error', (err) => {
+                      file.close();
+                      fs.unlink(fileDest, () => {});
+                      reject(err);
+                    });
+                  });
+
+                  req.on('error', (err: any) => {
+                    file.close();
+                    fs.unlink(fileDest, () => {});
+                    reject(err);
+                  });
+
+                  (global as any)._activeDownloadRequest = req;
+                });
+              };
+
+              downloadUpdateInstaller(downloadUrl, destPath, (pct) => {
+                logToUI(`Download progress: ${pct}%`);
+                sendStatusToServer('update-status', {
+                  stage: 'downloading',
+                  message: `Downloading... ${pct}%`,
+                  percent: pct,
+                });
+                sendUpdateStatus({ status: 'downloading', progress: { percent: pct } });
+              }).then(() => {
+                logToUI(`Update downloaded: v${data.version}. Preparing to install...`);
+                sendStatusToServer('update-status', {
+                  stage: 'installing',
+                  message: `v${data.version} downloaded. Installing via watchdog...`,
+                  version: data.version,
+                });
+                
+                updateReady = true;
+                downloadedUpdatePath = destPath;
+                sendUpdateStatus({ status: 'downloaded', info: { version: data.version } });
+
+                // Log the download event in the setup/install log
+                const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
+                try {
+                  fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${data.version} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
+                } catch {}
+
+                // Rebuild lock window to show the downloaded banner
+                if (isLocked) {
+                  createLockWindow();
+                }
+
+                // Read setup log contents to display in the UI
+                let setupLogContent = '';
+                try {
+                  if (fs.existsSync(logPath)) {
+                    setupLogContent = fs.readFileSync(logPath, 'utf8');
+                  }
+                } catch {}
+
+                let agentLogContent = '';
+                try {
+                  if (fs.existsSync(runtimeLogFilePath)) {
+                    agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
+                  } else {
+                    agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
+                  }
+                } catch {}
+
+                const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
+
+                // Send IPC to show the Auto Updating screen
+                if (lockWindow && !lockWindow.isDestroyed()) {
+                  lockWindow.webContents.send('show-auto-updating', {
+                    version: data.version,
+                    logs: combinedLogs
+                  });
+                }
+
+                // Stop watchdog and install update after 15 seconds automatically.
+                updateInstallTimeout = setTimeout(() => {
+                  if (!isLocked) {
+                    // Session is active — defer and poll every 30 s
+                    logToUI('Session is active. Deferring update installation until session ends...');
+                    sendStatusToServer('update-status', {
+                      stage: 'deferred',
+                      message: 'Update ready. Waiting for active session to end before installing...',
+                      version: data.version,
+                    });
+                    if ((global as any)._updateDeferPoller) {
+                      clearInterval((global as any)._updateDeferPoller);
+                    }
+                    (global as any)._updateDeferPoller = setInterval(() => {
+                      if (isLocked) {
+                        logToUI('Session ended. Proceeding with deferred update installation.');
+                        clearInterval((global as any)._updateDeferPoller);
+                        (global as any)._updateDeferPoller = null;
+                        triggerInstallUpdate(downloadedUpdatePath);
+                      }
+                    }, 30000);
+                  } else {
+                    triggerInstallUpdate(downloadedUpdatePath);
+                  }
+                }, 15000);
+
+              }).catch((err) => {
+                const errMsg = `Download failed: ${err.message}`;
+                logToUI(errMsg);
+                sendStatusToServer('update-status', { stage: 'error', message: errMsg });
+                sendUpdateStatus({ status: 'error', message: err.message });
+              });
+            } catch (e: any) {
+              const errMsg = `Failed to parse update health JSON: ${e.message}`;
+              logToUI(errMsg);
+              sendStatusToServer('update-status', { stage: 'error', message: errMsg });
+              sendUpdateStatus({ status: 'error', message: errMsg });
+            }
           });
+        }).on('error', (err) => {
+          const errMsg = `Update checking failed: ${err.message}`;
+          logToUI(errMsg);
+          sendStatusToServer('update-status', { stage: 'error', message: errMsg });
           sendUpdateStatus({ status: 'error', message: err.message });
         });
 
-        // 5. Start the check
-        await autoUpdater.checkForUpdates();
-
       } catch (e: any) {
-        logToUI(`autoUpdater error: ${e.message}`);
+        logToUI(`Direct updates error: ${e.message}`);
         sendStatusToServer('update-status', {
           stage: 'error',
           message: `Update error: ${e.message}`,

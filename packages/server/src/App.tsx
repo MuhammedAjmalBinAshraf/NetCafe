@@ -1051,6 +1051,16 @@ export default function App() {
     }
   }
 
+  const handleRestoreExplorer = async (machineId: number) => {
+    const machine = machines.find((m: any) => m.id === machineId)
+    const machineName = machine ? machine.name : `PC ${machineId}`
+    if (confirm(`Are you sure you want to temporarily restore Explorer Shell on "${machineName}"?\n\nThis registry action will set the user shell back to explorer.exe, disable proxy policies, stop the watchdog service, and spawn explorer.exe to allow manual troubleshooting/upgrades.`)) {
+      if (window.ipcRenderer) await window.ipcRenderer.invoke('restore-client-explorer-shell', machineId)
+      alert(`Shell restore command sent to "${machineName}".`)
+    }
+  }
+
+
   const handleTriggerUpdate = async (machineId: number | 'all') => {
     if (machineId === 'all') {
       const onlineIds = machines.filter((m: any) => m.status !== 'offline').map((m: any) => m.id)
@@ -5287,6 +5297,13 @@ Respond strictly in JSON format:
                     >
                       Update Agent
                     </button>
+                    <button
+                      onClick={() => handleRestoreExplorer(selectedDrawerMachine.id)}
+                      className="flex-1 flex items-center justify-center gap-1.5 py-1.5 px-2 bg-amber-900/30 hover:bg-amber-800/50 border border-amber-800/40 text-amber-400 hover:text-amber-300 rounded text-xs font-bold transition-all"
+                      title="Temporarily restore Windows Explorer Shell on client PC"
+                    >
+                      Restore Explorer
+                    </button>
                   </div>
                 </div>
               )}
@@ -6609,6 +6626,13 @@ Respond strictly in JSON format:
                   className="col-span-2 py-1 px-1.5 bg-emerald-900/30 hover:bg-emerald-800/50 border border-emerald-800/40 text-emerald-400 hover:text-emerald-250 rounded text-xs font-bold transition-all"
                 >
                   🚀 Update Client Agent
+                </button>
+                <button
+                  onClick={() => handleRestoreExplorer(selectedDrawerMachine.id)}
+                  className="col-span-2 py-1 px-1.5 bg-amber-900/30 hover:bg-amber-800/50 border border-amber-800/40 text-amber-400 hover:text-amber-250 rounded text-xs font-bold transition-all"
+                  title="Temporarily restore Windows Explorer Shell on client PC"
+                >
+                  Restore Explorer
                 </button>
                 <button
                   onClick={() => handleToggleHardwareLock(selectedDrawerMachine.id, !selectedDrawerMachine.hardware_locked)}

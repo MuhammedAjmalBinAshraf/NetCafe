@@ -1,7 +1,25 @@
 # Changelog
 
+## [1.1.26] — 2026-07-02
+### Added
+- Remote Troubleshooting: Added a "Restore Explorer" command button to the admin dashboard machine drawer. When clicked, it instructs the target client agent to immediately set the user's shell registry key back to `explorer.exe`, disable local browser proxy settings, stop the watchdog service, and spawn `explorer.exe` to allow clean manual troubleshooting or downloads.
+- Direct update download: Bypassed Electron's `autoUpdater` with a custom direct HTTP downloader to fetch update packages directly from the LAN server via Node's native `http` module. This resolves Mixed Content blocks, signature validation errors, and caching conflicts caused by local unsigned HTTP servers.
+
+## [1.1.25] — 2026-07-02
+### Added
+- Device and software management, batch installer, audit logging, and offline session disconnect fix.
+
+## [1.1.24] — 2026-07-02
+### Added
+- Offline session logging and automatic offline test user visibility.
+
+## [1.1.23] — 2026-07-02
+### Added
+- Soft Blocked (non-violation blocked) query terms support.
+
 ## [1.1.22] — 2026-07-01
 ### Fixed
+
 - Auto-start registration: Restricted the agent's Task Scheduler auto-start task creation to run-level highest on Kiosk user sessions only. Previously, it registered a global task named `NetCafeAgent` that launched on logon of any user (including Administrator and Guest). This caused multi-session double-launch port conflicts (e.g. `EADDRINUSE` on UDP port `9090` and proxy port `8889`), which broke proxy connections. Legacy `NetCafeAgent` tasks are automatically cleaned up on watchdog and installer execution.
 
 ## [1.1.21] — 2026-07-01
