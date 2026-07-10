@@ -1820,32 +1820,39 @@ async function handleServerMessage(msg: any) {
         user: msg.user || 'Guest'
       });
     } else if (msg.command === 'lock') {
-      logToUI(`Server requested lock. Setting isLocked = true.`);
-      isLocked = true;
-      currentUser = null;
-      if (!lockWindow) {
-        logToUI(`Creating new lock screen window.`);
-        createLockWindow();
+      // Never lock the terminal while an offline test user session is active.
+      // The server may send 'lock' on registration if the machine shows as 'available',
+      // but we must not interrupt an in-progress test session.
+      if (isTestUserSession) {
+        logToUI(`Server sent 'lock' command but offline test session is active — ignored.`);
       } else {
-        logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
-        startLockEnforcement();
-      }
-      destroyIslandWindow();
-
-      // If this was triggered by a safety violation, open local blocked page and cache the query
-      if (msg.payload?.isViolation) {
-        if (msg.payload.query && mitmProxy) {
-          mitmProxy.blockedQueries.add(msg.payload.query.toLowerCase());
+        logToUI(`Server requested lock. Setting isLocked = true.`);
+        isLocked = true;
+        currentUser = null;
+        if (!lockWindow) {
+          logToUI(`Creating new lock screen window.`);
+          createLockWindow();
+        } else {
+          logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
+          startLockEnforcement();
         }
-        if (process.platform === 'win32') {
-          exec('start "" "C:\\NetCafe\\blocked.html"');
-        }
-      }
+        destroyIslandWindow();
 
-      // Always kill explorer.exe on Windows when locking
-      if (process.platform === 'win32' && isKioskUser()) {
-        logToUI('Terminating explorer.exe to lock desktop shell...');
-        safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+        // If this was triggered by a safety violation, open local blocked page and cache the query
+        if (msg.payload?.isViolation) {
+          if (msg.payload.query && mitmProxy) {
+            mitmProxy.blockedQueries.add(msg.payload.query.toLowerCase());
+          }
+          if (process.platform === 'win32') {
+            exec('start "" "C:\\NetCafe\\blocked.html"');
+          }
+        }
+
+        // Always kill explorer.exe on Windows when locking
+        if (process.platform === 'win32' && isKioskUser()) {
+          logToUI('Terminating explorer.exe to lock desktop shell...');
+          safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+        }
       }
     } else if (msg.command === 'message') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
@@ -3580,7 +3587,8 @@ function startUdpDiscovery() {
             fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
 
             // Re-create the lock screen to update variables in the template literal
-            if (lockWindow && !lockWindow.isDestroyed()) {
+            // BUT do NOT recreate if a test session is currently running.
+            if (lockWindow && !lockWindow.isDestroyed() && !isTestUserSession) {
               logToUI('UDP Discovery: Re-creating lock screen window to apply updated server IP.');
               lockWindow.destroy();
               lockWindow = null;
@@ -3591,17 +3599,23 @@ function startUdpDiscovery() {
             console.error('Failed to save discovered config:', e);
           }
 
-          if (tcpSocket) {
-            try { 
-              logToUI('UDP Discovery: Disconnecting existing TCP socket for new connection.');
-              tcpSocket.removeAllListeners('close'); 
-              tcpSocket.destroy(); 
-              tcpSocket = null; 
-              isTcpConnected = false;
-            } catch {}
+          // Do NOT force-disconnect and reconnect while a test session is active.
+          // The session will naturally reconnect when it ends or the socket retries.
+          if (isTestUserSession) {
+            logToUI('UDP Discovery: Skipping socket reconnect — offline test session is active.');
+          } else {
+            if (tcpSocket) {
+              try { 
+                logToUI('UDP Discovery: Disconnecting existing TCP socket for new connection.');
+                tcpSocket.removeAllListeners('close'); 
+                tcpSocket.destroy(); 
+                tcpSocket = null; 
+                isTcpConnected = false;
+              } catch {}
+            }
+            isConnecting = false;
+            connectToServer();
           }
-          isConnecting = false;
-          connectToServer();
         }
       }
     } catch (e: any) {
