@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.27] — 2026-07-10
+### Fixed
+- Audio/Input Bleed: Configured the agent lock command to terminate all common browser processes (`chrome.exe`, `msedge.exe`, `firefox.exe`, `brave.exe`, `opera.exe`, `vivaldi.exe`) on lock initiation (user logs off, server disconnects, or system starts locked). This prevents background browser media/audio (like YouTube) from continuing to play and captures keyboard presses after the lock screen overlays.
+
 ## [1.1.26] — 2026-07-02
 ### Added
 - Remote Troubleshooting: Added a "Restore Explorer" command button to the admin dashboard machine drawer. When clicked, it instructs the target client agent to immediately set the user's shell registry key back to `explorer.exe`, disable local browser proxy settings, stop the watchdog service, and spawn `explorer.exe` to allow clean manual troubleshooting or downloads.

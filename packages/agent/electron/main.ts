@@ -418,8 +418,27 @@ function updateUpdaterFeedURL() {
   }
 }
 
+// ─── Kill all browser processes on lock to prevent audio/input bleed-through ──
+const BROWSER_PROCESSES = [
+  'chrome.exe',
+  'msedge.exe',
+  'firefox.exe',
+  'brave.exe',
+  'opera.exe',
+  'vivaldi.exe',
+];
+
+function killBrowsersOnLock() {
+  if (process.platform !== 'win32') return;
+  logToUI('Terminating browser processes to prevent audio/input bleed-through after lock...');
+  for (const proc of BROWSER_PROCESSES) {
+    safeSpawn('taskkill.exe', ['/F', '/IM', proc, '/T']);
+  }
+}
+
 // ─── Lock enforcement: re-focus every 500ms ───────────────────────────────────
 function startLockEnforcement() {
+
   if (!isKioskUser()) return;
   // NOTE: Do NOT guard with isAgentTheShell() — WMI Shell Launcher bypasses the
   // HKCU Winlogon\Shell registry key entirely, causing isAgentTheShell() to return
@@ -1848,10 +1867,11 @@ async function handleServerMessage(msg: any) {
           }
         }
 
-        // Always kill explorer.exe on Windows when locking
+        // Kill explorer.exe and all browsers to prevent audio/input bleed-through
         if (process.platform === 'win32' && isKioskUser()) {
           logToUI('Terminating explorer.exe to lock desktop shell...');
           safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+          killBrowsersOnLock();
         }
       }
     } else if (msg.command === 'message') {
@@ -1958,7 +1978,7 @@ async function handleServerMessage(msg: any) {
       updateMirrorSettings(highRes, ultraRes);
     } else if (msg.command === 'block-inputs') {
       const block = !!msg.payload?.block;
-      if (process.platform === 'win32') {
+      if (process.platform === 'win32' && isKioskUser()) {
         // Primary: persistent PS process
         if (psProcess && psProcess.stdin && !psProcess.killed) {
           psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
@@ -1988,11 +2008,15 @@ async function handleServerMessage(msg: any) {
         }
       }
     } else if (msg.command === 'apply-security-hardening') {
-      logToUI('[Security] Remote hardening triggered by server...');
-      applyFirewallVpnBlocks();
-      runSecurityAudit();
-      if (islandWindow && !islandWindow.isDestroyed()) {
-        islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
+      if (isKioskUser()) {
+        logToUI('[Security] Remote hardening triggered by server...');
+        applyFirewallVpnBlocks();
+        runSecurityAudit();
+        if (islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
+        }
+      } else {
+        logToUI('[Security] Remote hardening skipped — not running as CafeKiosk user.');
       }
     } else if (msg.command === 'restore-explorer-shell') {
       logToUI('Server requested shell restore to explorer.exe.');
@@ -3440,10 +3464,11 @@ function connectToServer() {
         startLockEnforcement();
       }
 
-      // Always kill explorer.exe on Windows when locking on server disconnect
+      // Kill explorer.exe and all browsers to prevent audio/input bleed-through
       if (process.platform === 'win32') {
         logToUI('Terminating explorer.exe on server disconnect lock...');
         safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+        killBrowsersOnLock();
       }
     } else if (isTestUserSession) {
       logToUI('Server disconnected during offline test session — lock suppressed. Session continues.');
@@ -4213,7 +4238,9 @@ app.whenReady().then(async () => {
   if (isLocked && process.platform === 'win32' && isKioskUser()) {
     logToUI('Terminating explorer.exe on startup (locked)...');
     safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+    killBrowsersOnLock();
   }
+
 
   createLockWindow();
   connectToServer();
@@ -4450,8 +4477,8 @@ app.whenReady().then(async () => {
     }
   }, 3000);
 
-  // ─── Security hardening: apply on startup ─────────────────────────────────
-  if (process.platform === 'win32') {
+  // ─── Security hardening: apply on startup (kiosk user only) ──────────────
+  if (process.platform === 'win32' && isKioskUser()) {
     // Firewall VPN port blocks — only needed once (rules persist across reboots)
     applyFirewallVpnBlocks();
     // Full policy audit: Chrome policies + DNS sinkhole + VPN process kill
