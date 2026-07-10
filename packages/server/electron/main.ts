@@ -711,26 +711,92 @@ function handleClientMessage(socket: net.Socket, data: any) {
         ];
       }
 
-      // 3. Fetch Usage graph data (Weekly & Monthly)
-      const weeklyUsage = [
-        { label: 'Mon', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Tue', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Wed', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Thu', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Fri', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Sat', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Sun', time: '0h 00m', value: 0, pct: 0 }
+      // 3. Fetch Usage graph data (Today, Weekly & Monthly)
+      const todayUsage = [
+        { label: '08:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '10:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '12:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '14:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '16:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '18:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '20:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: '22:00', time: '0h 00m', value: 0, pct: 0, violations: 0 }
       ];
 
+      const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const todayIdx = new Date().getDay(); // 0-6
+      const weeklyUsage: any[] = [];
+      for (let i = 6; i >= 0; i--) {
+        const idx = (todayIdx - i + 7) % 7;
+        weeklyUsage.push({ label: dayLabels[idx], time: '0h 00m', value: 0, pct: 0, violations: 0 });
+      }
+
       const monthlyUsage = [
-        { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0 },
-        { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0 }
+        { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0, violations: 0 },
+        { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0, violations: 0 }
       ];
 
       if (customerName && customerName !== 'Guest') {
         try {
+          // --- TODAY USAGE ---
+          const todayRows = db.prepare(`
+            SELECT CAST(strftime('%H', start_time) as INTEGER) as hr, SUM(strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as sec
+            FROM sessions
+            WHERE customer_name = ? AND start_time >= datetime('now', 'start of day')
+            GROUP BY hr
+          `).all(customerName) as any[];
+
+          todayRows.forEach(row => {
+            const hr = Number(row.hr);
+            let binIdx = 0;
+            if (hr >= 21) binIdx = 7;
+            else if (hr >= 19) binIdx = 6;
+            else if (hr >= 17) binIdx = 5;
+            else if (hr >= 15) binIdx = 4;
+            else if (hr >= 13) binIdx = 3;
+            else if (hr >= 11) binIdx = 2;
+            else if (hr >= 9) binIdx = 1;
+            
+            const sec = Number(row.sec);
+            todayUsage[binIdx].value += Math.round(sec / 60);
+          });
+
+          // Today Violations
+          const todayViolations = db.prepare(`
+            SELECT CAST(strftime('%H', timestamp) as INTEGER) as hr, COUNT(*) as cnt
+            FROM safety_alerts
+            WHERE user_details = ? AND timestamp >= datetime('now', 'start of day')
+            GROUP BY hr
+          `).all(customerName) as any[];
+
+          todayViolations.forEach(row => {
+            const hr = Number(row.hr);
+            let binIdx = 0;
+            if (hr >= 21) binIdx = 7;
+            else if (hr >= 19) binIdx = 6;
+            else if (hr >= 17) binIdx = 5;
+            else if (hr >= 15) binIdx = 4;
+            else if (hr >= 13) binIdx = 3;
+            else if (hr >= 11) binIdx = 2;
+            else if (hr >= 9) binIdx = 1;
+            todayUsage[binIdx].violations += Number(row.cnt);
+          });
+
+          let maxTodayMins = 1;
+          todayUsage.forEach(d => {
+            if (d.value > maxTodayMins) maxTodayMins = d.value;
+            const hrs = Math.floor(d.value / 60);
+            const rem = d.value % 60;
+            d.time = hrs > 0 ? `${hrs}h ${rem}m` : `${rem}m`;
+          });
+          todayUsage.forEach(d => {
+            d.pct = Math.min(100, Math.round((d.value / maxTodayMins) * 100));
+          });
+
+
+          // --- WEEKLY USAGE ---
           const weekRows = db.prepare(`
             SELECT strftime('%w', start_time) as day_idx, SUM(strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as sec
             FROM sessions
@@ -738,18 +804,34 @@ function handleClientMessage(socket: net.Socket, data: any) {
             GROUP BY day_idx
           `).all(customerName) as any[];
 
-          const dayMap = [6, 0, 1, 2, 3, 4, 5];
           let maxSec = 1;
           weekRows.forEach(row => {
-            const idx = dayMap[Number(row.day_idx)];
-            if (idx >= 0 && idx < 7) {
+            const dayLabel = dayLabels[Number(row.day_idx)];
+            const item = weeklyUsage.find(d => d.label === dayLabel);
+            if (item) {
               const sec = Number(row.sec);
               if (sec > maxSec) maxSec = sec;
               const mins = Math.round(sec / 60);
               const hrs = Math.floor(mins / 60);
               const rem = mins % 60;
-              weeklyUsage[idx].value = mins;
-              weeklyUsage[idx].time = hrs > 0 ? `${hrs}h ${rem}m` : `${rem}m`;
+              item.value = mins;
+              item.time = hrs > 0 ? `${hrs}h ${rem}m` : `${rem}m`;
+            }
+          });
+
+          // Weekly Violations
+          const weekViolations = db.prepare(`
+            SELECT strftime('%w', timestamp) as day_idx, COUNT(*) as cnt
+            FROM safety_alerts
+            WHERE user_details = ? AND timestamp >= datetime('now', '-7 days')
+            GROUP BY day_idx
+          `).all(customerName) as any[];
+
+          weekViolations.forEach(row => {
+            const dayLabel = dayLabels[Number(row.day_idx)];
+            const item = weeklyUsage.find(d => d.label === dayLabel);
+            if (item) {
+              item.violations = Number(row.cnt);
             }
           });
 
@@ -758,6 +840,8 @@ function handleClientMessage(socket: net.Socket, data: any) {
             d.pct = Math.min(100, Math.round((secVal / maxSec) * 100));
           });
 
+
+          // --- MONTHLY USAGE ---
           const monthRows = db.prepare(`
             SELECT strftime('%d', start_time) as day_of_month, SUM(strftime('%s', COALESCE(end_time, datetime('now'))) - strftime('%s', start_time)) as sec
             FROM sessions
@@ -775,6 +859,23 @@ function handleClientMessage(socket: net.Socket, data: any) {
             
             const mins = Math.round(Number(row.sec) / 60);
             monthlyUsage[wkIdx].value += mins;
+          });
+
+          // Monthly Violations
+          const monthViolations = db.prepare(`
+            SELECT strftime('%d', timestamp) as day_of_month, COUNT(*) as cnt
+            FROM safety_alerts
+            WHERE user_details = ? AND timestamp >= datetime('now', '-30 days')
+            GROUP BY day_of_month
+          `).all(customerName) as any[];
+
+          monthViolations.forEach(row => {
+            const dom = Number(row.day_of_month);
+            let wkIdx = 3;
+            if (dom <= 7) wkIdx = 0;
+            else if (dom <= 14) wkIdx = 1;
+            else if (dom <= 21) wkIdx = 2;
+            monthlyUsage[wkIdx].violations += Number(row.cnt);
           });
 
           monthlyUsage.forEach(d => {
@@ -799,6 +900,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
           activity,
           sessions,
           usage: {
+            today: todayUsage,
             weekly: weeklyUsage,
             monthly: monthlyUsage
           }
