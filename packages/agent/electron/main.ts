@@ -111,6 +111,28 @@ function writeAgentRuntimeLog(msg: string) {
   }
 }
 
+function getCombinedLogs(): string {
+  let setupLog = '';
+  try {
+    const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
+    if (fs.existsSync(logPath)) {
+      setupLog = fs.readFileSync(logPath, 'utf8');
+    }
+  } catch {}
+
+  let agentLog = '';
+  try {
+    if (fs.existsSync(runtimeLogFilePath)) {
+      agentLog = fs.readFileSync(runtimeLogFilePath, 'utf8');
+    } else {
+      agentLog = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
+    }
+  } catch {}
+
+  return `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLog}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLog}`;
+}
+
+
 function resolveWinPath(cmd: string): string {
   if (process.platform !== 'win32') return cmd;
   const sysRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -1476,8 +1498,8 @@ function createLockWindow() {
         }
         if (logPre) {
           logPre.textContent = payload.logs || 'No logs available.';
-          logPre.scrollTop = logPre.scrollHeight;
         }
+
 
         let secondsLeft = 15;
         if (countdownEl) {
@@ -2211,6 +2233,7 @@ async function handleServerMessage(msg: any) {
                   stage: 'downloading',
                   message: `Downloading... ${pct}%`,
                   percent: pct,
+                  logs: getCombinedLogs(),
                 });
                 sendUpdateStatus({ status: 'downloading', progress: { percent: pct } });
               }).then(() => {
@@ -2219,7 +2242,9 @@ async function handleServerMessage(msg: any) {
                   stage: 'installing',
                   message: `v${data.version} downloaded. Installing via watchdog...`,
                   version: data.version,
+                  logs: getCombinedLogs(),
                 });
+
                 
                 updateReady = true;
                 downloadedUpdatePath = destPath;
@@ -3400,6 +3425,45 @@ function connectToServer() {
         version: app.getVersion()
       } 
     });
+
+    // Check if we recently updated and report the installation logs to the server
+    try {
+      const installLogPath = "C:\\NetCafe\\logs\\agent-install.log";
+      if (fs.existsSync(installLogPath)) {
+        const stats = fs.statSync(installLogPath);
+        const diffMs = Date.now() - stats.mtime.getTime();
+        // If modified in the last 10 minutes, send logs
+        if (diffMs < 10 * 60 * 1000) {
+          logToUI("Recent installation log detected. Sending final update logs to server...");
+          let finalLogs = "";
+          try {
+            if (fs.existsSync("C:\\NetCafe\\logs\\watchdog-update.log")) {
+              finalLogs += "=== WATCHDOG UPDATE LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\watchdog-update.log", "utf8") + "\r\n\r\n";
+            }
+          } catch {}
+          try {
+            if (fs.existsSync("C:\\NetCafe\\logs\\agent-install.log")) {
+              finalLogs += "=== AGENT INSTALL LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\agent-install.log", "utf8") + "\r\n\r\n";
+            }
+          } catch {}
+          try {
+            if (fs.existsSync("C:\\NetCafe\\logs\\kiosk-setup.log")) {
+              finalLogs += "=== KIOSK SETUP LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\kiosk-setup.log", "utf8") + "\r\n\r\n";
+            }
+          } catch {}
+
+          sendStatusToServer('update-status', {
+            stage: 'up-to-date',
+            message: `Update to v${app.getVersion()} completed successfully.`,
+            version: app.getVersion(),
+            logs: finalLogs
+          });
+        }
+      }
+    } catch (e: any) {
+      console.error("Failed to report recent update logs:", e);
+    }
+
     startScreenMirroring();
     sendOfflineSessionsReport();
     runSoftwareScan();

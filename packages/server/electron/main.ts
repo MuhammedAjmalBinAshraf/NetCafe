@@ -350,9 +350,14 @@ function setupDatabase() {
       message    TEXT,
       version    TEXT,
       percent    INTEGER,
+      logs       TEXT,
       timestamp  INTEGER DEFAULT (strftime('%s','now'))
     );
   `)
+  try {
+    db.exec(`ALTER TABLE update_log ADD COLUMN logs TEXT;`);
+  } catch (e) {}
+
 
   // Default violation penalty in minutes
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_minutes', '5');")
@@ -459,14 +464,15 @@ function handleClientMessage(socket: net.Socket, data: any) {
 
     // Log to DB
     db.prepare(`
-      INSERT INTO update_log (machine_id, stage, message, version, percent, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO update_log (machine_id, stage, message, version, percent, logs, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
     `).run(
       machineId.toString(),
       data.stage,
       data.message,
       data.version || null,
       data.percent || null,
+      data.logs || null,
       Date.now()
     );
 
@@ -480,6 +486,7 @@ function handleClientMessage(socket: net.Socket, data: any) {
         message: data.message,
         version: data.version,
         percent: data.percent,
+        logs: data.logs || null,
         timestamp: Date.now(),
       });
     }

@@ -1,7 +1,15 @@
 # Changelog
 
+## [1.1.28] — 2026-07-11
+### Added
+- Remote Update Logging: Replaced standard installer commands execution in `installer.nsh` with a custom `LogAndExec` macro that outputs the full command line, stdout/stderr, and exit code directly into `C:\NetCafe\logs\agent-install.log`.
+- Silent Mode Setup: Removed the `IfSilent` skip check for kiosk setup script execution, allowing `kiosk-setup.ps1` to run and configure/log user shell setup during silent updates.
+- Server update logs dialog: Added a non-auto-scrolling pre log viewer inside the "Remote Update Status" dialog on the server PC. It populates live log data during downloads, installation, and sends full post-update reports (watchdog log + installation log + setup log) on client agent startup.
+- Turn off auto-scroll: Disabled automatic log scrolling to bottom on the client PC auto-updating overlay to make it easier to read logs.
+
 ## [1.1.27] — 2026-07-10
 ### Fixed
+
 - Audio/Input Bleed: Configured the agent lock command to terminate all common browser processes (`chrome.exe`, `msedge.exe`, `firefox.exe`, `brave.exe`, `opera.exe`, `vivaldi.exe`) on lock initiation (user logs off, server disconnects, or system starts locked). This prevents background browser media/audio (like YouTube) from continuing to play and captures keyboard presses after the lock screen overlays.
 
 ## [1.1.26] — 2026-07-02

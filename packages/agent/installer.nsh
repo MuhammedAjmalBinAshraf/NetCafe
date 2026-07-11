@@ -13,8 +13,28 @@ launch_system32:
   StrCpy $psExe "powershell.exe"
   Goto ps_ready
 ps_ready:
-  nsExec::ExecToLog `"$psExe" -NoProfile -ExecutionPolicy Bypass -Command "& { & '${ScriptPath}' ${Params} *>&1 | Tee-Object -FilePath '${LogPath}' }"`
+  nsExec::ExecToLog `"$psExe" -NoProfile -ExecutionPolicy Bypass -Command "& { & '${ScriptPath}' ${Params} *>&1 | Tee-Object -FilePath '${LogPath}' -Append }"`
 !macroend
+
+!macro LogAndExec Command
+  ; Append command name to the install log file
+  FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
+  FileSeek $9 0 END
+  FileWrite $9 "[Installer] Executing: ${Command}$\r$\n"
+  FileClose $9
+  
+  nsExec::ExecToStack `${Command}`
+  Pop $0 ; Exit code
+  Pop $1 ; stdout/stderr
+  
+  ; Append the command output and exit code to the install log file
+  FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
+  FileSeek $9 0 END
+  FileWrite $9 "[Installer] Output: $1$\r$\n"
+  FileWrite $9 "[Installer] Exited with code: $0$\r$\n$\r$\n"
+  FileClose $9
+!macroend
+
 
 !macro customHeader
   ShowInstDetails show
@@ -27,72 +47,75 @@ ps_ready:
 !define MUI_FINISHPAGE_RUN_TEXT "View Installation Log"
 
 !macro customInit
+  ; Create logs directory so we can write our logs there
+  CreateDirectory "C:\NetCafe"
+  CreateDirectory "C:\NetCafe\logs"
+
+  ; Append a start boundary to the log file to separate installation sessions
+  FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
+  FileSeek $9 0 END
+  FileWrite $9 "=========================================================$\r$\n"
+  FileWrite $9 "[Installer] NetCafe Agent installation initialized$\r$\n"
+  FileWrite $9 "=========================================================$\r$\n"
+  FileClose $9
+
   ; ── Stop watchdog service so it cannot restart the agent while we install ──
-  nsExec::ExecToLog 'sc stop "NetCafeAgentWatchdog"'
-  Pop $0
+  !insertmacro LogAndExec 'sc stop "NetCafeAgentWatchdog"'
   Sleep 2000
   ; ── Kill any running agent process ──
-  nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
-  Pop $0
+  !insertmacro LogAndExec 'taskkill /F /IM "NetCafe Agent.exe" /T'
   Sleep 1000
   ; Clean up legacy global scheduled task from older versions
-  nsExec::ExecToLog 'schtasks /Delete /TN "NetCafeAgent" /F'
-  Pop $0
+  !insertmacro LogAndExec 'schtasks /Delete /TN "NetCafeAgent" /F'
 
   ; ── Clean up legacy global HKLM browser policies to restore Administrator internet access ──
   DetailPrint "NetCafe: Cleaning up legacy HKLM policies..."
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "ProxySettings" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "BlockExternalExtensions" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DeveloperToolsAvailability" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "SyncDisabled" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "IncognitoModeAvailability" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "WebRtcIPHandling" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DnsOverHttpsMode" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\URLBlocklist" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "ProxySettings" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "BlockExternalExtensions" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DeveloperToolsAvailability" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "SyncDisabled" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "IncognitoModeAvailability" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "WebRtcIPHandling" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome" /v "DnsOverHttpsMode" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\ExtensionInstallBlocklist" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Google\Chrome\URLBlocklist" /f'
 
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "ProxySettings" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "BlockExternalExtensions" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DeveloperToolsAvailability" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "SyncDisabled" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "InPrivateModeAvailability" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "WebRtcIPHandling" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DnsOverHttpsMode" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallBlocklist" /f'
-  nsExec::ExecToLog 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "ProxySettings" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "BlockExternalExtensions" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DeveloperToolsAvailability" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "SyncDisabled" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "InPrivateModeAvailability" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "WebRtcIPHandling" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge" /v "DnsOverHttpsMode" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\ExtensionInstallBlocklist" /f'
+  !insertmacro LogAndExec 'reg.exe delete "HKLM\SOFTWARE\Policies\Microsoft\Edge\URLBlocklist" /f'
 !macroend
 
 
 !macro customInstall
   CreateDirectory "C:\NetCafe"
   CreateDirectory "C:\NetCafe\logs"
-  IfSilent skip_kiosk_setup
+  
   DetailPrint "NetCafe: Running kiosk setup..."
   !insertmacro runPowerShell "$INSTDIR\resources\kiosk-setup.ps1" "'$INSTDIR\NetCafe Agent.exe'" "C:\NetCafe\logs\agent-install.log"
   Pop $0
   DetailPrint "NetCafe: Kiosk setup exited with code $0"
-skip_kiosk_setup:
 
   ; ── Register/Update the watchdog service for both silent and interactive installs ──
   DetailPrint "NetCafe: Installing watchdog service..."
-  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --install-watchdog --headless --disable-gpu --no-sandbox`
-  Pop $0
-  DetailPrint "NetCafe: Watchdog service install exited with code $0"
+  !insertmacro LogAndExec `"$INSTDIR\NetCafe Agent.exe" --install-watchdog --headless --disable-gpu --no-sandbox`
 
   ; ── Start the watchdog service so it can relaunch the agent shell ──
   DetailPrint "NetCafe: Starting watchdog service..."
-  nsExec::ExecToLog 'sc start "NetCafeAgentWatchdog"'
-  Pop $0
+  !insertmacro LogAndExec 'sc start "NetCafeAgentWatchdog"'
 !macroend
 
 
 !macro customUnInit
   ; Stop watchdog service so it does not restart the agent during uninstall
-  nsExec::ExecToLog 'sc stop "NetCafeAgentWatchdog"'
-  Pop $0
+  !insertmacro LogAndExec 'sc stop "NetCafeAgentWatchdog"'
   Sleep 2000
-  nsExec::ExecToLog 'taskkill /F /IM "NetCafe Agent.exe" /T'
-  Pop $0
+  !insertmacro LogAndExec 'taskkill /F /IM "NetCafe Agent.exe" /T'
 !macroend
 
 !macro customUnInstall
@@ -103,7 +126,5 @@ skip_kiosk_setup:
 
   ; ── Uninstall/Clean up the watchdog service ──
   DetailPrint "NetCafe: Uninstalling watchdog service..."
-  nsExec::ExecToLog `"$INSTDIR\NetCafe Agent.exe" --uninstall-watchdog --headless --disable-gpu --no-sandbox`
-  Pop $0
-  DetailPrint "NetCafe: Watchdog service uninstall exited with code $0"
+  !insertmacro LogAndExec `"$INSTDIR\NetCafe Agent.exe" --uninstall-watchdog --headless --disable-gpu --no-sandbox`
 !macroend

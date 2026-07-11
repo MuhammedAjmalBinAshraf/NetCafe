@@ -246,6 +246,7 @@ export default function App() {
     stage: string;
     message: string;
     percent?: number;
+    logs?: string;
     timestamp: number;
   }>>({})
   const [updateHealth, setUpdateHealth] = useState<{ ready: boolean; version?: string; updateDir?: string } | null>(null)
@@ -399,6 +400,7 @@ export default function App() {
               stage: payload.stage,
               message: payload.message,
               percent: payload.percent,
+              logs: payload.logs,
               timestamp: payload.timestamp
             }
           }))
@@ -6665,7 +6667,7 @@ Respond strictly in JSON format:
 
       {/* Floating Agent Update Status Panel */}
       {showAgentUpdatePanel && (
-        <div className="fixed bottom-6 right-6 w-96 bg-slate-950/95 border border-slate-850 rounded-xl shadow-2xl z-[9999] overflow-hidden backdrop-blur-md">
+        <div className="fixed bottom-6 right-6 w-[36rem] bg-slate-950/95 border border-slate-850 rounded-xl shadow-2xl z-[9999] overflow-hidden backdrop-blur-md">
           <div className="px-4 py-3 border-b border-slate-850 flex justify-between items-center bg-slate-900/40">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
@@ -6678,7 +6680,7 @@ Respond strictly in JSON format:
               <X size={16} />
             </button>
           </div>
-          <div className="max-h-72 overflow-y-auto divide-y divide-slate-850 p-2 space-y-1">
+          <div className="max-h-[32rem] overflow-y-auto divide-y divide-slate-850 p-2 space-y-2">
             {Object.keys(agentUpdateStatuses).length === 0 ? (
               <div className="p-4 text-center text-xs text-slate-500">No update signals received yet.</div>
             ) : (
@@ -6707,7 +6709,7 @@ Respond strictly in JSON format:
                 }
 
                 return (
-                  <div key={machineId} className="flex flex-col gap-1 p-2 hover:bg-slate-900/40 rounded transition-colors">
+                  <div key={machineId} className="flex flex-col gap-1.5 p-2 hover:bg-slate-900/40 rounded transition-colors">
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-semibold text-slate-350">{status.machineName}</span>
                       <span className={`flex items-center gap-1 font-semibold ${stageColor}`}>
@@ -6715,7 +6717,7 @@ Respond strictly in JSON format:
                         {status.stage.toUpperCase().replace('-', ' ')}
                       </span>
                     </div>
-                    <div className="text-[11px] text-slate-400 truncate" title={status.message}>
+                    <div className="text-[11px] text-slate-400" title={status.message}>
                       {status.message}
                     </div>
                     {status.stage === 'downloading' && status.percent !== undefined && (
@@ -6724,6 +6726,14 @@ Respond strictly in JSON format:
                           className="bg-blue-500 h-full rounded-full transition-all duration-300"
                           style={{ width: `${status.percent}%` }}
                         />
+                      </div>
+                    )}
+                    {status.logs && (
+                      <div className="mt-1.5">
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">Installation & Setup Logs</div>
+                        <pre className="bg-slate-950/80 border border-slate-850 rounded-lg p-2 h-36 overflow-y-auto font-mono text-[10px] text-slate-300 leading-normal whitespace-pre-wrap select-text">
+                          {status.logs}
+                        </pre>
                       </div>
                     )}
                   </div>
