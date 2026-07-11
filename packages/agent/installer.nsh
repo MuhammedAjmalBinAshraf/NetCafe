@@ -17,21 +17,29 @@ ps_ready:
 !macroend
 
 !macro LogAndExec Command
-  ; Append command name to the install log file
+  ; --- Log the command being executed ---
+  ; Split into 3 FileWrite calls: prefix + command (backtick-quoted to handle
+  ; embedded double-quotes) + newline.  A single FileWrite with ${Command}
+  ; embedded inside a double-quoted string causes NSIS to see 3 tokens when
+  ; the command itself contains quotes, triggering "FileWrite expects 2 parameters".
   FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
   FileSeek $9 0 END
-  FileWrite $9 "[Installer] Executing: ${Command}$\r$\n"
+  FileWrite $9 "[Installer] Executing: "
+  FileWrite $9 `${Command}`
+  FileWrite $9 "$\r$\n"
   FileClose $9
-  
+
+  ; --- Run the command ---
   nsExec::ExecToStack `${Command}`
   Pop $0 ; Exit code
-  Pop $1 ; stdout/stderr
-  
-  ; Append the command output and exit code to the install log file
+  Pop $1 ; stdout/stderr (up to 1024 bytes)
+
+  ; --- Log output and exit code ---
   FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
   FileSeek $9 0 END
-  FileWrite $9 "[Installer] Output: $1$\r$\n"
-  FileWrite $9 "[Installer] Exited with code: $0$\r$\n$\r$\n"
+  FileWrite $9 "[Installer] Output: "
+  FileWrite $9 $1
+  FileWrite $9 "$\r$\n[Installer] Exit Code: $0$\r$\n$\r$\n"
   FileClose $9
 !macroend
 
