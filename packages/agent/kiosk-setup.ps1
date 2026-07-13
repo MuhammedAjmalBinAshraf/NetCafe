@@ -296,9 +296,9 @@ try {
                     Set-ItemProperty `
                         -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                         -Name  "Shell" `
-                        -Value $AgentExe `
+                        -Value "`"$AgentExe`"" `
                         -Force
-                    Log "OK:" "Per-user Shell written for standard Kiosk user '$username': $AgentExe"
+                    Log "OK:" "Per-user Shell written for standard Kiosk user '$username': `"$AgentExe`""
                     
                     # Lock-down GPO policies for this standard Kiosk user
                     New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `

@@ -29,17 +29,14 @@ ps_ready:
   FileWrite $9 "$\r$\n"
   FileClose $9
 
-  ; --- Run the command ---
-  nsExec::ExecToStack `${Command}`
+  ; --- Run the command and redirect output to log file ---
+  nsExec::ExecToLog `cmd.exe /c " ${Command} >> $\"C:\NetCafe\logs\agent-install.log$\" 2>&1 "`
   Pop $0 ; Exit code
-  Pop $1 ; stdout/stderr (up to 1024 bytes)
 
-  ; --- Log output and exit code ---
+  ; --- Log exit code ---
   FileOpen $9 "C:\NetCafe\logs\agent-install.log" a
   FileSeek $9 0 END
-  FileWrite $9 "[Installer] Output: "
-  FileWrite $9 $1
-  FileWrite $9 "$\r$\n[Installer] Exit Code: $0$\r$\n$\r$\n"
+  FileWrite $9 "[Installer] Exit Code: $0$\r$\n$\r$\n"
   FileClose $9
 !macroend
 
