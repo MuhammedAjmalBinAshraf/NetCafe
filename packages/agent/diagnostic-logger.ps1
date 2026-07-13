@@ -67,11 +67,11 @@ while ($true) {
 
         # 3. Foreground Window
         $hwnd = [WindowHelper]::GetForegroundWindow()
-        $pid = 0
-        [WindowHelper]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+        $fgPid = 0
+        [WindowHelper]::GetWindowThreadProcessId($hwnd, [ref]$fgPid) | Out-Null
         $fgProcName = "<Unknown>"
-        if ($pid -gt 0) {
-            $fgProc = Get-Process -Id $pid -ErrorAction SilentlyContinue
+        if ($fgPid -gt 0) {
+            $fgProc = Get-Process -Id $fgPid -ErrorAction SilentlyContinue
             if ($fgProc) { $fgProcName = $fgProc.ProcessName }
         }
 
