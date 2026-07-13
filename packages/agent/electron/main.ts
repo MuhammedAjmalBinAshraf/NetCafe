@@ -77,6 +77,7 @@ let isTcpConnected = false;
 let isLocked = true;
 let isAppQuitting = false;
 let testUserEnabled = false;
+let shellRestorePending = false;
 let isTestUserSession = false;
 let activeBlockRules: any[] = [];
 let blockSoftwareChanges = false;
@@ -219,11 +220,13 @@ function spawnExplorerShell() {
     logToUI('Spawning explorer.exe...');
     safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     
+    shellRestorePending = true;
     setTimeout(() => {
       try {
         logToUI('Restoring registry Shell override to NetCafe Agent...');
         execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${originalShell}\\"" /f`);
         logToUI('Registry Shell override restored successfully.');
+        shellRestorePending = false;
       } catch (err: any) {
         logToUI(`Error restoring registry Shell override: ${err.message}`);
       }
@@ -4036,6 +4039,20 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
 
 app.whenReady().then(async () => {
   if (hasServiceArg) return;
+
+  if (process.platform === 'win32' && isKioskUser()) {
+    try {
+      const current = execSync('reg query "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell 2>nul').toString();
+      if (!current.toLowerCase().includes(process.execPath.toLowerCase())) {
+        writeAgentRuntimeLog('Self-healing: Registry Shell was not set to Agent. Forcing shell to NetCafe Agent...');
+        execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
+        writeAgentRuntimeLog('Self-healing complete. Shell restored to Agent.');
+      }
+    } catch (err: any) {
+      writeAgentRuntimeLog(`Self-healing failed to verify/fix Shell registry key: ${err.message}`);
+    }
+  }
+
   if (!isKioskUser()) {
     isLocked = false;
   }
@@ -4572,8 +4589,15 @@ function cleanupProxySync() {
     execSync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
     execSync('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
     console.log('Synchronously disabled system proxy on exit');
+    
+    if (shellRestorePending) {
+      console.log('Synchronously restoring registry Shell override to NetCafe Agent on exit...');
+      execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
+      console.log('Synchronously restored registry Shell override.');
+      shellRestorePending = false;
+    }
   } catch (e) {
-    console.error('Failed to disable proxy synchronously:', e);
+    console.error('Failed to run synchronous exit cleanup:', e);
   }
 }
 
