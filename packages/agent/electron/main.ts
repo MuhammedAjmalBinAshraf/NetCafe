@@ -204,7 +204,7 @@ function isDesktopShellRunning(): Promise<boolean> {
 function spawnExplorerShell() {
   if (process.platform !== 'win32') return;
   
-  if (!isAgentTheShell()) {
+  if (!isAgentTheShell() && !isKioskUser()) {
     logToUI('Agent is not the registered shell. Spawning explorer.exe directly...');
     safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     return;
