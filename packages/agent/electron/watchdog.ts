@@ -1,5 +1,6 @@
 import { exec, spawn } from 'child_process';
 import fs from 'fs';
+import path from 'path';
 
 const agentExeName = 'NetCafe Agent.exe';
 
@@ -112,6 +113,22 @@ function checkAndRestart() {
 // Check every 10 seconds
 setInterval(checkAndRestart, 10000);
 console.log('NetCafe Agent watchdog service started.');
+
+// Launch diagnostic logger
+const loggerPath = path.join(__dirname, '..', '..', 'diagnostic-logger.ps1');
+if (fs.existsSync(loggerPath)) {
+  console.log('Spawning diagnostic logger at: ' + loggerPath);
+  const loggerChild = spawn('powershell.exe', [
+    '-WindowStyle', 'Hidden',
+    '-ExecutionPolicy', 'Bypass',
+    '-File', loggerPath
+  ], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  });
+  loggerChild.unref();
+}
 
 function cleanLegacyHklmPolicies() {
   if (process.platform !== 'win32') return;
