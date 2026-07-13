@@ -116,6 +116,13 @@ console.log('NetCafe Agent watchdog service started.');
 
 // Launch diagnostic logger
 const loggerPath = path.join(__dirname, '..', '..', 'diagnostic-logger.ps1');
+try {
+  const debugLog = 'C:\\NetCafe\\logs\\watchdog-debug.log';
+  if (!fs.existsSync('C:\\NetCafe\\logs')) fs.mkdirSync('C:\\NetCafe\\logs', { recursive: true });
+  fs.appendFileSync(debugLog, `\n[${new Date().toISOString()}] Watchdog started. Logger path resolved to: ${loggerPath}\n`);
+  fs.appendFileSync(debugLog, `Exists? ${fs.existsSync(loggerPath)}\n`);
+} catch {}
+
 if (fs.existsSync(loggerPath)) {
   console.log('Spawning diagnostic logger at: ' + loggerPath);
   const loggerChild = spawn('powershell.exe', [
