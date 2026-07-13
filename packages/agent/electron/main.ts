@@ -222,7 +222,7 @@ function spawnExplorerShell() {
     setTimeout(() => {
       try {
         logToUI('Restoring registry Shell override to NetCafe Agent...');
-        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "${originalShell}" /f`);
+        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${originalShell}\\"" /f`);
         logToUI('Registry Shell override restored successfully.');
       } catch (err: any) {
         logToUI(`Error restoring registry Shell override: ${err.message}`);
@@ -2544,7 +2544,7 @@ function installAsShell() {
   try {
     const exePath = process.execPath;
     // Set shell for current user
-    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "${exePath}" /f`);
+    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${exePath}\\"" /f`);
     console.log('Shell replacement installed for current user');
   } catch (e) {
     console.error('Failed to install as shell:', e);
