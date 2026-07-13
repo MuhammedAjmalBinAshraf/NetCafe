@@ -27,6 +27,9 @@ function runInstaller(installerPath: string) {
     stdio: ['ignore', out, err],
     windowsHide: true
   });
+  child.on('error', (err) => {
+    console.error('Failed to spawn installer powershell:', err);
+  });
   child.unref();
 
   // Delete the flag so we don't run it again

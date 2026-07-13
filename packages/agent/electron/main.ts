@@ -181,7 +181,7 @@ function isAgentTheShell(): boolean {
 function isKioskUser(): boolean {
   if (process.platform !== 'win32') return true;
   const username = os.userInfo().username.toLowerCase();
-  return username === 'cafekiosk';
+  return username.includes('cafekiosk');
 }
 
 function isDesktopShellRunning(): Promise<boolean> {
@@ -3184,6 +3184,9 @@ function runSoftwareInstallation(installId: string, softwareName: string, method
     
     const child = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
     let output = '';
+    child.on('error', (err) => {
+      reportProgress('failed', `Failed to spawn powershell: ${err.message}`);
+    });
     child.stdout.on('data', (d) => { output += d.toString('utf8'); });
     child.stderr.on('data', (d) => { output += d.toString('utf8'); });
     
