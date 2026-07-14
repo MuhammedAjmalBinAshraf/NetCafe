@@ -87,22 +87,25 @@ function checkAndRestart() {
           kioskUserFound = true;
         }
 
+        // Check if agent is NOT running and kiosk user IS active
         if (kioskUserFound && activeUser) {
           console.log(`Kiosk user '${activeUser}' is active but NetCafe Agent is not running. Relaunching...`);
-          // Try user-specific task first, fallback to generic
-          exec(`schtasks /run /tn "NetCafeAgent_${activeUser}"`, (runErr, runStdout) => {
-            if (runErr) {
-              console.log(`Failed to run task NetCafeAgent_${activeUser}, falling back to generic NetCafeAgent task.`);
-              exec(`schtasks /run /tn "NetCafeAgent"`, (fallbackErr, fallbackStdout) => {
-                if (fallbackErr) {
-                  console.error('Failed to run scheduled task:', fallbackErr);
+          
+          const exePath = path.join(__dirname, '..', '..', '..', 'NetCafe Agent.exe');
+          const taskName = `NetCafeAgent_${activeUser}`;
+          const createCmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${activeUser}" /rl highest /f`;
+          
+          // Recreate task and kill explorer to clear the black screen / broken shell
+          exec(createCmd, () => {
+            exec('taskkill /F /IM explorer.exe', () => {
+              exec(`schtasks /run /tn "${taskName}"`, (runErr, runStdout) => {
+                if (runErr) {
+                  console.error('Failed to restart agent:', runErr.message);
                 } else {
-                  console.log('Scheduled task triggered successfully:', fallbackStdout);
+                  console.log('Agent restart triggered successfully.');
                 }
               });
-            } else {
-              console.log('Scheduled task triggered successfully:', runStdout);
-            }
+            });
           });
         }
       });
