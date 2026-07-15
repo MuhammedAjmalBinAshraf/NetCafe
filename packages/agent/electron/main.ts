@@ -191,7 +191,10 @@ function isDesktopShellRunning(): Promise<boolean> {
       resolve(true);
       return;
     }
-    exec('tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>nul', { timeout: 3000 }, (err, stdout) => {
+    const username = process.env.USERNAME;
+    const userdomain = process.env.USERDOMAIN;
+    const filter = username ? `/FI "USERNAME eq ${userdomain}\\\\${username}"` : '';
+    exec(`tasklist /FI "IMAGENAME eq explorer.exe" ${filter} /FO CSV /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
       if (err) {
         resolve(false);
         return;
