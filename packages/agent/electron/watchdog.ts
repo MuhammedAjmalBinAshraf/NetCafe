@@ -59,7 +59,7 @@ function checkAndRestart() {
 
   exec('tasklist /FI "IMAGENAME eq NetCafe Agent.exe"', (err, stdout) => {
     if (err) return;
-    if (!stdout.includes(agentExeName)) {
+    if (!stdout.toLowerCase().includes(agentExeName.toLowerCase())) {
       exec('query user', (err, queryStdout) => {
         const output = (queryStdout || '').toLowerCase();
         let kioskUserFound = false;
@@ -96,6 +96,7 @@ function checkAndRestart() {
           const createCmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${activeUser}" /rl highest /f`;
           
           // Recreate task and kill explorer to clear the black screen / broken shell
+          console.log('Agent missing. Recreating scheduled task and killing explorer...');
           exec(createCmd, () => {
             exec('taskkill /F /IM explorer.exe', () => {
               exec(`schtasks /run /tn "${taskName}"`, (runErr, runStdout) => {

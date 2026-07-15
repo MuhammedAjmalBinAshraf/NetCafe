@@ -220,17 +220,9 @@ function spawnExplorerShell() {
     logToUI('Spawning explorer.exe...');
     safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
     
-    shellRestorePending = true;
-    setTimeout(() => {
-      try {
-        logToUI('Restoring registry Shell override to NetCafe Agent...');
-        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${originalShell}\\"" /f`);
-        logToUI('Registry Shell override restored successfully.');
-        shellRestorePending = false;
-      } catch (err: any) {
-        logToUI(`Error restoring registry Shell override: ${err.message}`);
-      }
-    }, 2000);
+    // We no longer restore it after 2 seconds. We leave it as explorer.exe during the session
+    // so that explorer has all the time it needs to initialize the desktop environment properly.
+    // It will be restored to the agent executable when the session is locked.
   } catch (err: any) {
     logToUI(`Error setting registry Shell to explorer: ${err.message}`);
   }
@@ -1895,6 +1887,11 @@ async function handleServerMessage(msg: any) {
         // Kill explorer.exe and all browsers to prevent audio/input bleed-through
         if (process.platform === 'win32' && isKioskUser()) {
           logToUI('Terminating explorer.exe to lock desktop shell...');
+          // Restore shell to agent
+          const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
+          try {
+            execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "${process.execPath}" /f`);
+          } catch (e) {}
           safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
           killBrowsersOnLock();
         }
