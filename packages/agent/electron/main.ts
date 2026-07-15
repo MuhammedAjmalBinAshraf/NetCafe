@@ -1890,7 +1890,7 @@ async function handleServerMessage(msg: any) {
           // Restore shell to agent
           const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
           try {
-            execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "${process.execPath}" /f`);
+            execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
           } catch (e) {}
           safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
           killBrowsersOnLock();
@@ -4252,7 +4252,7 @@ app.whenReady().then(async () => {
     } else {
       const taskName = `NetCafeAgent_${username}`;
       const exePath = process.execPath;
-      const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${username}" /rl highest /f`;
+      const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${require('os').hostname()}\\\\${username}" /rl highest /f`;
       exec(cmd, (err) => {
         if (err) {
           logToUI(`Task Scheduler registration failed: ${err.message}`);

@@ -93,7 +93,8 @@ function checkAndRestart() {
           
           const exePath = path.join(__dirname, '..', '..', '..', 'NetCafe Agent.exe');
           const taskName = `NetCafeAgent_${activeUser}`;
-          const createCmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${activeUser}" /rl highest /f`;
+          const fullUser = require('os').hostname() + '\\\\' + activeUser;
+          const createCmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${fullUser}" /rl highest /f`;
           
           // Recreate task and kill explorer to clear the black screen / broken shell
           console.log('Agent missing. Recreating scheduled task and killing explorer...');
