@@ -1,6 +1,5 @@
 import { exec, spawn } from 'child_process';
 import fs from 'fs';
-import path from 'path';
 
 const agentExeName = 'NetCafe Agent.exe';
 
@@ -27,9 +26,6 @@ function runInstaller(installerPath: string) {
     detached: true,
     stdio: ['ignore', out, err],
     windowsHide: true
-  });
-  child.on('error', (err) => {
-    console.error('Failed to spawn installer powershell:', err);
   });
   child.unref();
 
@@ -59,7 +55,7 @@ function checkAndRestart() {
 
   exec('tasklist /FI "IMAGENAME eq NetCafe Agent.exe"', (err, stdout) => {
     if (err) return;
-    if (!stdout.toLowerCase().includes(agentExeName.toLowerCase())) {
+    if (!stdout.includes(agentExeName)) {
       exec('query user', (err, queryStdout) => {
         const output = (queryStdout || '').toLowerCase();
         let kioskUserFound = false;
@@ -72,7 +68,7 @@ function checkAndRestart() {
             const parts = line.trim().split(/\s+/);
             if (parts.length > 0) {
               const username = parts[0].replace('>', '').trim();
-              if (username && username.toLowerCase() === 'cafekiosk') {
+              if (username) {
                 activeUser = username;
                 kioskUserFound = true;
                 break;
@@ -87,27 +83,22 @@ function checkAndRestart() {
           kioskUserFound = true;
         }
 
-        // Check if agent is NOT running and kiosk user IS active
         if (kioskUserFound && activeUser) {
           console.log(`Kiosk user '${activeUser}' is active but NetCafe Agent is not running. Relaunching...`);
-          
-          const exePath = path.join(__dirname, '..', '..', '..', 'NetCafe Agent.exe');
-          const taskName = `NetCafeAgent_${activeUser}`;
-          const fullUser = require('os').hostname() + '\\\\' + activeUser;
-          const createCmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${fullUser}" /rl highest /f`;
-          
-          // Recreate task and kill explorer to clear the black screen / broken shell
-          console.log('Agent missing. Recreating scheduled task and killing explorer...');
-          exec(createCmd, () => {
-            exec('taskkill /F /IM explorer.exe', () => {
-              exec(`schtasks /run /tn "${taskName}"`, (runErr, runStdout) => {
-                if (runErr) {
-                  console.error('Failed to restart agent:', runErr.message);
+          // Try user-specific task first, fallback to generic
+          exec(`schtasks /run /tn "NetCafeAgent_${activeUser}"`, (runErr, runStdout) => {
+            if (runErr) {
+              console.log(`Failed to run task NetCafeAgent_${activeUser}, falling back to generic NetCafeAgent task.`);
+              exec(`schtasks /run /tn "NetCafeAgent"`, (fallbackErr, fallbackStdout) => {
+                if (fallbackErr) {
+                  console.error('Failed to run scheduled task:', fallbackErr);
                 } else {
-                  console.log('Agent restart triggered successfully.');
+                  console.log('Scheduled task triggered successfully:', fallbackStdout);
                 }
               });
-            });
+            } else {
+              console.log('Scheduled task triggered successfully:', runStdout);
+            }
           });
         }
       });
@@ -118,29 +109,6 @@ function checkAndRestart() {
 // Check every 10 seconds
 setInterval(checkAndRestart, 10000);
 console.log('NetCafe Agent watchdog service started.');
-
-// Launch diagnostic logger
-const loggerPath = path.join(__dirname, '..', '..', 'diagnostic-logger.ps1');
-try {
-  const debugLog = 'C:\\NetCafe\\logs\\watchdog-debug.log';
-  if (!fs.existsSync('C:\\NetCafe\\logs')) fs.mkdirSync('C:\\NetCafe\\logs', { recursive: true });
-  fs.appendFileSync(debugLog, `\n[${new Date().toISOString()}] Watchdog started. Logger path resolved to: ${loggerPath}\n`);
-  fs.appendFileSync(debugLog, `Exists? ${fs.existsSync(loggerPath)}\n`);
-} catch {}
-
-if (fs.existsSync(loggerPath)) {
-  console.log('Spawning diagnostic logger at: ' + loggerPath);
-  const loggerChild = spawn('powershell.exe', [
-    '-WindowStyle', 'Hidden',
-    '-ExecutionPolicy', 'Bypass',
-    '-File', loggerPath
-  ], {
-    detached: true,
-    stdio: 'ignore',
-    windowsHide: true
-  });
-  loggerChild.unref();
-}
 
 function cleanLegacyHklmPolicies() {
   if (process.platform !== 'win32') return;

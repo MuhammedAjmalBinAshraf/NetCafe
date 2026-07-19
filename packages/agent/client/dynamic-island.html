@@ -326,15 +326,6 @@
       100% { transform: scale(0.9); opacity: 0.6; box-shadow: 0 0 4px rgba(239, 68, 68, 0.5); }
     }
 
-    @keyframes pulse-svg-ring {
-      0% { r: 4.5px; stroke-opacity: 1; stroke-width: 1px; }
-      50% { r: 7.5px; stroke-opacity: 0.2; stroke-width: 2.2px; }
-      100% { r: 4.5px; stroke-opacity: 1; stroke-width: 1px; }
-    }
-    .pulse-ring {
-      animation: pulse-svg-ring 1.6s infinite ease-in-out;
-    }
-
     .split-text {
       font-size: 12px;
       font-weight: 500;
@@ -921,7 +912,6 @@
           <div class="tab-panel" id="tab-usage">
             <div class="usage-toggle-container">
               <div class="usage-toggle">
-                <button class="toggle-opt" id="btn-toggle-today">Today</button>
                 <button class="toggle-opt active" id="btn-toggle-weekly">Weekly</button>
                 <button class="toggle-opt" id="btn-toggle-monthly">Monthly</button>
               </div>
@@ -1386,38 +1376,28 @@
         }
 
         if (dataTab === 'tab-usage') {
-          const isTodayActive = document.getElementById('btn-toggle-today').classList.contains('active');
           const isWeeklyActive = document.getElementById('btn-toggle-weekly').classList.contains('active');
-          renderUsageGraph(isTodayActive ? currentTodayData : (isWeeklyActive ? currentWeeklyData : currentMonthlyData));
+          renderUsageGraph(isWeeklyActive ? currentWeeklyData : currentMonthlyData);
         }
       });
     });
-    let currentTodayData = [
-      { label: '08:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '10:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '12:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '14:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '16:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '18:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '20:00', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: '22:00', time: '0h 00m', value: 0, pct: 0, violations: 0 }
-    ];
 
+    // Usage Graph rendering (Weekly / Monthly Stock Chart style SVG)
     let currentWeeklyData = [
-      { label: 'Mon', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Tue', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Wed', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Thu', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Fri', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Sat', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Sun', time: '0h 00m', value: 0, pct: 0, violations: 0 }
+      { label: 'Mon', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Tue', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wed', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Thu', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Fri', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Sat', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Sun', time: '0h 00m', value: 0, pct: 0 }
     ];
 
     let currentMonthlyData = [
-      { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0, violations: 0 },
-      { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0, violations: 0 }
+      { label: 'Wk 1', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 2', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 3', time: '0h 00m', value: 0, pct: 0 },
+      { label: 'Wk 4', time: '0h 00m', value: 0, pct: 0 }
     ];
 
     function getWeeklyDateString(label) {
@@ -1454,17 +1434,6 @@
       return label;
     }
 
-    function getTodayHourString(label) {
-      const hr = parseInt(label, 10);
-      const endHr = hr + 2;
-      const formatHr = (h) => {
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        const displayH = h % 12 === 0 ? 12 : h % 12;
-        return `${displayH} ${ampm}`;
-      };
-      return `${formatHr(hr)} - ${formatHr(endHr)}`;
-    }
-
     function renderUsageGraph(data) {
       const container = document.getElementById('graph-container');
       container.innerHTML = '';
@@ -1490,13 +1459,10 @@
       const plotWidth = width - paddingLeft - paddingRight;
       const plotHeight = height - paddingTop - paddingBottom;
 
-      const isToday = data.length === 8;
       const isWeekly = data.length === 7;
 
       function getFullLabel(label) {
-        if (isToday) {
-          return getTodayHourString(label);
-        } else if (isWeekly) {
+        if (isWeekly) {
           return getWeeklyDateString(label);
         } else {
           return getMonthlyWeekRangeString(label);
@@ -1509,7 +1475,7 @@
       const points = data.map((item, i) => {
         const x = paddingLeft + (i * plotWidth) / (data.length - 1);
         const y = height - paddingBottom - (item.value / maxVal) * plotHeight;
-        return { x, y, label: item.label, time: item.time, value: item.value, violations: item.violations || 0 };
+        return { x, y, label: item.label, time: item.time, value: item.value };
       });
 
       let linePathD = '';
@@ -1519,16 +1485,9 @@
         linePathD = `M ${points[0].x} ${points[0].y}`;
         areaPathD = `M ${points[0].x} ${height - paddingBottom} L ${points[0].x} ${points[0].y}`;
 
-        for (let i = 0; i < points.length - 1; i++) {
-          const p0 = points[i];
-          const p1 = points[i + 1];
-          const cpX1 = p0.x + (p1.x - p0.x) / 2;
-          const cpY1 = p0.y;
-          const cpX2 = p1.x - (p1.x - p0.x) / 2;
-          const cpY2 = p1.y;
-          
-          linePathD += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${p1.x} ${p1.y}`;
-          areaPathD += ` C ${cpX1} ${cpY1}, ${cpX2} ${cpY2}, ${p1.x} ${p1.y}`;
+        for (let i = 1; i < points.length; i++) {
+          linePathD += ` L ${points[i].x} ${points[i].y}`;
+          areaPathD += ` L ${points[i].x} ${points[i].y}`;
         }
 
         areaPathD += ` L ${points[points.length - 1].x} ${height - paddingBottom} Z`;
@@ -1568,7 +1527,7 @@
           <!-- Gradient Area -->
           <path d="${areaPathD}" fill="url(#chart-area-grad)" />
 
-          <!-- Stroke Line (Curvy) -->
+          <!-- Stroke Line -->
           <path d="${linePathD}" stroke="#22c55e" stroke-width="2" fill="none" stroke-linejoin="round" stroke-linecap="round" />
 
           <!-- Vertical Interactive Scrubber Line -->
@@ -1581,18 +1540,8 @@
       `;
 
       points.forEach((pt, idx) => {
-        if (pt.violations > 0) {
-          svgHtml += `
-            <line x1="${pt.x}" y1="${pt.y}" x2="${pt.x}" y2="${height - paddingBottom}" stroke="#ef4444" stroke-width="1.2" stroke-dasharray="2,2" />
-            <circle class="pulse-ring" cx="${pt.x}" cy="${pt.y}" r="4.5" fill="none" stroke="#ef4444" stroke-width="1" />
-            <circle class="graph-point" data-idx="${idx}" cx="${pt.x}" cy="${pt.y}" r="2.5" fill="#ef4444" stroke="rgba(0,0,0,0.5)" stroke-width="1" />
-          `;
-        } else {
-          svgHtml += `
-            <circle class="graph-point" data-idx="${idx}" cx="${pt.x}" cy="${pt.y}" r="2.5" fill="#22c55e" stroke="rgba(0,0,0,0.5)" stroke-width="1" />
-          `;
-        }
         svgHtml += `
+          <circle class="graph-point" data-idx="${idx}" cx="${pt.x}" cy="${pt.y}" r="2.5" fill="#22c55e" stroke="rgba(0,0,0,0.5)" stroke-width="1" />
           <text x="${pt.x}" y="${height - 6}" fill="rgba(255,255,255,0.4)" font-size="8" font-weight="600" text-anchor="middle">${pt.label}</text>
         `;
       });
@@ -1603,31 +1552,21 @@
       const today = new Date();
       const formattedToday = today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
-      // Determine default displayed data
+      // Determine default displayed data (today's weekday data if weekly)
       let defaultLabel = `Today (${formattedToday})`;
       let defaultTime = '0m';
-      let defaultViolations = 0;
 
-      if (isToday) {
-        const lastPt = points[points.length - 1];
-        if (lastPt) {
-          defaultTime = lastPt.time;
-          defaultLabel = getFullLabel(lastPt.label);
-          defaultViolations = lastPt.violations;
-        }
-      } else if (isWeekly) {
+      if (isWeekly) {
         const currentDayLabel = today.toLocaleDateString(undefined, { weekday: 'short' });
         const matchedPoint = points.find(p => p.label === currentDayLabel);
         if (matchedPoint) {
           defaultTime = matchedPoint.time;
           defaultLabel = `Today (${getFullLabel(matchedPoint.label)})`;
-          defaultViolations = matchedPoint.violations;
         } else {
           const lastPt = points[points.length - 1];
           if (lastPt) {
             defaultTime = lastPt.time;
             defaultLabel = getFullLabel(lastPt.label);
-            defaultViolations = lastPt.violations;
           }
         }
       } else {
@@ -1635,7 +1574,6 @@
         if (lastPt) {
           defaultTime = lastPt.time;
           defaultLabel = getFullLabel(lastPt.label);
-          defaultViolations = lastPt.violations;
         }
       }
 
@@ -1644,13 +1582,9 @@
       headerDiv.style.justifyContent = 'space-between';
       headerDiv.style.alignItems = 'baseline';
       headerDiv.style.padding = '0 2px';
-
-      const showViol = defaultViolations > 0 ? ` <span style="color:#f87171; font-weight:700; margin-left:8px;">⚠️ ${defaultViolations} violation${defaultViolations > 1 ? 's' : ''}</span>` : '';
-      const showTimeColor = defaultViolations > 0 ? '#f87171' : '#22c55e';
-
       headerDiv.innerHTML = `
-        <span id="usage-title-label" style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 500;">${defaultLabel}${showViol}</span>
-        <span id="usage-title-time" style="font-size: 13px; color: ${showTimeColor}; font-weight: 700;">${defaultTime}</span>
+        <span id="usage-title-label" style="font-size: 10px; color: rgba(255,255,255,0.5); font-weight: 500;">${defaultLabel}</span>
+        <span id="usage-title-time" style="font-size: 13px; color: #22c55e; font-weight: 700;">${defaultTime}</span>
       `;
 
       chartCard.appendChild(headerDiv);
@@ -1690,35 +1624,19 @@
           scrubberCircle.setAttribute('cy', nearestPt.y);
           scrubberCircle.style.display = 'block';
 
-          if (nearestPt.violations > 0) {
-            scrubberCircle.setAttribute('fill', '#ef4444');
-            scrubberLine.setAttribute('stroke', 'rgba(239, 68, 68, 0.5)');
-          } else {
-            scrubberCircle.setAttribute('fill', '#22c55e');
-            scrubberLine.setAttribute('stroke', 'rgba(34, 197, 94, 0.4)');
-          }
-
           const displayLabel = getFullLabel(nearestPt.label);
-          const violText = nearestPt.violations > 0 ? ` <span style="color:#f87171; font-weight:700; margin-left:8px;">⚠️ ${nearestPt.violations} violation${nearestPt.violations > 1 ? 's' : ''}</span>` : '';
-          titleLabel.innerHTML = `${displayLabel}${violText}`;
+          titleLabel.textContent = displayLabel;
           titleTime.textContent = nearestPt.time;
-          
-          if (nearestPt.violations > 0) {
-            titleTime.style.color = '#f87171';
-          } else {
-            titleTime.style.color = '#4ade80';
-          }
+          titleTime.style.color = '#4ade80'; // light green highlight when scrubbing
         }
       }
 
       function handleLeave() {
         scrubberLine.style.display = 'none';
         scrubberCircle.style.display = 'none';
-        
-        const showViol = defaultViolations > 0 ? ` <span style="color:#f87171; font-weight:700; margin-left:8px;">⚠️ ${defaultViolations} violation${defaultViolations > 1 ? 's' : ''}</span>` : '';
-        titleLabel.innerHTML = `${defaultLabel}${showViol}`;
+        titleLabel.textContent = defaultLabel;
         titleTime.textContent = defaultTime;
-        titleTime.style.color = defaultViolations > 0 ? '#f87171' : '#22c55e';
+        titleTime.style.color = '#22c55e';
       }
 
       svg.addEventListener('mousemove', (e) => {
@@ -1753,22 +1671,13 @@
     // Default graph content
     renderUsageGraph(currentWeeklyData);
 
-    document.getElementById('btn-toggle-today').addEventListener('click', (e) => {
-      document.getElementById('btn-toggle-today').classList.add('active');
-      document.getElementById('btn-toggle-weekly').classList.remove('active');
-      document.getElementById('btn-toggle-monthly').classList.remove('active');
-      renderUsageGraph(currentTodayData);
-    });
-
     document.getElementById('btn-toggle-weekly').addEventListener('click', (e) => {
-      document.getElementById('btn-toggle-today').classList.remove('active');
       document.getElementById('btn-toggle-weekly').classList.add('active');
       document.getElementById('btn-toggle-monthly').classList.remove('active');
       renderUsageGraph(currentWeeklyData);
     });
 
     document.getElementById('btn-toggle-monthly').addEventListener('click', (e) => {
-      document.getElementById('btn-toggle-today').classList.remove('active');
       document.getElementById('btn-toggle-weekly').classList.remove('active');
       document.getElementById('btn-toggle-monthly').classList.add('active');
       renderUsageGraph(currentMonthlyData);
@@ -2161,9 +2070,6 @@
 
       // 4. Update Graph Data
       if (payload.usage) {
-        if (payload.usage.today) {
-          currentTodayData = payload.usage.today;
-        }
         if (payload.usage.weekly) {
           currentWeeklyData = payload.usage.weekly;
         }
@@ -2171,9 +2077,8 @@
           currentMonthlyData = payload.usage.monthly;
         }
         // Re-render active toggle graph
-        const isTodayActive = document.getElementById('btn-toggle-today').classList.contains('active');
         const isWeeklyActive = document.getElementById('btn-toggle-weekly').classList.contains('active');
-        renderUsageGraph(isTodayActive ? currentTodayData : (isWeeklyActive ? currentWeeklyData : currentMonthlyData));
+        renderUsageGraph(isWeeklyActive ? currentWeeklyData : currentMonthlyData);
       }
     });
 

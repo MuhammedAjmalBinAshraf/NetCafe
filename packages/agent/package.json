@@ -1,6 +1,6 @@
 {
   "name": "agent",
-  "version": "1.1.41",
+  "version": "1.1.42",
   "main": "dist/main.js",
   "description": "NetCafe Agent application",
   "author": "Muhammed Ajmal Bin Ashraf <ajmalmohammed13166@gmail.com>",
@@ -66,10 +66,6 @@
       {
         "from": "kiosk-uninstall.ps1",
         "to": "kiosk-uninstall.ps1"
-      },
-      {
-        "from": "diagnostic-logger.ps1",
-        "to": "diagnostic-logger.ps1"
       }
     ],
     "asarUnpack": [

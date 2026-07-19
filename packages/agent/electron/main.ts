@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain, globalShortcut, desktopCapturer, dialog, Tray, Menu, screen } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import net from 'net';
-import http from 'http';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -77,11 +76,8 @@ let isTcpConnected = false;
 let isLocked = true;
 let isAppQuitting = false;
 let testUserEnabled = false;
-let shellRestorePending = false;
 let isTestUserSession = false;
 let activeBlockRules: any[] = [];
-let blockSoftwareChanges = false;
-let isAgentUpdating = false;
 let blockInterval: NodeJS.Timeout | null = null;
 let metricsInterval: NodeJS.Timeout | null = null;
 let lockEnforceInterval: NodeJS.Timeout | null = null;
@@ -111,28 +107,6 @@ function writeAgentRuntimeLog(msg: string) {
     console.error('Failed to write agent runtime log:', e);
   }
 }
-
-function getCombinedLogs(): string {
-  let setupLog = '';
-  try {
-    const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
-    if (fs.existsSync(logPath)) {
-      setupLog = fs.readFileSync(logPath, 'utf8');
-    }
-  } catch {}
-
-  let agentLog = '';
-  try {
-    if (fs.existsSync(runtimeLogFilePath)) {
-      agentLog = fs.readFileSync(runtimeLogFilePath, 'utf8');
-    } else {
-      agentLog = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
-    }
-  } catch {}
-
-  return `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLog}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLog}`;
-}
-
 
 function resolveWinPath(cmd: string): string {
   if (process.platform !== 'win32') return cmd;
@@ -179,22 +153,13 @@ function isAgentTheShell(): boolean {
   }
 }
 
-function isKioskUser(): boolean {
-  if (process.platform !== 'win32') return true;
-  const username = os.userInfo().username.toLowerCase();
-  return username.includes('cafekiosk');
-}
-
 function isDesktopShellRunning(): Promise<boolean> {
   return new Promise((resolve) => {
     if (process.platform !== 'win32') {
       resolve(true);
       return;
     }
-    const username = process.env.USERNAME;
-    const userdomain = process.env.USERDOMAIN;
-    const filter = username ? `/FI "USERNAME eq ${userdomain}\\\\${username}"` : '';
-    exec(`tasklist /FI "IMAGENAME eq explorer.exe" ${filter} /FO CSV /NH 2>nul`, { timeout: 3000 }, (err, stdout) => {
+    exec('tasklist /FI "IMAGENAME eq explorer.exe" /FO CSV /NH 2>nul', { timeout: 3000 }, (err, stdout) => {
       if (err) {
         resolve(false);
         return;
@@ -226,7 +191,7 @@ function spawnExplorerShell() {
     setTimeout(() => {
       try {
         logToUI('Restoring registry Shell override to NetCafe Agent...');
-        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${originalShell}\\"" /f`);
+        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "${originalShell}" /f`);
         logToUI('Registry Shell override restored successfully.');
       } catch (err: any) {
         logToUI(`Error restoring registry Shell override: ${err.message}`);
@@ -444,28 +409,8 @@ function updateUpdaterFeedURL() {
   }
 }
 
-// ─── Kill all browser processes on lock to prevent audio/input bleed-through ──
-const BROWSER_PROCESSES = [
-  'chrome.exe',
-  'msedge.exe',
-  'firefox.exe',
-  'brave.exe',
-  'opera.exe',
-  'vivaldi.exe',
-];
-
-function killBrowsersOnLock() {
-  if (process.platform !== 'win32') return;
-  logToUI('Terminating browser processes to prevent audio/input bleed-through after lock...');
-  for (const proc of BROWSER_PROCESSES) {
-    safeSpawn('taskkill.exe', ['/F', '/IM', proc, '/T']);
-  }
-}
-
 // ─── Lock enforcement: re-focus every 500ms ───────────────────────────────────
 function startLockEnforcement() {
-
-  if (!isKioskUser()) return;
   // NOTE: Do NOT guard with isAgentTheShell() — WMI Shell Launcher bypasses the
   // HKCU Winlogon\Shell registry key entirely, causing isAgentTheShell() to return
   // false even when the agent IS the kiosk shell. Always enforce lock on Windows.
@@ -490,7 +435,6 @@ function stopLockEnforcement() {
 }
 
 function createLockWindow() {
-  if (!isKioskUser()) return;
   if (lockWindow) return;
   lockWindow = new BrowserWindow({
     fullscreen: true,
@@ -1502,8 +1446,8 @@ function createLockWindow() {
         }
         if (logPre) {
           logPre.textContent = payload.logs || 'No logs available.';
+          logPre.scrollTop = logPre.scrollHeight;
         }
-
 
         let secondsLeft = 15;
         if (countdownEl) {
@@ -1865,39 +1809,32 @@ async function handleServerMessage(msg: any) {
         user: msg.user || 'Guest'
       });
     } else if (msg.command === 'lock') {
-      // Never lock the terminal while an offline test user session is active.
-      // The server may send 'lock' on registration if the machine shows as 'available',
-      // but we must not interrupt an in-progress test session.
-      if (isTestUserSession) {
-        logToUI(`Server sent 'lock' command but offline test session is active — ignored.`);
+      logToUI(`Server requested lock. Setting isLocked = true.`);
+      isLocked = true;
+      currentUser = null;
+      if (!lockWindow) {
+        logToUI(`Creating new lock screen window.`);
+        createLockWindow();
       } else {
-        logToUI(`Server requested lock. Setting isLocked = true.`);
-        isLocked = true;
-        currentUser = null;
-        if (!lockWindow) {
-          logToUI(`Creating new lock screen window.`);
-          createLockWindow();
-        } else {
-          logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
-          startLockEnforcement();
-        }
-        destroyIslandWindow();
+        logToUI(`Lock screen window already exists. Restarting lock enforcement.`);
+        startLockEnforcement();
+      }
+      destroyIslandWindow();
 
-        // If this was triggered by a safety violation, open local blocked page and cache the query
-        if (msg.payload?.isViolation) {
-          if (msg.payload.query && mitmProxy) {
-            mitmProxy.blockedQueries.add(msg.payload.query.toLowerCase());
-          }
-          if (process.platform === 'win32') {
-            exec('start "" "C:\\NetCafe\\blocked.html"');
-          }
+      // If this was triggered by a safety violation, open local blocked page and cache the query
+      if (msg.payload?.isViolation) {
+        if (msg.payload.query && mitmProxy) {
+          mitmProxy.blockedQueries.add(msg.payload.query.toLowerCase());
         }
+        if (process.platform === 'win32') {
+          exec('start "" "C:\\NetCafe\\blocked.html"');
+        }
+      }
 
-        // Kill all browsers to prevent audio/input bleed-through
-        if (process.platform === 'win32' && isKioskUser()) {
-          logToUI('Terminating browsers to silence background audio...');
-          killBrowsersOnLock();
-        }
+      // Always kill explorer.exe on Windows when locking
+      if (process.platform === 'win32') {
+        logToUI('Terminating explorer.exe to lock desktop shell...');
+        safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
       }
     } else if (msg.command === 'message') {
       if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
@@ -1965,16 +1902,6 @@ async function handleServerMessage(msg: any) {
           }
         });
       });
-    } else if (msg.command === 'scan-software') {
-      logToUI('Server requested software scan. Starting scanner...');
-      runSoftwareScan();
-    } else if (msg.command === 'update-software-control') {
-      blockSoftwareChanges = !!msg.payload?.blockSoftwareChanges;
-      logToUI(`Software control changes update: blockSoftwareChanges = ${blockSoftwareChanges}`);
-    } else if (msg.command === 'install-software') {
-      const { installId, softwareName, method, packageId, url, args, script } = msg.payload || {};
-      logToUI(`Server requested batch software installation for: ${softwareName || packageId || 'Custom'}`);
-      runSoftwareInstallation(installId, softwareName, method, packageId, url, args, script);
     } else if (msg.command === 'remote-input') {
       const { action, x, y, button, value } = msg.payload || {};
       if (process.platform === 'win32' && psProcess && psProcess.stdin && !psProcess.killed) {
@@ -2003,7 +1930,7 @@ async function handleServerMessage(msg: any) {
       updateMirrorSettings(highRes, ultraRes);
     } else if (msg.command === 'block-inputs') {
       const block = !!msg.payload?.block;
-      if (process.platform === 'win32' && isKioskUser()) {
+      if (process.platform === 'win32') {
         // Primary: persistent PS process
         if (psProcess && psProcess.stdin && !psProcess.killed) {
           psProcess.stdin.write(`Set-BlockInput $${block ? 'true' : 'false'}\n`);
@@ -2033,48 +1960,13 @@ async function handleServerMessage(msg: any) {
         }
       }
     } else if (msg.command === 'apply-security-hardening') {
-      if (isKioskUser()) {
-        logToUI('[Security] Remote hardening triggered by server...');
-        applyFirewallVpnBlocks();
-        runSecurityAudit();
-        if (islandWindow && !islandWindow.isDestroyed()) {
-          islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
-        }
-      } else {
-        logToUI('[Security] Remote hardening skipped — not running as CafeKiosk user.');
-      }
-    } else if (msg.command === 'restore-explorer-shell') {
-      logToUI('Server requested shell restore to explorer.exe.');
-      try {
-        // 1. Reset registry key to explorer.exe
-        const regPath = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon";
-        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
-        
-        // 2. Disable proxy settings
-        const internetSettings = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
-        execSync(`reg add "${internetSettings}" /v ProxyEnable /t REG_DWORD /d 0 /f`);
-        
-        // 3. Stop watchdog so it won't relaunch the agent shell
-        exec('sc stop "NetCafeAgentWatchdog"');
-        
-        // 4. Start explorer.exe
-        safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
-
-        logToUI('Registry shell restored to explorer.exe, proxy disabled, watchdog stopped, and explorer.exe spawned.');
-        
-        sendStatusToServer('update-status', {
-          stage: 'aborted',
-          message: 'Shell successfully restored to explorer.exe. Watchdog service stopped.'
-        });
-      } catch (e: any) {
-        logToUI(`Failed to restore explorer shell: ${e.message}`);
-        sendStatusToServer('update-status', {
-          stage: 'error',
-          message: `Failed to restore explorer shell: ${e.message}`
-        });
+      logToUI('[Security] Remote hardening triggered by server...');
+      applyFirewallVpnBlocks();
+      runSecurityAudit();
+      if (islandWindow && !islandWindow.isDestroyed()) {
+        islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
       }
     } else if (msg.command === 'abort-update') {
-
       // Admin requested abort of pending update installation
       logToUI('Server requested update abort. Cancelling pending install...');
       if (updateInstallTimeout) {
@@ -2085,18 +1977,6 @@ async function handleServerMessage(msg: any) {
       if ((global as any)._updateDeferPoller) {
         clearInterval((global as any)._updateDeferPoller);
         (global as any)._updateDeferPoller = null;
-      }
-      // Abort active direct download request
-      if ((global as any)._activeDownloadRequest) {
-        try {
-          (global as any)._activeDownloadRequest.destroy();
-        } catch {}
-        (global as any)._activeDownloadRequest = null;
-      }
-      // Delete the downloaded setup file if exists
-      const destPath = 'C:\\NetCafe\\updates\\agent-setup.exe';
-      if (fs.existsSync(destPath)) {
-        try { fs.unlinkSync(destPath); } catch {}
       }
       // Delete the install flag if it was already written
       try {
@@ -2114,231 +1994,165 @@ async function handleServerMessage(msg: any) {
       });
       sendUpdateStatus({ status: 'aborted' });
     } else if (msg.command === 'trigger-update') {
-      logToUI('Server triggered remote update. Configuring direct LAN downloader...');
+      logToUI('Server triggered remote update. Configuring updater...');
       if (msg.targetVersion) {
         logToUI(`Target version for update: v${msg.targetVersion}`);
       }
 
       try {
+        // 1. Get the server's IP from the payload or fall back to local serverHost
         const serverIp = msg.serverIp || serverHost;
         const serverPort = msg.serverPort || 9001;
-        const destPath = 'C:\\NetCafe\\updates\\agent-setup.exe';
+        const feedUrl = `http://${serverIp}:${serverPort}/updates/agent`;
 
-        // 1. Emit status: checking
+        // 2. Override feed URL at runtime so it always points to THIS server
+        autoUpdater.setFeedURL({
+          provider: 'generic',
+          url: feedUrl,
+        });
+
+        logToUI(`Update feed URL set to: ${feedUrl}`);
+
+        // 3. Emit status back to server: update check started
         sendStatusToServer('update-status', {
           stage: 'checking',
-          message: 'Checking for updates on the local server...',
+          message: 'Checking for updates...',
         });
-        sendUpdateStatus({ status: 'checking' });
 
-        // 2. Fetch /api/updates/health to get the installer name
-        const healthUrl = `http://${serverIp}:${serverPort}/api/updates/health`;
-        
-        // Cancel any active previous download request
-        if ((global as any)._activeDownloadRequest) {
-          try { (global as any)._activeDownloadRequest.destroy(); } catch {}
-          (global as any)._activeDownloadRequest = null;
-        }
+        // 4. Wire up all autoUpdater events (guard against duplicate listeners)
+        autoUpdater.removeAllListeners();
 
-        http.get(healthUrl, (res) => {
-          if (res.statusCode !== 200) {
-            const errMsg = `Update server returned status code ${res.statusCode}`;
-            logToUI(errMsg);
-            sendStatusToServer('update-status', { stage: 'error', message: errMsg });
-            sendUpdateStatus({ status: 'error', message: errMsg });
-            return;
+        autoUpdater.on('checking-for-update', () => {
+          logToUI('Checking for update...');
+          sendUpdateStatus({ status: 'checking' });
+        });
+
+        autoUpdater.on('update-available', (info) => {
+          logToUI(`Update available: v${info.version}`);
+          sendStatusToServer('update-status', {
+            stage: 'downloading',
+            message: `Downloading v${info.version}...`,
+            version: info.version,
+          });
+          sendUpdateStatus({ status: 'available', info });
+        });
+
+        autoUpdater.on('update-not-available', (info) => {
+          const version = info?.version || '';
+          logToUI(`Already up to date: v${version}`);
+          sendStatusToServer('update-status', {
+            stage: 'up-to-date',
+            message: `Already on latest version (v${version})`,
+            version: version,
+          });
+          sendUpdateStatus({ status: 'not-available' });
+        });
+
+        autoUpdater.on('download-progress', (progress) => {
+          const pct = Math.round(progress.percent);
+          logToUI(`Download progress: ${pct}%`);
+          sendStatusToServer('update-status', {
+            stage: 'downloading',
+            message: `Downloading... ${pct}%`,
+            percent: pct,
+          });
+          sendUpdateStatus({ status: 'downloading', progress });
+        });
+
+        autoUpdater.on('update-downloaded', (info) => {
+          logToUI(`Update downloaded: v${info.version}. Preparing to install...`);
+          sendStatusToServer('update-status', {
+            stage: 'installing',
+            message: `v${info.version} downloaded. Installing via watchdog...`,
+            version: info.version,
+          });
+          
+          updateReady = true;
+          downloadedUpdatePath = info?.downloadedFile;
+          sendUpdateStatus({ status: 'downloaded', info });
+
+          // Log the download event in the setup/install log
+          const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
+          try {
+            fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${info?.version || 'unknown'} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
+          } catch {}
+
+          // Rebuild lock window to show the downloaded banner
+          if (isLocked) {
+            createLockWindow();
           }
 
-          let body = '';
-          res.on('data', chunk => { body += chunk; });
-          res.on('end', () => {
-            try {
-              const data = JSON.parse(body);
-              if (!data.ready || !data.exeFile) {
-                const errMsg = 'No updates ready or package is missing on the server.';
-                logToUI(errMsg);
-                sendStatusToServer('update-status', { stage: 'error', message: errMsg });
-                sendUpdateStatus({ status: 'error', message: errMsg });
-                return;
-              }
-
-              const downloadUrl = `http://${serverIp}:${serverPort}/updates/agent/${encodeURIComponent(data.exeFile)}`;
-              logToUI(`Update available: v${data.version}. Starting download from: ${downloadUrl}`);
-              
-              sendStatusToServer('update-status', {
-                stage: 'downloading',
-                message: `Downloading v${data.version} directly from server...`,
-                version: data.version,
-              });
-              sendUpdateStatus({ status: 'available', info: { version: data.version } });
-
-              // Delete old download if exists
-              if (fs.existsSync(destPath)) {
-                try { fs.unlinkSync(destPath); } catch {}
-              }
-
-              // Start direct download helper function
-              const downloadUpdateInstaller = (url: string, fileDest: string, onProgress: (pct: number) => void): Promise<void> => {
-                return new Promise((resolve, reject) => {
-                  const dir = path.dirname(fileDest);
-                  if (!fs.existsSync(dir)) {
-                    fs.mkdirSync(dir, { recursive: true });
-                  }
-
-                  const file = fs.createWriteStream(fileDest);
-                  
-                  const req = http.get(url, (response) => {
-                    if (response.statusCode !== 200) {
-                      file.close();
-                      fs.unlink(fileDest, () => {});
-                      reject(new Error(`Failed to download update: HTTP Status ${response.statusCode}`));
-                      return;
-                    }
-
-                    const totalSize = parseInt(response.headers['content-length'] || '0', 10);
-                    let downloadedSize = 0;
-
-                    response.on('data', (chunk) => {
-                      downloadedSize += chunk.length;
-                      if (totalSize > 0) {
-                        const percent = Math.round((downloadedSize / totalSize) * 100);
-                        onProgress(percent);
-                      }
-                    });
-
-                    response.pipe(file);
-
-                    file.on('finish', () => {
-                      file.close();
-                      resolve();
-                    });
-
-                    file.on('error', (err) => {
-                      file.close();
-                      fs.unlink(fileDest, () => {});
-                      reject(err);
-                    });
-                  });
-
-                  req.on('error', (err: any) => {
-                    file.close();
-                    fs.unlink(fileDest, () => {});
-                    reject(err);
-                  });
-
-                  (global as any)._activeDownloadRequest = req;
-                });
-              };
-
-              downloadUpdateInstaller(downloadUrl, destPath, (pct) => {
-                logToUI(`Download progress: ${pct}%`);
-                sendStatusToServer('update-status', {
-                  stage: 'downloading',
-                  message: `Downloading... ${pct}%`,
-                  percent: pct,
-                  logs: getCombinedLogs(),
-                });
-                sendUpdateStatus({ status: 'downloading', progress: { percent: pct } });
-              }).then(() => {
-                logToUI(`Update downloaded: v${data.version}. Preparing to install...`);
-                sendStatusToServer('update-status', {
-                  stage: 'installing',
-                  message: `v${data.version} downloaded. Installing via watchdog...`,
-                  version: data.version,
-                  logs: getCombinedLogs(),
-                });
-
-                
-                updateReady = true;
-                downloadedUpdatePath = destPath;
-                sendUpdateStatus({ status: 'downloaded', info: { version: data.version } });
-
-                // Log the download event in the setup/install log
-                const logPath = "C:\\NetCafe\\logs\\kiosk-setup.log";
-                try {
-                  fs.appendFileSync(logPath, `\r\n[${new Date().toISOString()}] UPDATE DOWNLOADED: NetCafe Agent version ${data.version} downloaded successfully. Restarting to install update...\r\n`, 'utf8');
-                } catch {}
-
-                // Rebuild lock window to show the downloaded banner
-                if (isLocked) {
-                  createLockWindow();
-                }
-
-                // Read setup log contents to display in the UI
-                let setupLogContent = '';
-                try {
-                  if (fs.existsSync(logPath)) {
-                    setupLogContent = fs.readFileSync(logPath, 'utf8');
-                  }
-                } catch {}
-
-                let agentLogContent = '';
-                try {
-                  if (fs.existsSync(runtimeLogFilePath)) {
-                    agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
-                  } else {
-                    agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
-                  }
-                } catch {}
-
-                const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
-
-                // Send IPC to show the Auto Updating screen
-                if (lockWindow && !lockWindow.isDestroyed()) {
-                  lockWindow.webContents.send('show-auto-updating', {
-                    version: data.version,
-                    logs: combinedLogs
-                  });
-                }
-
-                // Stop watchdog and install update after 15 seconds automatically.
-                updateInstallTimeout = setTimeout(() => {
-                  if (!isLocked) {
-                    // Session is active — defer and poll every 30 s
-                    logToUI('Session is active. Deferring update installation until session ends...');
-                    sendStatusToServer('update-status', {
-                      stage: 'deferred',
-                      message: 'Update ready. Waiting for active session to end before installing...',
-                      version: data.version,
-                    });
-                    if ((global as any)._updateDeferPoller) {
-                      clearInterval((global as any)._updateDeferPoller);
-                    }
-                    (global as any)._updateDeferPoller = setInterval(() => {
-                      if (isLocked) {
-                        logToUI('Session ended. Proceeding with deferred update installation.');
-                        clearInterval((global as any)._updateDeferPoller);
-                        (global as any)._updateDeferPoller = null;
-                        triggerInstallUpdate(downloadedUpdatePath);
-                      }
-                    }, 30000);
-                  } else {
-                    triggerInstallUpdate(downloadedUpdatePath);
-                  }
-                }, 15000);
-
-              }).catch((err) => {
-                const errMsg = `Download failed: ${err.message}`;
-                logToUI(errMsg);
-                sendStatusToServer('update-status', { stage: 'error', message: errMsg });
-                sendUpdateStatus({ status: 'error', message: err.message });
-              });
-            } catch (e: any) {
-              const errMsg = `Failed to parse update health JSON: ${e.message}`;
-              logToUI(errMsg);
-              sendStatusToServer('update-status', { stage: 'error', message: errMsg });
-              sendUpdateStatus({ status: 'error', message: errMsg });
+          // Read setup log contents to display in the UI
+          let setupLogContent = '';
+          try {
+            if (fs.existsSync(logPath)) {
+              setupLogContent = fs.readFileSync(logPath, 'utf8');
             }
+          } catch {}
+
+          let agentLogContent = '';
+          try {
+            if (fs.existsSync(runtimeLogFilePath)) {
+              agentLogContent = fs.readFileSync(runtimeLogFilePath, 'utf8');
+            } else {
+              agentLogContent = agentLogsCache.map(e => `[${e.timestamp}] ${e.message}`).join('\r\n');
+            }
+          } catch {}
+
+          const combinedLogs = `=== NETCAFE KIOSK SETUP LOG ===\r\n${setupLogContent}\r\n\r\n=== NETCAFE AGENT RUNTIME LOG ===\r\n${agentLogContent}`;
+
+          // Send IPC to show the Auto Updating screen
+          if (lockWindow && !lockWindow.isDestroyed()) {
+            lockWindow.webContents.send('show-auto-updating', {
+              version: info?.version,
+              logs: combinedLogs
+            });
+          }
+
+          // Stop watchdog and install update after 15 seconds automatically.
+          // If a billing session is active when the timer fires, defer installation
+          // until the machine becomes idle (isLocked = true) to avoid killing a
+          // session mid-use.
+          updateInstallTimeout = setTimeout(() => {
+            if (!isLocked) {
+              // Session is active — defer and poll every 30 s
+              logToUI('Session is active. Deferring update installation until session ends...');
+              sendStatusToServer('update-status', {
+                stage: 'deferred',
+                message: 'Update ready. Waiting for active session to end before installing...',
+                version: info?.version,
+              });
+              if ((global as any)._updateDeferPoller) {
+                clearInterval((global as any)._updateDeferPoller);
+              }
+              (global as any)._updateDeferPoller = setInterval(() => {
+                if (isLocked) {
+                  logToUI('Session ended. Proceeding with deferred update installation.');
+                  clearInterval((global as any)._updateDeferPoller);
+                  (global as any)._updateDeferPoller = null;
+                  triggerInstallUpdate(downloadedUpdatePath);
+                }
+              }, 30000);
+            } else {
+              triggerInstallUpdate(downloadedUpdatePath);
+            }
+          }, 15000);
+        });
+
+        autoUpdater.on('error', (err) => {
+          logToUI(`AutoUpdater error: ${err.message}`);
+          sendStatusToServer('update-status', {
+            stage: 'error',
+            message: `Update failed: ${err.message}`,
           });
-        }).on('error', (err) => {
-          const errMsg = `Update checking failed: ${err.message}`;
-          logToUI(errMsg);
-          sendStatusToServer('update-status', { stage: 'error', message: errMsg });
           sendUpdateStatus({ status: 'error', message: err.message });
         });
 
+        // 5. Start the check
+        await autoUpdater.checkForUpdates();
+
       } catch (e: any) {
-        logToUI(`Direct updates error: ${e.message}`);
+        logToUI(`autoUpdater error: ${e.message}`);
         sendStatusToServer('update-status', {
           stage: 'error',
           message: `Update error: ${e.message}`,
@@ -2547,7 +2361,7 @@ function installAsShell() {
   try {
     const exePath = process.execPath;
     // Set shell for current user
-    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${exePath}\\"" /f`);
+    execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "${exePath}" /f`);
     console.log('Shell replacement installed for current user');
   } catch (e) {
     console.error('Failed to install as shell:', e);
@@ -3022,241 +2836,6 @@ function applyHostBlocking(domains: string[]) {
   }
 }
 
-function runSoftwareScan() {
-  if (process.platform !== 'win32') {
-    sendToServer({ type: 'software-inventory', payload: { softwares: [] } });
-    return;
-  }
-
-  const psScript = `
-    $installed = @()
-    $keys = Get-ItemProperty HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
-    foreach ($k in $keys) {
-        if ($k.DisplayName) {
-            $installed += [PSCustomObject]@{
-                Name = $k.DisplayName
-                Version = $k.DisplayVersion
-                Publisher = $k.Publisher
-                InstallDate = $k.InstallDate
-                InstallLocation = $k.InstallLocation
-                InstallSource = $k.InstallSource
-                InstalledBy = 'System (All Users)'
-                UninstallString = $k.UninstallString
-            }
-        }
-    }
-    $keysWow = Get-ItemProperty HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
-    foreach ($k in $keysWow) {
-        if ($k.DisplayName) {
-            $installed += [PSCustomObject]@{
-                Name = $k.DisplayName
-                Version = $k.DisplayVersion
-                Publisher = $k.Publisher
-                InstallDate = $k.InstallDate
-                InstallLocation = $k.InstallLocation
-                InstallSource = $k.InstallSource
-                InstalledBy = 'System (All Users)'
-                UninstallString = $k.UninstallString
-            }
-        }
-    }
-    $keysCu = Get-ItemProperty HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\* -ErrorAction SilentlyContinue
-    foreach ($k in $keysCu) {
-        if ($k.DisplayName) {
-            $installed += [PSCustomObject]@{
-                Name = $k.DisplayName
-                Version = $k.DisplayVersion
-                Publisher = $k.Publisher
-                InstallDate = $k.InstallDate
-                InstallLocation = $k.InstallLocation
-                InstallSource = $k.InstallSource
-                InstalledBy = 'User (Current)'
-                UninstallString = $k.UninstallString
-            }
-        }
-    }
-    $installed | ConvertTo-Json -Compress
-  `;
-
-  const resolvedPowershell = resolveWinPath('powershell.exe');
-  const child = spawn(resolvedPowershell, ['-NoProfile', '-Command', psScript]);
-  let output = '';
-
-  child.stdout.on('data', (data) => {
-    output += data.toString('utf8');
-  });
-
-  child.on('close', (code) => {
-    if (code === 0) {
-      try {
-        const trimmed = output.trim();
-        if (!trimmed) {
-          sendToServer({ type: 'software-inventory', payload: { softwares: [] } });
-          return;
-        }
-        const softwares = JSON.parse(trimmed);
-        sendToServer({
-          type: 'software-inventory',
-          payload: { softwares: Array.isArray(softwares) ? softwares : [softwares].filter(Boolean) }
-        });
-      } catch (err: any) {
-        logToUI(`Error parsing software scan JSON: ${err.message}`);
-      }
-    } else {
-      logToUI(`Powershell software scan failed with exit code ${code}`);
-    }
-  });
-}
-
-function runSoftwareInstallation(installId: string, softwareName: string, method: string, packageId: string, url: string, args: string, script: string) {
-  const reportProgress = (status: string, message: string) => {
-    sendToServer({
-      type: 'install-progress',
-      payload: { installId, status, message, softwareName }
-    });
-  };
-
-  reportProgress('downloading', 'Starting software setup on client PC...');
-
-  if (method === 'winget') {
-    reportProgress('installing', `Running winget silent installation for package ${packageId}...`);
-    const cmd = `winget install --silent --accept-source-agreements --accept-package-agreements ${packageId}`;
-    
-    const child = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', cmd]);
-    let output = '';
-    
-    child.stdout.on('data', (d) => { output += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { output += d.toString('utf8'); });
-    
-    child.on('close', (code) => {
-      if (code === 0) {
-        reportProgress('completed', 'Software installed successfully via Winget!');
-        runSoftwareScan();
-      } else {
-        reportProgress('failed', `Installation failed with exit code ${code}. Output: ${output.slice(-200)}`);
-      }
-    });
-  } else if (method === 'url') {
-    reportProgress('downloading', `Downloading setup file from URL: ${url}`);
-    
-    const tempDir = app.getPath('temp');
-    const urlParts = url.split('/');
-    let fileName = urlParts[urlParts.length - 1] || 'installer.exe';
-    if (!fileName.includes('.')) fileName += '.exe';
-    const filePath = path.join(tempDir, `netcafe_installer_${Date.now()}_${fileName}`);
-    
-    const downloadCmd = `Invoke-WebRequest -Uri "${url}" -OutFile "${filePath}"`;
-    const downloadChild = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', downloadCmd]);
-    
-    downloadChild.on('close', (downloadCode) => {
-      if (downloadCode !== 0) {
-        reportProgress('failed', `Downloading installer failed. Make sure the URL is accessible from the client PC.`);
-        return;
-      }
-      
-      reportProgress('installing', `Running silent setup...`);
-      let installCmd = '';
-      
-      if (filePath.toLowerCase().endsWith('.msi')) {
-        installCmd = `msiexec.exe /i "${filePath}" /qn /norestart`;
-      } else {
-        const silentArgs = args || '/S';
-        installCmd = `Start-Process -FilePath "${filePath}" -ArgumentList "${silentArgs}" -Wait -NoNewWindow`;
-      }
-      
-      const installChild = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-Command', installCmd]);
-      let installOutput = '';
-      installChild.stdout.on('data', (d) => { installOutput += d.toString('utf8'); });
-      installChild.stderr.on('data', (d) => { installOutput += d.toString('utf8'); });
-      
-      installChild.on('close', (installCode) => {
-        try {
-          fs.unlinkSync(filePath);
-        } catch {}
-        
-        if (installCode === 0) {
-          reportProgress('completed', 'Software installed successfully via URL!');
-          runSoftwareScan();
-        } else {
-          reportProgress('failed', `Silent setup execution failed with exit code ${installCode}. Output: ${installOutput.slice(-200)}`);
-        }
-      });
-    });
-  } else if (method === 'script') {
-    reportProgress('installing', 'Executing custom installation PowerShell script...');
-    
-    const child = spawn(resolveWinPath('powershell.exe'), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script]);
-    let output = '';
-    child.on('error', (err) => {
-      reportProgress('failed', `Failed to spawn powershell: ${err.message}`);
-    });
-    child.stdout.on('data', (d) => { output += d.toString('utf8'); });
-    child.stderr.on('data', (d) => { output += d.toString('utf8'); });
-    
-    child.on('close', (code) => {
-      if (code === 0) {
-        reportProgress('completed', 'Custom installation script completed successfully!');
-        runSoftwareScan();
-      } else {
-        reportProgress('failed', `Script failed with exit code ${code}. Output: ${output.slice(-200)}`);
-      }
-    });
-  } else {
-    reportProgress('failed', `Unknown installation method: ${method}`);
-  }
-}
-
-function enforceInstallerBlocking() {
-  const installersToKill: string[] = [];
-  
-  for (const proc of lastProcessSet) {
-    const name = proc.toLowerCase();
-    
-    const isCurrent = name.includes('netcafe agent') || name.includes(path.basename(process.execPath).toLowerCase());
-    if (isCurrent) continue;
-    
-    const isInstaller = name === 'msiexec.exe' || 
-                        name === 'setup.exe' || 
-                        name === 'install.exe' || 
-                        name === 'installer.exe' || 
-                        name === 'uninstall.exe' || 
-                        name.startsWith('unins') || 
-                        (name.includes('setup') && name.endsWith('.exe')) || 
-                        (name.includes('install') && name.endsWith('.exe')) || 
-                        (name.includes('uninst') && name.endsWith('.exe'));
-                        
-    if (isInstaller) {
-      installersToKill.push(proc);
-    }
-  }
-  
-  if (installersToKill.length > 0) {
-    installersToKill.forEach((procName) => {
-      logToUI(`[Block] Terminating installer process: "${procName}"`);
-      if (process.platform === 'win32') {
-        safeSpawn('taskkill.exe', ['/F', '/IM', procName]);
-      } else {
-        exec(`pkill -f ${procName.slice(0, -4)}`, () => {});
-      }
-      
-      sendToServer({
-        type: 'software-blocked',
-        payload: { processName: procName, timestamp: new Date().toISOString() }
-      });
-    });
-    
-    if (islandWindow && !islandWindow.isDestroyed()) {
-      islandWindow.webContents.send('show-message', `Admin Policy: Software installations and removals are blocked on this PC.`);
-    } else {
-      dialog.showMessageBox({
-        type: 'warning',
-        title: 'Action Blocked',
-        message: 'Admin Policy: Installation or removal of software is blocked on this PC.'
-      }).catch(() => {});
-    }
-  }
-}
-
 function enforceAppBlocking(executables: string[]) {
   if (executables.length === 0) return;
 
@@ -3431,48 +3010,8 @@ function connectToServer() {
         version: app.getVersion()
       } 
     });
-
-    // Check if we recently updated and report the installation logs to the server
-    try {
-      const installLogPath = "C:\\NetCafe\\logs\\agent-install.log";
-      if (fs.existsSync(installLogPath)) {
-        const stats = fs.statSync(installLogPath);
-        const diffMs = Date.now() - stats.mtime.getTime();
-        // If modified in the last 10 minutes, send logs
-        if (diffMs < 10 * 60 * 1000) {
-          logToUI("Recent installation log detected. Sending final update logs to server...");
-          let finalLogs = "";
-          try {
-            if (fs.existsSync("C:\\NetCafe\\logs\\watchdog-update.log")) {
-              finalLogs += "=== WATCHDOG UPDATE LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\watchdog-update.log", "utf8") + "\r\n\r\n";
-            }
-          } catch {}
-          try {
-            if (fs.existsSync("C:\\NetCafe\\logs\\agent-install.log")) {
-              finalLogs += "=== AGENT INSTALL LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\agent-install.log", "utf8") + "\r\n\r\n";
-            }
-          } catch {}
-          try {
-            if (fs.existsSync("C:\\NetCafe\\logs\\kiosk-setup.log")) {
-              finalLogs += "=== KIOSK SETUP LOG ===\r\n" + fs.readFileSync("C:\\NetCafe\\logs\\kiosk-setup.log", "utf8") + "\r\n\r\n";
-            }
-          } catch {}
-
-          sendStatusToServer('update-status', {
-            stage: 'up-to-date',
-            message: `Update to v${app.getVersion()} completed successfully.`,
-            version: app.getVersion(),
-            logs: finalLogs
-          });
-        }
-      }
-    } catch (e: any) {
-      console.error("Failed to report recent update logs:", e);
-    }
-
     startScreenMirroring();
     sendOfflineSessionsReport();
-    runSoftwareScan();
   });
 
   socket.setEncoding('utf8');
@@ -3521,29 +3060,20 @@ function connectToServer() {
     }
     
     // Enforce lock immediately upon server disconnection
-    // Do NOT lock if there is an active test session — the socket retries in the background
-    // but should never interrupt an offline test user session.
-    if (isKioskUser() && !isTestUserSession) {
-      isLocked = true;
-      currentUser = null;
-      destroyIslandWindow();
-      if (!lockWindow || lockWindow.isDestroyed()) {
-        lockWindow = null;
-        createLockWindow();
-      } else {
-        startLockEnforcement();
-      }
-
-      // Kill explorer.exe and all browsers to prevent audio/input bleed-through
-      if (process.platform === 'win32') {
-        logToUI('Terminating explorer.exe on server disconnect lock...');
-        safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
-        killBrowsersOnLock();
-      }
-    } else if (isTestUserSession) {
-      logToUI('Server disconnected during offline test session — lock suppressed. Session continues.');
+    isLocked = true;
+    currentUser = null;
+    destroyIslandWindow();
+    if (!lockWindow || lockWindow.isDestroyed()) {
+      lockWindow = null;
+      createLockWindow();
     } else {
-      logToUI('Server disconnected, but skipping lock enforcement because current user is not CafeKiosk.');
+      startLockEnforcement();
+    }
+
+    // Always kill explorer.exe on Windows when locking on server disconnect
+    if (process.platform === 'win32') {
+      logToUI('Terminating explorer.exe on server disconnect lock...');
+      safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
     }
     
     setTimeout(connectToServer, 5000);
@@ -3682,8 +3212,7 @@ function startUdpDiscovery() {
             fs.writeFileSync(configPath, JSON.stringify({ serverUrl: `tcp://${serverUrl}`, machineId }, null, 2), 'utf8');
 
             // Re-create the lock screen to update variables in the template literal
-            // BUT do NOT recreate if a test session is currently running.
-            if (lockWindow && !lockWindow.isDestroyed() && !isTestUserSession) {
+            if (lockWindow && !lockWindow.isDestroyed()) {
               logToUI('UDP Discovery: Re-creating lock screen window to apply updated server IP.');
               lockWindow.destroy();
               lockWindow = null;
@@ -3694,23 +3223,17 @@ function startUdpDiscovery() {
             console.error('Failed to save discovered config:', e);
           }
 
-          // Do NOT force-disconnect and reconnect while a test session is active.
-          // The session will naturally reconnect when it ends or the socket retries.
-          if (isTestUserSession) {
-            logToUI('UDP Discovery: Skipping socket reconnect — offline test session is active.');
-          } else {
-            if (tcpSocket) {
-              try { 
-                logToUI('UDP Discovery: Disconnecting existing TCP socket for new connection.');
-                tcpSocket.removeAllListeners('close'); 
-                tcpSocket.destroy(); 
-                tcpSocket = null; 
-                isTcpConnected = false;
-              } catch {}
-            }
-            isConnecting = false;
-            connectToServer();
+          if (tcpSocket) {
+            try { 
+              logToUI('UDP Discovery: Disconnecting existing TCP socket for new connection.');
+              tcpSocket.removeAllListeners('close'); 
+              tcpSocket.destroy(); 
+              tcpSocket = null; 
+              isTcpConnected = false;
+            } catch {}
           }
+          isConnecting = false;
+          connectToServer();
         }
       }
     } catch (e: any) {
@@ -4039,23 +3562,6 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
 
 app.whenReady().then(async () => {
   if (hasServiceArg) return;
-
-  if (process.platform === 'win32' && isKioskUser()) {
-    try {
-      const current = execSync('reg query "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell 2>nul').toString();
-      if (!current.toLowerCase().includes(process.execPath.toLowerCase())) {
-        writeAgentRuntimeLog('Self-healing: Registry Shell was not set to Agent. Forcing shell to NetCafe Agent...');
-        execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
-        writeAgentRuntimeLog('Self-healing complete. Shell restored to Agent.');
-      }
-    } catch (err: any) {
-      writeAgentRuntimeLog(`Self-healing failed to verify/fix Shell registry key: ${err.message}`);
-    }
-  }
-
-  if (!isKioskUser()) {
-    isLocked = false;
-  }
   // Remove watchdog disable flag on startup to re-enable watchdog checks
   try {
     if (fs.existsSync("C:\\NetCafe\\stop-watchdog.flag")) {
@@ -4250,12 +3756,12 @@ app.whenReady().then(async () => {
     // Register Scheduled Task to run instantly on logon with Highest Privileges for current user only
     const username = os.userInfo().username;
     const lowerUser = username.toLowerCase();
-    if (lowerUser !== 'cafekiosk') {
-      logToUI(`Running as ${username}. Skipping Task Scheduler auto-start registration (non-kiosk user).`);
+    if (lowerUser === 'administrator' || lowerUser === 'system') {
+      logToUI(`Running as ${username}. Skipping Task Scheduler auto-start registration.`);
     } else {
       const taskName = `NetCafeAgent_${username}`;
       const exePath = process.execPath;
-      const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${require('os').hostname()}\\\\${username}" /rl highest /f`;
+      const cmd = `schtasks /create /tn "${taskName}" /tr "\\"${exePath}\\"" /sc onlogon /ru "${username}" /rl highest /f`;
       exec(cmd, (err) => {
         if (err) {
           logToUI(`Task Scheduler registration failed: ${err.message}`);
@@ -4318,12 +3824,11 @@ app.whenReady().then(async () => {
     return { success: true };
   });
 
-  // Always terminate browsers on Windows startup when locked to silence background tabs
-  if (isLocked && process.platform === 'win32' && isKioskUser()) {
-    logToUI('Terminating browsers on startup (locked)...');
-    killBrowsersOnLock();
+  // Always terminate explorer.exe on Windows startup when locked
+  if (isLocked && process.platform === 'win32') {
+    logToUI('Terminating explorer.exe on startup (locked)...');
+    safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
   }
-
 
   createLockWindow();
   connectToServer();
@@ -4555,13 +4060,10 @@ app.whenReady().then(async () => {
     if (blockedExes.length > 0) {
       enforceAppBlocking(blockedExes);
     }
-    if (blockSoftwareChanges && !isAgentUpdating) {
-      enforceInstallerBlocking();
-    }
   }, 3000);
 
-  // ─── Security hardening: apply on startup (kiosk user only) ──────────────
-  if (process.platform === 'win32' && isKioskUser()) {
+  // ─── Security hardening: apply on startup ─────────────────────────────────
+  if (process.platform === 'win32') {
     // Firewall VPN port blocks — only needed once (rules persist across reboots)
     applyFirewallVpnBlocks();
     // Full policy audit: Chrome policies + DNS sinkhole + VPN process kill
@@ -4588,15 +4090,8 @@ function cleanupProxySync() {
     execSync('reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable /t REG_DWORD /d 0 /f');
     execSync('rundll32.exe wininet.dll,InternetSetOption 39 0 0');
     console.log('Synchronously disabled system proxy on exit');
-    
-    if (shellRestorePending) {
-      console.log('Synchronously restoring registry Shell override to NetCafe Agent on exit...');
-      execSync(`reg add "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
-      console.log('Synchronously restored registry Shell override.');
-      shellRestorePending = false;
-    }
   } catch (e) {
-    console.error('Failed to run synchronous exit cleanup:', e);
+    console.error('Failed to disable proxy synchronously:', e);
   }
 }
 

@@ -1,37 +1,7 @@
 # Changelog
 
-## [1.1.28] — 2026-07-11
-### Added
-- Remote Update Logging: Replaced standard installer commands execution in `installer.nsh` with a custom `LogAndExec` macro that outputs the full command line, stdout/stderr, and exit code directly into `C:\NetCafe\logs\agent-install.log`.
-- Silent Mode Setup: Removed the `IfSilent` skip check for kiosk setup script execution, allowing `kiosk-setup.ps1` to run and configure/log user shell setup during silent updates.
-- Server update logs dialog: Added a non-auto-scrolling pre log viewer inside the "Remote Update Status" dialog on the server PC. It populates live log data during downloads, installation, and sends full post-update reports (watchdog log + installation log + setup log) on client agent startup.
-- Turn off auto-scroll: Disabled automatic log scrolling to bottom on the client PC auto-updating overlay to make it easier to read logs.
-
-## [1.1.27] — 2026-07-10
-### Fixed
-
-- Audio/Input Bleed: Configured the agent lock command to terminate all common browser processes (`chrome.exe`, `msedge.exe`, `firefox.exe`, `brave.exe`, `opera.exe`, `vivaldi.exe`) on lock initiation (user logs off, server disconnects, or system starts locked). This prevents background browser media/audio (like YouTube) from continuing to play and captures keyboard presses after the lock screen overlays.
-
-## [1.1.26] — 2026-07-02
-### Added
-- Remote Troubleshooting: Added a "Restore Explorer" command button to the admin dashboard machine drawer. When clicked, it instructs the target client agent to immediately set the user's shell registry key back to `explorer.exe`, disable local browser proxy settings, stop the watchdog service, and spawn `explorer.exe` to allow clean manual troubleshooting or downloads.
-- Direct update download: Bypassed Electron's `autoUpdater` with a custom direct HTTP downloader to fetch update packages directly from the LAN server via Node's native `http` module. This resolves Mixed Content blocks, signature validation errors, and caching conflicts caused by local unsigned HTTP servers.
-
-## [1.1.25] — 2026-07-02
-### Added
-- Device and software management, batch installer, audit logging, and offline session disconnect fix.
-
-## [1.1.24] — 2026-07-02
-### Added
-- Offline session logging and automatic offline test user visibility.
-
-## [1.1.23] — 2026-07-02
-### Added
-- Soft Blocked (non-violation blocked) query terms support.
-
 ## [1.1.22] — 2026-07-01
 ### Fixed
-
 - Auto-start registration: Restricted the agent's Task Scheduler auto-start task creation to run-level highest on Kiosk user sessions only. Previously, it registered a global task named `NetCafeAgent` that launched on logon of any user (including Administrator and Guest). This caused multi-session double-launch port conflicts (e.g. `EADDRINUSE` on UDP port `9090` and proxy port `8889`), which broke proxy connections. Legacy `NetCafeAgent` tasks are automatically cleaned up on watchdog and installer execution.
 
 ## [1.1.21] — 2026-07-01
