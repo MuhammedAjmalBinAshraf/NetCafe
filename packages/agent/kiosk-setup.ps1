@@ -292,13 +292,38 @@ try {
                     New-Item -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
                              -Force -ErrorAction SilentlyContinue | Out-Null
                     
-                    # Per-user Shell - only standard users get the kiosk shell
+                    # No Desktop override - hide icons and background
+                    New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                             -Force -ErrorAction SilentlyContinue | Out-Null
                     Set-ItemProperty `
-                        -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" `
-                        -Name  "Shell" `
-                        -Value "`"$AgentExe`"" `
-                        -Force
-                    Log "OK:" "Per-user Shell written for standard Kiosk user '$username': `"$AgentExe`""
+                        -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" `
+                        -Name  "NoDesktop" `
+                        -Value 1 `
+                        -Type DWord -Force
+                    
+                    # Solid Black Background override
+                    New-Item -Path "$hivePath\Control Panel\Desktop" `
+                             -Force -ErrorAction SilentlyContinue | Out-Null
+                    Set-ItemProperty `
+                        -Path "$hivePath\Control Panel\Desktop" `
+                        -Name  "Wallpaper" `
+                        -Value "" `
+                        -Type String -Force
+                    Set-ItemProperty `
+                        -Path "$hivePath\Control Panel\Desktop" `
+                        -Name  "WallPaperStyle" `
+                        -Value "0" `
+                        -Type String -Force
+                        
+                    New-Item -Path "$hivePath\Control Panel\Colors" `
+                             -Force -ErrorAction SilentlyContinue | Out-Null
+                    Set-ItemProperty `
+                        -Path "$hivePath\Control Panel\Colors" `
+                        -Name  "Background" `
+                        -Value "0 0 0" `
+                        -Type String -Force
+                        
+                    Log "OK:" "Desktop blackout policies (NoDesktop, Black Wallpaper) written for standard Kiosk user '$username'"
                     
                     # Lock-down GPO policies for this standard Kiosk user
                     New-Item -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" `
@@ -413,6 +438,12 @@ try {
                     # Remove custom Shell override
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows NT\CurrentVersion\Winlogon" -Name "Shell" -ErrorAction SilentlyContinue
                     
+                    # Remove Desktop Blackout policies
+                    Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "NoDesktop" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path "$hivePath\Control Panel\Desktop" -Name "Wallpaper" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path "$hivePath\Control Panel\Desktop" -Name "WallPaperStyle" -ErrorAction SilentlyContinue
+                    Remove-ItemProperty -Path "$hivePath\Control Panel\Colors" -Name "Background" -ErrorAction SilentlyContinue
+                    
                     # Remove GPO policies
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "DisableTaskMgr" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Microsoft\Windows\CurrentVersion\Policies\System" -Name "HideFastUserSwitching" -ErrorAction SilentlyContinue
@@ -420,7 +451,7 @@ try {
                     Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Windows\System" -Name "DisableCMD" -ErrorAction SilentlyContinue
                     Remove-ItemProperty -Path "$hivePath\Software\Policies\Microsoft\Internet Explorer\Control Panel" -Name "Proxy" -ErrorAction SilentlyContinue
                     
-                    Log "OK:" "Restored default Shell and removed GPO policies for standard user '$username'"
+                    Log "OK:" "Restored default Shell, desktop visibility, and removed GPO policies for standard user '$username'"
                     
                     # Flush and unload if we loaded it
                     if (-not $isLoaded) {

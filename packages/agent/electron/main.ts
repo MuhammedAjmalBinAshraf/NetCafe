@@ -208,27 +208,8 @@ function isDesktopShellRunning(): Promise<boolean> {
 function spawnExplorerShell() {
   if (process.platform !== 'win32') return;
   
-  if (!isAgentTheShell() && !isKioskUser()) {
-    logToUI('Agent is not the registered shell. Spawning explorer.exe directly...');
-    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
-    return;
-  }
-  
-  const originalShell = process.execPath;
-  const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
-  
-  logToUI('Temporarily resetting registry Shell to explorer.exe to force shell-mode...');
-  try {
-    execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
-    logToUI('Spawning explorer.exe...');
-    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
-    
-    // We no longer restore it after 2 seconds. We leave it as explorer.exe during the session
-    // so that explorer has all the time it needs to initialize the desktop environment properly.
-    // It will be restored to the agent executable when the session is locked.
-  } catch (err: any) {
-    logToUI(`Error setting registry Shell to explorer: ${err.message}`);
-  }
+  logToUI('Spawning explorer.exe...');
+  safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
 }
 
 function performSaveClientLog(): { success: boolean; path?: string; error?: string } {
@@ -1890,11 +1871,6 @@ async function handleServerMessage(msg: any) {
         // Kill explorer.exe and all browsers to prevent audio/input bleed-through
         if (process.platform === 'win32' && isKioskUser()) {
           logToUI('Terminating explorer.exe to lock desktop shell...');
-          // Restore shell to agent
-          const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
-          try {
-            execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${process.execPath}\\"" /f`);
-          } catch (e) {}
           safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
           killBrowsersOnLock();
         }
