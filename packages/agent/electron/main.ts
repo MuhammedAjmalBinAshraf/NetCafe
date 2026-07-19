@@ -208,8 +208,33 @@ function isDesktopShellRunning(): Promise<boolean> {
 function spawnExplorerShell() {
   if (process.platform !== 'win32') return;
   
-  logToUI('Spawning explorer.exe...');
-  safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+  if (!isAgentTheShell()) {
+    logToUI('Agent is not the registered shell. Spawning explorer.exe directly...');
+    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    return;
+  }
+  
+  const originalShell = process.execPath;
+  const regPath = 'HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon';
+  
+  logToUI('Temporarily resetting registry Shell to explorer.exe to force shell-mode...');
+  try {
+    execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "explorer.exe" /f`);
+    logToUI('Spawning explorer.exe...');
+    safeSpawn('explorer.exe', [], { detached: true, stdio: 'ignore' }).unref();
+    
+    setTimeout(() => {
+      try {
+        logToUI('Restoring registry Shell override to NetCafe Agent...');
+        execSync(`reg add "${regPath}" /v Shell /t REG_SZ /d "\\"${originalShell}\\"" /f`);
+        logToUI('Registry Shell override restored successfully.');
+      } catch (err: any) {
+        logToUI(`Error restoring registry Shell override: ${err.message}`);
+      }
+    }, 2000);
+  } catch (err: any) {
+    logToUI(`Error setting registry Shell to explorer: ${err.message}`);
+  }
 }
 
 function performSaveClientLog(): { success: boolean; path?: string; error?: string } {
@@ -1868,10 +1893,9 @@ async function handleServerMessage(msg: any) {
           }
         }
 
-        // Kill explorer.exe and all browsers to prevent audio/input bleed-through
+        // Kill all browsers to prevent audio/input bleed-through
         if (process.platform === 'win32' && isKioskUser()) {
-          logToUI('Terminating explorer.exe to lock desktop shell...');
-          safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+          logToUI('Terminating browsers to silence background audio...');
           killBrowsersOnLock();
         }
       }
@@ -4294,10 +4318,9 @@ app.whenReady().then(async () => {
     return { success: true };
   });
 
-  // Always terminate explorer.exe on Windows startup when locked
+  // Always terminate browsers on Windows startup when locked to silence background tabs
   if (isLocked && process.platform === 'win32' && isKioskUser()) {
-    logToUI('Terminating explorer.exe on startup (locked)...');
-    safeSpawn('taskkill.exe', ['/F', '/IM', 'explorer.exe']);
+    logToUI('Terminating browsers on startup (locked)...');
     killBrowsersOnLock();
   }
 
