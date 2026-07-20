@@ -2415,14 +2415,13 @@ function getCPUUsage(): Promise<number> {
 function getActiveWindowTitle(): Promise<string> {
   return new Promise((resolve) => {
     if (process.platform === 'win32') {
-      const psCmd = `powershell -Command "Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class Win32 { [DllImport(\\"user32.dll\\")] public static extern IntPtr GetForegroundWindow(); }'; $fg = [Win32]::GetForegroundWindow(); (Get-Process | Where-Object { $_.MainWindowHandle -eq $fg }).MainWindowTitle"`;
-      exec(psCmd, { timeout: 2500 }, (err, stdout) => {
-        if (err) {
-          resolve('System');
-        } else {
+      if (activeWinExePath && fs.existsSync(activeWinExePath)) {
+        exec(`"${activeWinExePath}"`, { timeout: 1000 }, (err, stdout) => {
           resolve(stdout.trim() || 'Desktop');
-        }
-      });
+        });
+      } else {
+        resolve('Desktop');
+      }
     } else {
       exec('xdotool getactivewindow getwindowname', { timeout: 2500 }, (err, stdout) => {
         if (err || !stdout) {
@@ -2736,19 +2735,17 @@ function applyVpnDnsSinkhole() {
  */
 function detectAndKillVpnProcesses() {
   if (process.platform !== 'win32') return;
-  try {
-    const output = execFileSync('tasklist.exe', ['/fo', 'csv', '/nh'], { encoding: 'utf8', stdio: 'pipe' });
-    const running = output.toLowerCase();
+  exec('tasklist.exe /fo csv /nh', (err, stdout) => {
+    if (err) return;
+    const running = stdout.toLowerCase();
     const found = VPN_PROCESSES.filter(p => running.includes(p.toLowerCase()));
     if (found.length > 0) {
       logToUI(`[Security] VPN processes detected: ${found.join(', ')} — terminating...`);
       found.forEach(proc => {
-        try {
-          execFileSync('taskkill.exe', ['/F', '/IM', proc, '/T'], { stdio: 'pipe' });
+        exec(`taskkill.exe /F /IM ${proc} /T`, () => {
           logToUI(`[Security] Killed VPN process: ${proc}`);
-        } catch (_) { /* process may have already exited */ }
+        });
       });
-      // Show announcement on dynamic island
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('safety-violation', {
           type: 'Security Warning',
@@ -2757,21 +2754,14 @@ function detectAndKillVpnProcesses() {
         });
       }
     }
-  } catch (e: any) {
-    logToUI(`[Security] VPN process scan error: ${e.message}`);
-  }
+  });
 
-  // Detect TAP/TUN virtual adapters (created when VPN connects)
-  try {
-    const adapters = execFileSync(
-      'powershell.exe',
-      ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', 'Get-NetAdapter | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress'],
-      { encoding: 'utf8', stdio: 'pipe', timeout: 5000 }
-    );
-    if (adapters && adapters.trim()) {
-      const parsed: any[] = JSON.parse(adapters.trim().startsWith('[') ? adapters : `[${adapters}]`);
+  exec('powershell.exe -NoProfile -WindowStyle Hidden -Command "Get-NetAdapter | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress"', (err, stdout) => {
+    if (err || !stdout) return;
+    try {
+      const parsed: any[] = JSON.parse(stdout.trim().startsWith('[') ? stdout : `[${stdout}]`);
       const vpnKeywords = ['tap', 'tun', 'wireguard', 'vpn', 'nordlynx', 'mullvad', 'tailscale', 'proton', 'softether'];
-      const vpnAdapters = parsed.filter(a =>
+      const vpnAdapters = parsed.filter((a: any) =>
         vpnKeywords.some(kw =>
           (a.InterfaceDescription || '').toLowerCase().includes(kw) ||
           (a.Name || '').toLowerCase().includes(kw)
@@ -2779,16 +2769,14 @@ function detectAndKillVpnProcesses() {
       );
       if (vpnAdapters.length > 0) {
         logToUI(`[Security] VPN adapter(s) detected: ${vpnAdapters.map((a: any) => a.Name).join(', ')}`);
-        // Disable detected adapters
         vpnAdapters.forEach((a: any) => {
-          try {
-            execFileSync('netsh.exe', ['interface', 'set', 'interface', `name=${a.Name}`, 'admin=disable'], { stdio: 'pipe' });
+          exec(`netsh.exe interface set interface name="${a.Name}" admin=disable`, () => {
             logToUI(`[Security] Disabled VPN adapter: ${a.Name}`);
-          } catch (_) {}
+          });
         });
       }
-    }
-  } catch (_) { /* powershell may not be available or adapter list empty */ }
+    } catch (_) {}
+  });
 }
 
 /**
@@ -3560,7 +3548,54 @@ function checkQuerySafety(query: string, url: string, ip: string, isUserInitiate
   });
 }
 
+let activeWinExePath = '';
+function compileActiveWinExe() {
+  if (process.platform !== 'win32') return;
+  const csCode = `using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+class Program
+{
+    [DllImport("user32.dll")]
+    static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
+
+    static void Main()
+    {
+        IntPtr handle = GetForegroundWindow();
+        StringBuilder buff = new StringBuilder(256);
+        if (GetWindowText(handle, buff, 256) > 0)
+        {
+            Console.WriteLine(buff.ToString());
+        }
+        else
+        {
+            Console.WriteLine("Desktop");
+        }
+    }
+}`;
+  const tempPath = app.getPath('temp');
+  const csPath = path.join(tempPath, 'active-win.cs');
+  activeWinExePath = path.join(tempPath, 'active-win.exe');
+  fs.writeFileSync(csPath, csCode);
+  const cscPath = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+  if (fs.existsSync(cscPath)) {
+    try {
+      if (!fs.existsSync(activeWinExePath)) {
+        execSync(`"${cscPath}" /nologo /out:"${activeWinExePath}" "${csPath}"`);
+      }
+    } catch(err) {
+      logToUI('Failed to compile active-win.exe');
+      activeWinExePath = '';
+    }
+  }
+}
+
 app.whenReady().then(async () => {
+  compileActiveWinExe();
   if (hasServiceArg) return;
   // Remove watchdog disable flag on startup to re-enable watchdog checks
   try {
