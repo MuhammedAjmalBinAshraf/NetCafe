@@ -304,6 +304,43 @@ function setupDatabase() {
       timestamp  INTEGER DEFAULT (strftime('%s','now'))
     );
   `)
+  
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS client_softwares (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      version TEXT,
+      publisher TEXT,
+      install_date TEXT,
+      install_location TEXT,
+      install_source TEXT,
+      installed_by TEXT,
+      uninstall_string TEXT,
+      UNIQUE(machine_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS software_install_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      install_id TEXT NOT NULL,
+      machine_id INTEGER NOT NULL,
+      software_name TEXT NOT NULL,
+      status TEXT NOT NULL,
+      method TEXT,
+      package_id TEXT,
+      url TEXT,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS software_activity_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      machine_id INTEGER NOT NULL,
+      event_type TEXT NOT NULL,
+      software_name TEXT,
+      details TEXT,
+      timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+  `)
 
   // Default violation penalty in minutes
   db.exec("INSERT OR IGNORE INTO settings (key, value) VALUES ('violation_penalty_minutes', '5');")
@@ -894,6 +931,73 @@ function handleClientMessage(socket: net.Socket, data: any) {
       } catch (err) {
         console.error('Safety Guard trigger error:', err)
       }
+    }
+  }
+  else if (data.type === 'software-inventory') {
+    const machineId = clients.get(socket);
+    if (machineId && db) {
+      const softwares = data.payload.softwares || [];
+      try {
+        const oldSoftwares = db.prepare("SELECT name FROM client_softwares WHERE machine_id = ?").all(machineId) as any[];
+        const oldSet = new Set(oldSoftwares.map(s => s.name));
+        const newSet = new Set(softwares.map((s: any) => s.Name));
+        const hasPreviousRecords = oldSoftwares.length > 0;
+
+        if (hasPreviousRecords) {
+          for (const s of softwares) {
+            if (s.Name && !oldSet.has(s.Name)) {
+              db.prepare(`
+                INSERT INTO software_activity_log (machine_id, event_type, software_name, details)
+                VALUES (?, 'installed', ?, ?)
+              `).run(machineId, s.Name, `Version: ${s.Version || 'N/A'}, Publisher: ${s.Publisher || 'N/A'}, Installed By: ${s.InstalledBy || 'System'}`);
+            }
+          }
+          for (const oldName of oldSet) {
+            if (oldName && !newSet.has(oldName)) {
+              db.prepare(`
+                INSERT INTO software_activity_log (machine_id, event_type, software_name, details)
+                VALUES (?, 'deleted', ?, 'Removed from system')
+              `).run(machineId, oldName);
+            }
+          }
+        }
+
+        db.transaction(() => {
+          db.prepare("DELETE FROM client_softwares WHERE machine_id = ?").run(machineId);
+          const insertStmt = db.prepare(`
+            INSERT INTO client_softwares (machine_id, name, version, publisher, install_date, install_location, install_source, installed_by, uninstall_string)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          for (const s of softwares) {
+            if (s.Name) {
+              insertStmt.run(
+                machineId,
+                s.Name,
+                s.Version || null,
+                s.Publisher || null,
+                s.InstallDate || null,
+                s.InstallLocation || null,
+                s.InstallSource || null,
+                s.InstalledBy || 'System (All Users)',
+                s.UninstallString || null
+              );
+            }
+          }
+        })();
+
+        logToUI(`Updated software inventory for machine ID ${machineId}: ${softwares.length} applications found.`);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('software-inventory-updated', { machineId });
+        }
+      } catch (err: any) {
+        logToUI(`Error updating software inventory for machine ID ${machineId}: ${err.message}`);
+      }
+    }
+  }
+  else if (data.type === 'running-processes') {
+    const machineId = clients.get(socket);
+    if (machineId && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('running-processes-updated', { machineId, processes: data.payload.processes || [] });
     }
   }
   else if (data.type === 'screen-frame') {
@@ -2827,7 +2931,7 @@ ipcMain.handle('get-soft-blocked-queries', () => {
 ipcMain.handle('add-soft-blocked-query', (_, query) => {
   if (!db) return { success: false, error: 'Database not initialized' }
   try {
-    db.prepare("INSERT INTO soft_blocked_queries (query) VALUES (?)").run(query.trim())
+    db.prepare("INSERT OR IGNORE INTO soft_blocked_queries (query) VALUES (?)").run(query.trim())
     return { success: true }
   } catch (err: any) {
     return { success: false, error: err.message }
@@ -3106,6 +3210,86 @@ ipcMain.handle('capture-screenshot', async (_, machineId) => {
     }
   })
 })
+
+function getSocketByMachineId(machineId: number): net.Socket | null {
+  for (const [socket, mId] of clients.entries()) {
+    if (Number(mId) === machineId) return socket;
+  }
+  return null;
+}
+
+ipcMain.handle('get-client-software-list', (_, machineId) => {
+  return db.prepare("SELECT * FROM client_softwares WHERE machine_id = ? ORDER BY name ASC").all(machineId);
+})
+
+ipcMain.handle('get-software-install-logs', () => {
+  return db.prepare(`
+    SELECT l.*, m.name as machine_name 
+    FROM software_install_logs l 
+    JOIN machines m ON l.machine_id = m.id 
+    ORDER BY l.timestamp DESC 
+  `).all();
+})
+
+ipcMain.handle('get-software-activity-logs', () => {
+  return db.prepare(`
+    SELECT a.*, m.name as machine_name 
+    FROM software_activity_log a 
+    JOIN machines m ON a.machine_id = m.id 
+    ORDER BY a.timestamp DESC 
+  `).all();
+})
+
+ipcMain.handle('trigger-software-scan', (_, machineId) => {
+  if (machineId === 'all') {
+    const payload = JSON.stringify({ command: 'scan-software' }) + '\n';
+    for (const socket of clients.keys()) {
+      try { socket.write(payload) } catch {}
+    }
+  } else {
+    const socket = getSocketByMachineId(Number(machineId));
+    if (socket) {
+      try { socket.write(JSON.stringify({ command: 'scan-software' }) + '\n') } catch {}
+    }
+  }
+})
+
+ipcMain.handle('get-running-processes', (_, machineId) => {
+  const socket = getSocketByMachineId(Number(machineId));
+  if (socket) {
+    try { socket.write(JSON.stringify({ command: 'get-running-processes' }) + '\n') } catch {}
+  }
+})
+
+ipcMain.handle('uninstall-software', (_, machineId, softwareName, uninstallString) => {
+  const socket = getSocketByMachineId(Number(machineId));
+  if (socket) {
+    try {
+      socket.write(JSON.stringify({ command: 'uninstall-software', payload: { softwareName, uninstallString } }) + '\n');
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Socket error' }
+    }
+  }
+  return { success: false, error: 'Device offline' }
+})
+
+ipcMain.handle('kill-process', (_, machineId, processName, pid) => {
+  const socket = getSocketByMachineId(Number(machineId));
+  if (socket) {
+    try {
+      socket.write(JSON.stringify({ command: 'kill-process', payload: { processName, pid } }) + '\n');
+      return { success: true }
+    } catch {
+      return { success: false, error: 'Socket error' }
+    }
+  }
+  return { success: false, error: 'Device offline' }
+})
+
+// ====================================================================================================
+// ================================= User Account Management IPC Handlers =============================
+// ====================================================================================================
 
 // ─── User Account Management IPC Handlers ─────────────────────────────────────
 ipcMain.handle('get-users', () => {

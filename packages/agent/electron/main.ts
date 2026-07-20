@@ -88,7 +88,7 @@ let islandWindow: BrowserWindow | null = null;
 let currentSessionData: any = null;
 let pendingPasswordResolve: ((result: { success: boolean; message: string }) => void) | null = null;
 let isFullscreenApp = false;
-let fullscreenCheckInterval: NodeJS.Timeout | null = null;
+
 const pendingQueryChecks = new Map<string, { resolve: (allowed: boolean, msgText?: string, serverIssue?: boolean, softBlocked?: boolean) => void, reject: (err: any) => void, timeout: NodeJS.Timeout }>();
 let nextRequestId = 1;
 
@@ -1965,6 +1965,97 @@ async function handleServerMessage(msg: any) {
       runSecurityAudit();
       if (islandWindow && !islandWindow.isDestroyed()) {
         islandWindow.webContents.send('show-message', 'Security hardening applied by administrator.');
+      }
+    } else if (msg.command === 'scan-software') {
+      logToUI('Server requested software scan...');
+      const fs = require('fs');
+      const os = require('os');
+      const path = require('path');
+      const tmpFile = path.join(os.tmpdir(), 'scan_software_' + Date.now() + '.ps1');
+      const psScript = `
+$paths = @(
+    "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+    "HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*",
+    "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*"
+)
+$installed = Get-ItemProperty $paths -ErrorAction SilentlyContinue |
+    Where-Object { $_.DisplayName -and $_.SystemComponent -ne 1 -and $_.ParentKeyName -eq $null } |
+    Select-Object @{Name='Name';Expression={$_.DisplayName}}, 
+                  @{Name='Version';Expression={$_.DisplayVersion}}, 
+                  @{Name='Publisher';Expression={$_.Publisher}},
+                  @{Name='InstallDate';Expression={$_.InstallDate}},
+                  @{Name='InstallLocation';Expression={$_.InstallLocation}},
+                  @{Name='InstallSource';Expression={$_.InstallSource}},
+                  @{Name='UninstallString';Expression={$_.UninstallString}} |
+    Sort-Object Name -Unique
+
+$installed | ConvertTo-Json -Compress
+`;
+      fs.writeFileSync(tmpFile, psScript, 'utf8');
+      
+      const { exec } = require('child_process');
+      exec(`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${tmpFile}"`, { maxBuffer: 1024 * 1024 * 10 }, (err: any, stdout: string) => {
+        try { fs.unlinkSync(tmpFile); } catch {}
+        if (err) {
+          logToUI(`Software scan failed: ${err.message}`);
+          return;
+        }
+        try {
+          const softwares = stdout.trim() ? JSON.parse(stdout) : [];
+          if (tcpSocket && !tcpSocket.destroyed) {
+            tcpSocket.write(JSON.stringify({ type: 'software-inventory', payload: { softwares: Array.isArray(softwares) ? softwares : [softwares] } }) + '\n');
+          }
+        } catch (e: any) {
+          logToUI(`Failed to parse software list: ${e.message}`);
+        }
+      });
+    } else if (msg.command === 'get-running-processes') {
+      const { exec } = require('child_process');
+      exec('tasklist /fo csv /nh', { maxBuffer: 1024 * 1024 * 5 }, (err: any, stdout: string) => {
+        if (!err && stdout) {
+          const processes = stdout.split('\\n')
+            .map(line => {
+               const parts = line.split(',');
+               if (parts.length >= 5) {
+                 return { name: parts[0].replace(/"/g, ''), pid: parts[1].replace(/"/g, ''), mem: parts[4].replace(/"/g, '') };
+               }
+               return null;
+            }).filter(Boolean);
+          if (tcpSocket && !tcpSocket.destroyed) {
+            tcpSocket.write(JSON.stringify({ type: 'running-processes', payload: { processes } }) + '\\n');
+          }
+        }
+      });
+    } else if (msg.command === 'uninstall-software') {
+      const { softwareName, uninstallString } = msg.payload || {};
+      logToUI(`Server requested uninstall of: ${softwareName}`);
+      if (uninstallString) {
+        const { exec } = require('child_process');
+        let cmd = uninstallString;
+        if (cmd.toLowerCase().includes('msiexec')) {
+           cmd = cmd.replace(/\/[iI]/g, '/X'); 
+           if (!cmd.toLowerCase().includes('/q')) cmd += ' /qn /norestart';
+        }
+        exec(cmd, (err: any) => {
+          if (err) logToUI(`Uninstall failed for ${softwareName}: ${err.message}`);
+          else logToUI(`Successfully triggered uninstall for ${softwareName}`);
+        });
+      }
+    } else if (msg.command === 'kill-process') {
+      const { processName, pid } = msg.payload || {};
+      const { exec } = require('child_process');
+      if (pid) {
+        logToUI(`Server requested kill process PID: ${pid}`);
+        exec(`taskkill /F /PID ${pid}`, (err: any) => {
+          if (err) logToUI(`Kill process failed for PID ${pid}: ${err.message}`);
+          else logToUI(`Successfully killed process PID ${pid}`);
+        });
+      } else if (processName) {
+        logToUI(`Server requested kill process: ${processName}`);
+        exec(`taskkill /F /IM "${processName}"`, (err: any) => {
+          if (err) logToUI(`Kill process failed for ${processName}: ${err.message}`);
+          else logToUI(`Successfully killed process ${processName}`);
+        });
       }
     } else if (msg.command === 'abort-update') {
       // Admin requested abort of pending update installation
@@ -4159,76 +4250,80 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
-function checkFullscreen(): Promise<boolean> {
-  return new Promise((resolve) => {
-    if (process.platform !== 'win32') {
-      return resolve(false);
-    }
-    const psScript = `
-      Add-Type -AssemblyName System.Windows.Forms;
-      $definition = @'
-        using System;
-        using System.Runtime.InteropServices;
-        public class Win32 {
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetForegroundWindow();
-            [DllImport("user32.dll")]
-            [return: MarshalAs(UnmanagedType.Bool)]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT {
-                public int Left;
-                public int Top;
-                public int Right;
-                public int Bottom;
-            }
-        }
+let fullscreenPoller: any = null;
+function startFullscreenCheck() {
+  if (fullscreenPoller) return;
+  if (process.platform !== 'win32') return;
+
+  const psScript = `
+    Add-Type -AssemblyName System.Windows.Forms;
+    $definition = @'
+      using System;
+      using System.Runtime.InteropServices;
+      public class Win32 {
+          [DllImport("user32.dll")]
+          public static extern IntPtr GetForegroundWindow();
+          [DllImport("user32.dll")]
+          [return: MarshalAs(UnmanagedType.Bool)]
+          public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+          [StructLayout(LayoutKind.Sequential)]
+          public struct RECT {
+              public int Left;
+              public int Top;
+              public int Right;
+              public int Bottom;
+          }
+      }
 '@;
-      Add-Type -TypeDefinition $definition;
-      $fg = [Win32]::GetForegroundWindow();
-      if ($fg -ne 0) {
-          $rect = New-Object Win32+RECT;
-          if ([Win32]::GetWindowRect($fg, [ref]$rect)) {
-              $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
-              if ($rect.Left -le 2 -and $rect.Top -le 2 -and ($rect.Right - $rect.Left) -ge ($screen.Width - 10) -and ($rect.Bottom - $rect.Top) -ge ($screen.Height - 10)) {
-                  Write-Output "true"
-              } else {
-                  Write-Output "false"
-              }
-          } else { Write-Output "false" }
-      } else { Write-Output "false" }
-    `;
-    const child = safeSpawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
-    let output = '';
-    child.stdout.on('data', (data: any) => {
-      output += data.toString();
-    });
-    child.on('close', () => {
-      resolve(output.trim() === 'true');
-    });
-    child.on('error', () => {
-      resolve(false);
-    });
+    Add-Type -TypeDefinition $definition;
+    
+    while ($true) {
+        $fg = [Win32]::GetForegroundWindow();
+        if ($fg -ne 0) {
+            $rect = New-Object Win32+RECT;
+            if ([Win32]::GetWindowRect($fg, [ref]$rect)) {
+                $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;
+                if ($rect.Left -le 2 -and $rect.Top -le 2 -and ($rect.Right - $rect.Left) -ge ($screen.Width - 10) -and ($rect.Bottom - $rect.Top) -ge ($screen.Height - 10)) {
+                    Write-Output "FULLSCREEN_TRUE"
+                } else {
+                    Write-Output "FULLSCREEN_FALSE"
+                }
+            } else { Write-Output "FULLSCREEN_FALSE" }
+        } else { Write-Output "FULLSCREEN_FALSE" }
+        Start-Sleep -Seconds 3
+    }
+  `;
+
+  fullscreenPoller = safeSpawn('powershell.exe', ['-NoProfile', '-Command', psScript]);
+  
+  fullscreenPoller.stdout.on('data', (data: any) => {
+    const output = data.toString().trim();
+    if (output.includes("FULLSCREEN_TRUE")) {
+      if (!isFullscreenApp) {
+        isFullscreenApp = true;
+        if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-fullscreen-state', true);
+        }
+      }
+    } else if (output.includes("FULLSCREEN_FALSE")) {
+      if (isFullscreenApp) {
+        isFullscreenApp = false;
+        if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
+          islandWindow.webContents.send('set-fullscreen-state', false);
+        }
+      }
+    }
+  });
+
+  fullscreenPoller.on('error', (err: any) => {
+    console.error("Fullscreen poller error:", err);
   });
 }
 
-function startFullscreenCheck() {
-  if (fullscreenCheckInterval) return;
-  fullscreenCheckInterval = setInterval(async () => {
-    if (!isLocked && islandWindow && !islandWindow.isDestroyed()) {
-      const isFS = await checkFullscreen();
-      if (isFS !== isFullscreenApp) {
-        isFullscreenApp = isFS;
-        islandWindow.webContents.send('set-fullscreen-state', isFullscreenApp);
-      }
-    }
-  }, 3000);
-}
-
 function stopFullscreenCheck() {
-  if (fullscreenCheckInterval) {
-    clearInterval(fullscreenCheckInterval);
-    fullscreenCheckInterval = null;
+  if (fullscreenPoller) {
+    fullscreenPoller.kill();
+    fullscreenPoller = null;
   }
 }
 
